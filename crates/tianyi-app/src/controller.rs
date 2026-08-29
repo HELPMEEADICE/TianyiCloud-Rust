@@ -110,6 +110,7 @@ impl Controller {
             tasks: Arc::new(tasks),
         });
         Self::bind_ui(Arc::clone(&c));
+        c.refresh_saved_accounts();
         c
     }
 
@@ -137,6 +138,14 @@ impl Controller {
             ui.on_switch_mode(move |qr| {
                 let c = c.clone();
                 c.handle_switch_mode(qr);
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_quick_login(move |username| {
+                let c = c.clone();
+                c.handle_quick_login(username.as_str());
             });
         });
 
@@ -332,6 +341,77 @@ impl Controller {
         });
     }
 
+    /// 使用已保存的账号快速登录（免输入账号密码）
+    fn handle_quick_login(self: &Arc<Self>, username: &str) {
+        if username.is_empty() {
+            return;
+        }
+        let accounts = self.store.load_accounts().unwrap_or_default();
+        let Some(acc) = accounts.find(username).cloned() else {
+            self.login_failed(format!("未找到账号 {username} 的登录信息"));
+            return;
+        };
+        self.set_ui_state(|ui| ui.set_login_loading(true));
+        let this = Arc::clone(&self);
+        let backend = self.backend.clone();
+        let ui = self.ui.clone();
+        let username = username.to_string();
+        backend.spawn(move || async move {
+            if acc.token.access_token.is_empty() {
+                this.login_failed("账号无有效 token，请重新登录".to_string());
+                return;
+            }
+            let client = Arc::new(TianyiClient::new(
+                this.store.load_config().unwrap_or_default(),
+                acc,
+            ));
+            *this.client.lock().unwrap() = Some(client.clone());
+            if let Err(e) = client.refresh_session().await {
+                log::warn!("quick login refresh session: {e}");
+            }
+            let uname = username.clone();
+            invoke_ui(&ui, move |win| {
+                win.set_login_loading(false);
+                win.set_logged_in(true);
+                win.set_account_name(SharedString::from(uname));
+                win.set_status_text(SharedString::from("已恢复登录态"));
+            });
+            this.refresh_files();
+            this.load_capacity();
+        });
+    }
+
+    /// 启动时尝试用上次使用的账号自动登录
+    pub fn auto_login(self: &Arc<Self>) {
+        let last = self.store.load_config().unwrap_or_default().last_account;
+        if last.is_empty() {
+            return;
+        }
+        let status = format!("正在恢复账号 {last} 的登录态...");
+        self.set_ui_state(move |ui| {
+            ui.set_qr_status(SharedString::from(status));
+        });
+        self.handle_quick_login(&last);
+    }
+
+    /// 刷新登录面板显示的已保存账号列表
+    fn refresh_saved_accounts(&self) {
+        let names: Vec<SharedString> = self
+            .store
+            .load_accounts()
+            .unwrap_or_default()
+            .accounts
+            .iter()
+            .filter(|a| !a.username.is_empty())
+            .map(|a| SharedString::from(a.username.clone()))
+            .collect();
+        self.set_ui_state(move |ui| {
+            ui.set_saved_accounts(
+                slint::ModelRc::new(slint::VecModel::from(names)),
+            );
+        });
+    }
+
     fn login_failed(&self, msg: String) {
         self.set_ui_state(move |ui| {
             ui.set_login_loading(false);
@@ -402,6 +482,11 @@ impl Controller {
         accounts.upsert(acc.clone());
         let _ = self.store.save_accounts(&accounts);
 
+        if let Ok(mut cfg) = self.store.load_config() {
+            cfg.last_account = username.clone();
+            let _ = self.store.save_config(&cfg);
+        }
+
         *self.current_user.lock().unwrap() = username.clone();
         *self.current_folder.lock().unwrap() = "-11".to_string();
         *self.path_stack.lock().unwrap() = Vec::new();
@@ -415,6 +500,7 @@ impl Controller {
         let this = Arc::clone(&self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
+        this.refresh_saved_accounts();
         backend.spawn(move || async move {
             if let Some(client) = this.client() {
                 if let Err(e) = client.refresh_session().await {
@@ -436,6 +522,11 @@ impl Controller {
     fn logout(&self) {
         *self.client.lock().unwrap() = None;
         *self.current_user.lock().unwrap() = String::new();
+        if let Ok(mut cfg) = self.store.load_config() {
+            cfg.last_account = String::new();
+            let _ = self.store.save_config(&cfg);
+        }
+        self.refresh_saved_accounts();
         self.set_ui_state(|ui| {
             ui.set_logged_in(false);
             ui.set_account_name(SharedString::default());

@@ -92,10 +92,12 @@ component LoginPanel inherits Rectangle {
     in property <string> qr_status_text;
     in property <bool> login_loading;
     in property <bool> qr_mode;
+    in property <[string]> saved_accounts: [];
 
     callback do_login(string, string, string);
     callback do_switch_mode(bool);
     callback do_qr_refresh();
+    callback do_quick_login(string);
 
     background: #ffffff;
     border-radius: 16px;
@@ -131,6 +133,25 @@ component LoginPanel inherits Rectangle {
                 text: "扫码登录";
                 enabled: !login_loading;
                 clicked => { root.do_switch_mode(true); }
+            }
+        }
+
+        VerticalLayout {
+            visible: !qr_mode && saved_accounts.length > 0;
+            spacing: 8px;
+
+            Text {
+                text: "已保存的账号";
+                color: #6b7280;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
+
+            for account in saved_accounts : Button {
+                text: account;
+                enabled: !login_loading;
+                width: 260px;
+                clicked => { root.do_quick_login(account); }
             }
         }
 
@@ -502,6 +523,7 @@ export component MainWindow inherits Window {
     in property <image> qr_image;
     in property <string> qr_status: "请使用天翼云盘App扫码";
     in property <bool> login_loading: false;
+    in property <[string]> saved_accounts: [];
 
     in property <string> total_space: "0 B";
     in property <string> used_space: "0 B";
@@ -509,6 +531,7 @@ export component MainWindow inherits Window {
     callback login_request(string, string, string);
     callback qr_refresh();
     callback switch_mode(bool);
+    callback quick_login(string);
     callback open_item(string, string, bool);
     callback select_item(string);
     callback refresh_files();
@@ -580,6 +603,7 @@ export component MainWindow inherits Window {
                         qr_status_text: root.qr_status;
                         login_loading: root.login_loading;
                         qr_mode: root.qr_mode;
+                        saved_accounts: root.saved_accounts;
 
                         do_login(username, password, captcha) => {
                             root.login_request(username, password, captcha);
@@ -589,6 +613,9 @@ export component MainWindow inherits Window {
                         }
                         do_qr_refresh() => {
                             root.qr_refresh();
+                        }
+                        do_quick_login(username) => {
+                            root.quick_login(username);
                         }
                     }
                 }

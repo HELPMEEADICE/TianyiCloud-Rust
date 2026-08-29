@@ -136,3 +136,74 @@ impl AppStore {
         self.save_accounts(&accounts)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account(username: &str, token: &str) -> AccountConfig {
+        AccountConfig {
+            username: username.to_string(),
+            token: TokenInfo {
+                session_key: token.to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_accounts_upsert_roundtrip() {
+        let mut accounts = Accounts::default();
+        accounts.upsert(account("13800138000", "key-1"));
+        accounts.upsert(account("13800138000", "key-2"));
+        accounts.upsert(account("user@example.com", "key-3"));
+
+        assert_eq!(accounts.accounts.len(), 2);
+        assert_eq!(
+            accounts.find("13800138000").unwrap().token.session_key,
+            "key-2"
+        );
+        assert_eq!(
+            accounts.find("user@example.com").unwrap().token.session_key,
+            "key-3"
+        );
+        assert!(accounts.find("nobody").is_none());
+
+        accounts.remove("13800138000");
+        assert_eq!(accounts.accounts.len(), 1);
+        assert!(accounts.find("13800138000").is_none());
+    }
+
+    #[test]
+    fn test_app_store_save_token() {
+        let dir = std::env::temp_dir().join(format!(
+            "tianyi-config-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AppStore::new(Some(dir.clone())).unwrap();
+
+        let mut accounts = Accounts::default();
+        accounts.upsert(account("13800138000", "key-1"));
+        store.save_accounts(&accounts).unwrap();
+
+        store
+            .save_token(
+                "13800138000",
+                &TokenInfo {
+                    session_key: "key-refreshed".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let loaded = store.load_accounts().unwrap();
+        assert_eq!(
+            loaded.find("13800138000").unwrap().token.session_key,
+            "key-refreshed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

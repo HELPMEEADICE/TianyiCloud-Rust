@@ -22,6 +22,9 @@ fn main() -> anyhow::Result<()> {
     // 启动后台任务（keepalive 等）
     controller.spawn_background();
 
+    // 尝试用上次使用的账号恢复登录态
+    controller.auto_login();
+
     ui.run()?;
     Ok(())
 }
