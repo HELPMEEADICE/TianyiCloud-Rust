@@ -95,4 +95,4 @@ cargo build --release
 
 ## 许可证
 
-MIT
+GPLv3
