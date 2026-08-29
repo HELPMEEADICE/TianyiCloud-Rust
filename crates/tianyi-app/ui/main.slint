@@ -1,0 +1,700 @@
+// 天翼云盘客户端 UI
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export struct FileEntry {
+    id: string,
+    name: string,
+    size: int,
+    size_text: string,
+    is_dir: bool,
+    thumb: string,
+    modified: string,
+}
+
+export struct TransferEntry {
+    id: int,
+    name: string,
+    direction: string,
+    size_text: string,
+    progress: float,
+    status: string,
+    speed: string,
+}
+
+component FileItem inherits Rectangle {
+    in property <FileEntry> entry;
+    in property <bool> selected: false;
+    callback item_clicked();
+    callback item_double_clicked();
+
+    height: 42px;
+    border-radius: 6px;
+    background: selected ? #dbeafe : #ffffff;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+        alignment: start;
+
+        Rectangle {
+            width: 26px;
+            height: 26px;
+            border-radius: 5px;
+            background: entry.is_dir ? #fde8b2 : #dbeafe;
+            Text {
+                text: entry.is_dir ? "D" : "F";
+                color: entry.is_dir ? #b45309 : #1d4ed8;
+                font-size: 12px;
+                font-weight: 700;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: entry.name;
+            color: #1f2937;
+            font-size: 14px;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: entry.size_text;
+            color: #9ca3af;
+            font-size: 12px;
+        }
+
+        Text {
+            text: entry.modified;
+            color: #9ca3af;
+            font-size: 12px;
+            width: 120px;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.item_clicked();
+        }
+        double-clicked => {
+            root.item_double_clicked();
+        }
+    }
+}
+
+component LoginPanel inherits Rectangle {
+    in property <string> error_text;
+    in property <bool> show_captcha;
+    in property <image> captcha_image;
+    in property <image> qr_image;
+    in property <string> qr_status_text;
+    in property <bool> login_loading;
+    in property <bool> qr_mode;
+
+    callback do_login(string, string, string);
+    callback do_switch_mode(bool);
+    callback do_qr_refresh();
+
+    background: #ffffff;
+    border-radius: 16px;
+
+    VerticalLayout {
+        padding: 36px;
+        spacing: 14px;
+        alignment: center;
+
+        Text {
+            text: "天翼云盘";
+            font-size: 26px;
+            font-weight: 700;
+            color: #2563eb;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: "Rust + Slint 第三方客户端";
+            font-size: 13px;
+            color: #6b7280;
+            horizontal-alignment: center;
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
+            alignment: center;
+            Button {
+                text: "密码登录";
+                enabled: !login_loading;
+                clicked => { root.do_switch_mode(false); }
+            }
+            Button {
+                text: "扫码登录";
+                enabled: !login_loading;
+                clicked => { root.do_switch_mode(true); }
+            }
+        }
+
+        VerticalLayout {
+            visible: !qr_mode;
+            spacing: 12px;
+
+            username-input := LineEdit {
+                placeholder-text: "手机号 / 邮箱";
+            }
+            password-input := LineEdit {
+                placeholder-text: "密码";
+            }
+
+            VerticalLayout {
+                visible: show_captcha;
+                spacing: 6px;
+                Image {
+                    source: captcha_image;
+                    height: 52px;
+                    width: 160px;
+                }
+                captcha-input := LineEdit {
+                    placeholder-text: "验证码";
+                    width: 160px;
+                }
+            }
+
+            Button {
+                text: login_loading ? "登录中..." : "登 录";
+                enabled: !login_loading;
+                width: 200px;
+                clicked => {
+                    root.do_login(username-input.text, password-input.text, captcha-input.text);
+                }
+            }
+        }
+
+        VerticalLayout {
+            visible: qr_mode;
+            spacing: 12px;
+            alignment: center;
+
+            Rectangle {
+                width: 200px;
+                height: 200px;
+                background: #f3f4f6;
+                border-radius: 12px;
+
+                Image {
+                    source: qr_image;
+                    width: 180px;
+                    height: 180px;
+                }
+            }
+
+            Text {
+                text: qr_status_text;
+                color: #6b7280;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+
+            Button {
+                text: "刷新二维码";
+                enabled: !login_loading;
+                clicked => {
+                    root.do_qr_refresh();
+                }
+            }
+        }
+
+        Text {
+            visible: error_text != "";
+            text: error_text;
+            color: #dc2626;
+            font-size: 13px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+component FileListPanel inherits Rectangle {
+    in property <[FileEntry]> files;
+    in property <string> current_path;
+    in property <string> status_text;
+    in property <string> account_name;
+    in property <string> total-space: "0 B";
+    in property <string> used-space: "0 B";
+
+    callback item_open(string, string, bool);
+    callback item_select(string);
+    callback do_refresh();
+    callback do_navigate_up();
+    callback do_upload();
+    callback do_create_folder();
+    callback do_search(string);
+    callback do_logout();
+    callback do_switch_space(string);
+    callback do_download(string, string);
+    callback do_delete(string, string);
+    callback do_rename(string, string);
+    callback do_get_link(string, string);
+    callback do_move(string, string);
+    callback do_copy(string, string);
+
+    in property <string> selected_id: "";
+
+    background: #f8fafc;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: account_name == "" ? "未登录" : account_name;
+                color: #1f2937;
+                font-weight: 600;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+
+            Button {
+                text: "上传";
+                clicked => { root.do_upload(); }
+            }
+            Button {
+                text: "新建文件夹";
+                clicked => { root.do_create_folder(); }
+            }
+            Button {
+                text: "刷新";
+                clicked => { root.do_refresh(); }
+            }
+            Button {
+                text: "下载";
+                enabled: root.selected_id != "";
+                clicked => { root.do_download(root.selected_id, ""); }
+            }
+            Button {
+                text: "删除";
+                enabled: root.selected_id != "";
+                clicked => { root.do_delete(root.selected_id, ""); }
+            }
+            Button {
+                text: "重命名";
+                enabled: root.selected_id != "";
+                clicked => { root.do_rename(root.selected_id, ""); }
+            }
+            Button {
+                text: "复制";
+                enabled: root.selected_id != "";
+                clicked => { root.do_copy(root.selected_id, ""); }
+            }
+            Button {
+                text: "提取链接";
+                enabled: root.selected_id != "";
+                clicked => { root.do_get_link(root.selected_id, ""); }
+            }
+            Button {
+                text: "个人云";
+                clicked => { root.do_switch_space("personal"); }
+            }
+            Button {
+                text: "家庭云";
+                clicked => { root.do_switch_space("family"); }
+            }
+
+            search-input := LineEdit {
+                placeholder-text: "搜索文件...";
+                width: 180px;
+                edited => {
+                    if (search-input.text != "") {
+                        root.do_search(search-input.text);
+                    }
+                }
+            }
+            Button {
+                text: "退出登录";
+                clicked => { root.do_logout(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            Button {
+                text: "上级";
+                enabled: current_path != "";
+                clicked => { root.do_navigate_up(); }
+            }
+            Text {
+                text: current_path == "" ? "根目录" : current_path;
+                color: #374151;
+                font-size: 14px;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle {
+            background: #ffffff;
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 2px;
+                    padding: 6px;
+
+                    for entry in files : FileItem {
+                        entry: entry;
+                        selected: entry.id == root.selected_id;
+                        item_clicked() => {
+                            root.item_select(entry.id);
+                        }
+                        item_double_clicked() => {
+                            root.item_open(entry.id, entry.name, entry.is_dir);
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+            Text {
+                text: status_text;
+                color: #6b7280;
+                font-size: 12px;
+            }
+            Text {
+                text: "容量 " + used-space + " / " + total-space;
+                color: #9ca3af;
+                font-size: 12px;
+            }        }
+    }
+}
+
+component TransferItem inherits Rectangle {
+    in property <TransferEntry> entry;
+    callback do_cancel();
+    callback do_pause();
+
+    height: 52px;
+
+    HorizontalLayout {
+        padding: 8px;
+        spacing: 10px;
+        alignment: start;
+
+        Text {
+            text: entry.direction == "upload" ? "U" : "D";
+            color: entry.direction == "upload" ? #16a34a : #2563eb;
+            font-size: 14px;
+            font-weight: 700;
+            width: 20px;
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            horizontal-stretch: 1;
+
+            Text {
+                text: entry.name;
+                color: #1f2937;
+                font-size: 13px;
+                overflow: elide;
+            }
+
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: #e5e7eb;
+                progress-fill := Rectangle {
+                    width: parent.width * entry.progress;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: #2563eb;
+                }
+            }
+        }
+
+        Text {
+            text: entry.status + " " + entry.progress + "%";
+            color: #6b7280;
+            font-size: 12px;
+            width: 90px;
+        }
+
+        Button {
+            text: "P";
+            width: 26px;
+            height: 26px;
+            clicked => { root.do_pause(); }
+        }
+        Button {
+            text: "X";
+            width: 26px;
+            height: 26px;
+            clicked => { root.do_cancel(); }
+        }
+    }
+}
+
+component TransferPanel inherits Rectangle {
+    in property <[TransferEntry]> transfers;
+    callback cancel_task(int);
+    callback pause_task(int);
+
+    background: #ffffff;
+
+    VerticalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        Text {
+            text: "传输任务 (" + transfers.length + ")";
+            font-size: 14px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        Rectangle {
+            background: #f8fafc;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+
+            ScrollView {
+                VerticalLayout {
+                    spacing: 2px;
+                    padding: 4px;
+                    for t in transfers : TransferItem {
+                        entry: t;
+                        do_cancel() => { root.cancel_task(t.id); }
+                        do_pause() => { root.pause_task(t.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "天翼云盘客户端";
+    width: 1100px;
+    height: 720px;
+    background: #eef2f7;
+
+    in property <bool> logged_in: false;
+    in property <[FileEntry]> file_list: [];
+    in property <string> current_path: "";
+    in property <string> status_text: "就绪";
+    in property <string> account_name: "";
+    in property <[TransferEntry]> transfer_list: [];
+    in property <bool> searching: false;
+    in property <string> search_keyword: "";
+    in property <[FileEntry]> search_results: [];
+    in property <string> selected_id: "";
+    in property <bool> qr_mode: false;
+
+    in property <string> login_error: "";
+    in property <bool> show_captcha: false;
+    in property <image> captcha_image;
+    in property <image> qr_image;
+    in property <string> qr_status: "请使用天翼云盘App扫码";
+    in property <bool> login_loading: false;
+
+    in property <string> total_space: "0 B";
+    in property <string> used_space: "0 B";
+
+    callback login_request(string, string, string);
+    callback qr_refresh();
+    callback switch_mode(bool);
+    callback open_item(string, string, bool);
+    callback select_item(string);
+    callback refresh_files();
+    callback navigate_up();
+    callback upload_files();
+    callback create_folder();
+    callback download_file(string);
+    callback delete_file(string);
+    callback rename_file(string);
+    callback copy_file(string);
+    callback get_link(string);
+    callback search_files(string);
+    callback clear_search();
+    callback cancel_task(int);
+    callback logout();
+    callback switch_space(string);
+
+    HorizontalLayout {
+        Rectangle {
+            width: 68px;
+            background: #1d4ed8;
+
+            VerticalLayout {
+                padding: 14px;
+                spacing: 18px;
+                alignment: start;
+
+                Text {
+                    text: "C";
+                    font-size: 24px;
+                    color: white;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "F";
+                    font-size: 18px;
+                    color: white;
+                    opacity: logged_in ? 1 : 0.4;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "T";
+                    font-size: 18px;
+                    color: white;
+                    opacity: logged_in ? 1 : 0.4;
+                    horizontal-alignment: center;
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+
+            VerticalLayout {
+                spacing: 10px;
+                padding: 10px;
+
+                VerticalLayout {
+                    visible: !logged_in;
+                    alignment: center;
+                    LoginPanel {
+                        width: 460px;
+                        height: 480px;
+                        error_text: root.login_error;
+                        show_captcha: root.show_captcha;
+                        captcha_image: root.captcha_image;
+                        qr_image: root.qr_image;
+                        qr_status_text: root.qr_status;
+                        login_loading: root.login_loading;
+                        qr_mode: root.qr_mode;
+
+                        do_login(username, password, captcha) => {
+                            root.login_request(username, password, captcha);
+                        }
+                        do_switch_mode(qr) => {
+                            root.switch_mode(qr);
+                        }
+                        do_qr_refresh() => {
+                            root.qr_refresh();
+                        }
+                    }
+                }
+
+                Rectangle {
+                    visible: logged_in;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+
+                    // 搜索结果显示
+                    Rectangle {
+                        visible: searching;
+                        background: #ffffff;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #e5e7eb;
+
+                        VerticalLayout {
+                            padding: 12px;
+                            spacing: 8px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Button {
+                                    text: "返回";
+                                    clicked => { root.clear_search(); }
+                                }
+                                Text {
+                                    text: "搜索: " + root.search_keyword;
+                                    color: #374151;
+                                    font-size: 14px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                background: #f8fafc;
+                                border-radius: 8px;
+                                horizontal-stretch: 1;
+                                vertical-stretch: 1;
+
+                                ScrollView {
+                                    VerticalLayout {
+                                        spacing: 2px;
+                                        padding: 6px;
+                                        for r in root.search_results : FileItem {
+                                            entry: r;
+                                            item_clicked() => {
+                                                root.open_item(r.id, r.name, r.is_dir);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 正常文件列表
+                    Rectangle {
+                        visible: !searching;
+                        FileListPanel {
+                            files: root.file_list;
+                            current_path: root.current_path;
+                            status_text: root.status_text;
+                            account_name: root.account_name;
+                            total-space: root.total_space;
+                            used-space: root.used_space;
+                            selected_id: root.selected_id;
+
+                            item_open(id, name, is_dir) => {
+                                root.open_item(id, name, is_dir);
+                            }
+                            item_select(id) => {
+                                root.select_item(id);
+                            }
+                            do_refresh() => { root.refresh_files(); }
+                            do_navigate_up() => { root.navigate_up(); }
+                            do_upload() => { root.upload_files(); }
+                            do_create_folder() => { root.create_folder(); }
+                            do_download(id, name) => { root.download_file(id); }
+                            do_delete(id, name) => { root.delete_file(id); }
+                            do_rename(id, name) => { root.rename_file(id); }
+                            do_copy(id, name) => { root.copy_file(id); }
+                            do_get_link(id, name) => { root.get_link(id); }
+                            do_search(keyword) => { root.search_files(keyword); }
+                            do_logout() => { root.logout(); }
+                            do_switch_space(space) => { root.switch_space(space); }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    visible: logged_in;
+                    height: 180px;
+                    background: #ffffff;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #e5e7eb;
+
+                    TransferPanel {
+                        transfers: transfer_list;
+                        cancel_task(id) => { root.cancel_task(id); }
+                        pause_task(id) => { root.cancel_task(id); }
+                    }
+                }
+            }
+        }
+    }
+}
