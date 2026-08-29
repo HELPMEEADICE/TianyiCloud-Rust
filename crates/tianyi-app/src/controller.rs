@@ -877,9 +877,15 @@ impl Controller {
                     };
                     let total_s = tianyi_core::file::format_size(total.max(0) as u64);
                     let used_s = tianyi_core::file::format_size(used.max(0) as u64);
+                    let capacity_ratio = if total > 0 {
+                        (used.max(0) as f32 / total as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
                     invoke_ui(&ui, move |win| {
-                            win.set_total_space(SharedString::from(total_s));
-                            win.set_used_space(SharedString::from(used_s));
+                        win.set_total_space(SharedString::from(total_s));
+                        win.set_used_space(SharedString::from(used_s));
+                        win.set_capacity_ratio(capacity_ratio);
                     });
                 }
             }

@@ -379,6 +379,187 @@ component ToolButton inherits Rectangle {
     }
 }
 
+// ===== 页面标题与容量摘要 =====
+component PageHeader inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <string> used_space: "0 B";
+    in property <string> total_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+
+    height: 70px;
+    background: #ffffff;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: #e5e7eb;
+
+    HorizontalLayout {
+        padding-left: 18px;
+        padding-right: 18px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: #dbeafe;
+            Icon {
+                glyph: "\u{e2bd}";
+                icon-color: #2563eb;
+                font-size: 22px;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+            Text {
+                text: root.title;
+                color: #111827;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            Text {
+                text: root.subtitle;
+                color: #94a3b8;
+                font-size: 12px;
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Rectangle {
+            width: 230px;
+            height: 46px;
+            border-radius: 10px;
+            background: #eff6ff;
+
+            VerticalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-top: 7px;
+                padding-bottom: 7px;
+                spacing: 5px;
+
+                HorizontalLayout {
+                    Text {
+                        text: "存储空间";
+                        color: #1d4ed8;
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+                    Text {
+                        text: root.used_space + " / " + root.total_space;
+                        color: #1e3a8a;
+                        font-size: 12px;
+                        font-weight: 700;
+                    }
+                }
+
+                Rectangle {
+                    height: 5px;
+                    border-radius: 3px;
+                    background: #bfdbfe;
+                    progress-fill := Rectangle {
+                        x: 0px;
+                        width: parent.width * Math.min(1.0, Math.max(0.0, root.capacity_ratio));
+                        height: 5px;
+                        border-radius: 3px;
+                        background: #2563eb;
+                    }
+                }
+            }
+        }
+    }
+}
+
+component CapacityCard inherits Rectangle {
+    in property <string> used_space: "0 B";
+    in property <string> total_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+
+    height: 126px;
+    border-radius: 12px;
+    background: #2563eb;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 6px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Icon {
+                glyph: "\u{e2be}";
+                icon-color: #ffffff;
+                font-size: 22px;
+            }
+            Text {
+                text: "云存储容量";
+                color: #dbeafe;
+                font-size: 12px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: root.used_space;
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: 800;
+        }
+
+        Text {
+            text: "已使用 / 总容量  ·  " + root.total_space;
+            color: #bfdbfe;
+            font-size: 11px;
+        }
+
+        Rectangle {
+            height: 6px;
+            border-radius: 3px;
+            background: #60a5fa;
+            progress-fill := Rectangle {
+                x: 0px;
+                width: parent.width * Math.min(1.0, Math.max(0.0, root.capacity_ratio));
+                height: 6px;
+                border-radius: 3px;
+                background: #ffffff;
+            }
+        }
+
+        HorizontalLayout {
+            Text {
+                text: "0%";
+                color: #dbeafe;
+                font-size: 10px;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: Math.round(Math.min(1.0, Math.max(0.0, root.capacity_ratio)) * 100.0) + "% 已用";
+                color: #ffffff;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: "100%";
+                color: #dbeafe;
+                font-size: 10px;
+            }
+        }
+    }
+}
+
 // ===== 文件管理面板 =====
 component FileListPanel inherits VerticalLayout {
     in property <[FileEntry]> files;
@@ -632,15 +813,35 @@ component TransferItem inherits Rectangle {
                 overflow: elide;
             }
 
-            Rectangle {
-                height: 6px;
-                border-radius: 3px;
-                background: #e5e7eb;
-                progress-fill := Rectangle {
-                    width: parent.width * entry.progress;
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: "0%";
+                    color: #94a3b8;
+                    font-size: 10px;
+                    width: 24px;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
                     height: 6px;
                     border-radius: 3px;
-                    background: entry.direction == "upload" ? #16a34a : #2563eb;
+                    background: #e5e7eb;
+                    progress-fill := Rectangle {
+                        x: 0px;
+                        width: parent.width * Math.min(1.0, Math.max(0.0, entry.progress / 100.0));
+                        height: 6px;
+                        border-radius: 3px;
+                        background: entry.direction == "upload" ? #16a34a : #2563eb;
+                    }
+                }
+
+                Text {
+                    text: "100%";
+                    color: #94a3b8;
+                    font-size: 10px;
+                    width: 32px;
                 }
             }
         }
@@ -740,6 +941,269 @@ component TransferPanel inherits Rectangle {
     }
 }
 
+// ===== 云盘工作区 =====
+component CloudPage inherits Rectangle {
+    in property <string> page_title;
+    in property <string> page_subtitle;
+    in property <[FileEntry]> files;
+    in property <string> current_path;
+    in property <string> status_text;
+    in property <string> account_name;
+    in property <string> total_space: "0 B";
+    in property <string> used_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+    in property <string> selected_id: "";
+    in property <[TransferEntry]> transfers: [];
+    in property <bool> searching: false;
+    in property <string> search_keyword: "";
+    in property <[FileEntry]> search_results: [];
+
+    callback open_item(string, string, bool);
+    callback select_item(string);
+    callback refresh_files();
+    callback navigate_up();
+    callback upload_files();
+    callback create_folder();
+    callback search_files(string);
+    callback clear_search();
+    callback logout();
+    callback switch_space(string);
+    callback download_file(string);
+    callback delete_file(string);
+    callback rename_file(string);
+    callback copy_file(string);
+    callback get_link(string);
+    callback cancel_task(int);
+
+    background: #f1f5f9;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        PageHeader {
+            title: root.page_title;
+            subtitle: root.page_subtitle;
+            used_space: root.used_space;
+            total_space: root.total_space;
+            capacity_ratio: root.capacity_ratio;
+        }
+
+        if (root.searching): Rectangle {
+            background: #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                padding: 12px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    TextIconButton {
+                        text: "返回";
+                        icon: "\u{e5c4}";
+                        clicked => { root.clear_search(); }
+                    }
+                    Text {
+                        text: "搜索: " + root.search_keyword;
+                        color: #374151;
+                        font-size: 14px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+
+                    ScrollView {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            spacing: 2px;
+                            padding: 6px;
+                            for result in root.search_results : FileItem {
+                                entry: result;
+                                item_clicked() => {
+                                    root.open_item(result.id, result.name, result.is_dir);
+                                }
+                                item_double_clicked() => {
+                                    root.open_item(result.id, result.name, result.is_dir);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!root.searching): FileListPanel {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            files: root.files;
+            current_path: root.current_path;
+            status_text: root.status_text;
+            account_name: root.account_name;
+            total-space: root.total_space;
+            used-space: root.used_space;
+            selected_id: root.selected_id;
+
+            item_open(id, name, is_dir) => {
+                root.open_item(id, name, is_dir);
+            }
+            item_select(id) => {
+                root.select_item(id);
+            }
+            do_refresh() => { root.refresh_files(); }
+            do_navigate_up() => { root.navigate_up(); }
+            do_upload() => { root.upload_files(); }
+            do_create_folder() => { root.create_folder(); }
+            do_download(id, name) => { root.download_file(id); }
+            do_delete(id, name) => { root.delete_file(id); }
+            do_rename(id, name) => { root.rename_file(id); }
+            do_copy(id, name) => { root.copy_file(id); }
+            do_get_link(id, name) => { root.get_link(id); }
+            do_search(keyword) => { root.search_files(keyword); }
+            do_logout() => { root.logout(); }
+            do_switch_space(space) => { root.switch_space(space); }
+        }
+
+        Rectangle {
+            height: 174px;
+            background: #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+
+            TransferPanel {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                transfers: root.transfers;
+                cancel_task(id) => { root.cancel_task(id); }
+                pause_task(id) => { root.cancel_task(id); }
+            }
+        }
+    }
+}
+
+// ===== 独立传输任务页 =====
+component TransferPage inherits Rectangle {
+    in property <string> used_space: "0 B";
+    in property <string> total_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+    in property <[TransferEntry]> transfers: [];
+    callback cancel_task(int);
+
+    background: #f1f5f9;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        PageHeader {
+            title: "传输任务";
+            subtitle: "集中查看上传与下载进度";
+            used_space: root.used_space;
+            total_space: root.total_space;
+            capacity_ratio: root.capacity_ratio;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+
+            TransferPanel {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                transfers: root.transfers;
+                cancel_task(id) => { root.cancel_task(id); }
+                pause_task(id) => { root.cancel_task(id); }
+            }
+        }
+    }
+}
+
+// ===== 独立分享链接页 =====
+component SharePage inherits Rectangle {
+    in property <string> used_space: "0 B";
+    in property <string> total_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+    callback go_personal();
+
+    background: #f1f5f9;
+
+    VerticalLayout {
+        spacing: 10px;
+
+        PageHeader {
+            title: "分享链接";
+            subtitle: "管理已创建的文件分享链接";
+            used_space: root.used_space;
+            total_space: root.total_space;
+            capacity_ratio: root.capacity_ratio;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
+            background: #ffffff;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: #e5e7eb;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                alignment: center;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 64px;
+                    height: 64px;
+                    border-radius: 20px;
+                    background: #dbeafe;
+                    Icon {
+                        glyph: "\u{e157}";
+                        icon-color: #2563eb;
+                        font-size: 32px;
+                    }
+                }
+
+                Text {
+                    text: "暂无分享链接";
+                    color: #1f2937;
+                    font-size: 18px;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "在个人云或家庭云中选择文件，使用工具栏的“提取链接”即可创建分享。";
+                    color: #94a3b8;
+                    font-size: 13px;
+                    horizontal-alignment: center;
+                }
+
+                TextIconButton {
+                    text: "返回个人云";
+                    icon: "\u{e88a}";
+                    clicked => { root.go_personal(); }
+                }
+            }
+        }
+    }
+}
+
 export component MainWindow inherits Window {
     title: "天翼云盘客户端";
     preferred-width: 1100px;
@@ -770,6 +1234,8 @@ export component MainWindow inherits Window {
 
     in property <string> total_space: "0 B";
     in property <string> used_space: "0 B";
+    in property <float> capacity_ratio: 0.0;
+    property <int> current_page: 0;
 
     callback login_request(string, string, string);
     callback qr_refresh();
@@ -792,10 +1258,10 @@ export component MainWindow inherits Window {
     callback logout();
     callback switch_space(string);
 
+    // ===== 四个独立页面与滑动淡入切换 =====
     HorizontalLayout {
-        // ===== 左侧导航栏 =====
         Rectangle {
-            width: 200px;
+            width: 216px;
             background: #1e3a8a;
 
             VerticalLayout {
@@ -827,65 +1293,56 @@ export component MainWindow inherits Window {
                 }
 
                 Rectangle {
-                    height: 20px;
+                    height: 18px;
                 }
 
                 NavItem {
                     icon: "\u{e88a}";
                     label: "首页";
-                    active: true;
-                    clicked => { root.switch_space("personal"); }
+                    active: root.current_page == 0;
+                    enabled: root.logged_in;
+                    clicked => {
+                        root.current_page = 0;
+                        root.switch_space("personal");
+                    }
                 }
                 NavItem {
                     icon: "\u{e7ef}";
                     label: "家庭云";
-                    enabled: logged_in;
-                    clicked => { root.switch_space("family"); }
+                    active: root.current_page == 1;
+                    enabled: root.logged_in;
+                    clicked => {
+                        root.current_page = 1;
+                        root.switch_space("family");
+                    }
                 }
                 NavItem {
                     icon: "\u{e2c4}";
                     label: "传输任务";
-                    enabled: logged_in;
-                    clicked => { root.refresh_files(); }
+                    active: root.current_page == 2;
+                    enabled: root.logged_in;
+                    clicked => {
+                        root.current_page = 2;
+                    }
                 }
                 NavItem {
                     icon: "\u{e157}";
                     label: "分享链接";
-                    enabled: logged_in;
-                    clicked => { root.refresh_files(); }
-                }
-
-                Rectangle {
-                    height: 20px;
-                }
-
-                Rectangle {
-                    height: 90px;
-                    border-radius: 10px;
-                    background: #2563eb;
-                    HorizontalLayout {
-                        padding: 12px;
-                        spacing: 10px;
-                        Icon {
-                            glyph: "\u{e2be}";
-                            icon-color: #ffffff;
-                            font-size: 22px;
-                        }
-                        VerticalLayout {
-                            spacing: 4px;
-                            Text {
-                                text: "云存储容量";
-                                color: #bfdbfe;
-                                font-size: 11px;
-                            }
-                            Text {
-                                text: root.used_space + " / " + root.total_space;
-                                color: #ffffff;
-                                font-size: 12px;
-                                font-weight: 600;
-                            }
-                        }
+                    active: root.current_page == 3;
+                    enabled: root.logged_in;
+                    clicked => {
+                        root.current_page = 3;
                     }
+                }
+
+                Rectangle {
+                    height: 16px;
+                }
+
+                CapacityCard {
+                    used_space: root.used_space;
+                    total_space: root.total_space;
+                    capacity_ratio: root.capacity_ratio;
                 }
 
                 Rectangle {
@@ -895,21 +1352,19 @@ export component MainWindow inherits Window {
                 NavItem {
                     icon: "\u{e9ba}";
                     label: "退出登录";
-                    enabled: logged_in;
+                    enabled: root.logged_in;
                     clicked => { root.logout(); }
                 }
             }
         }
 
-        // ===== 右侧主区域 =====
         VerticalLayout {
             horizontal-stretch: 1;
             vertical-stretch: 1;
-            spacing: 10px;
-            padding: 12px;
+            spacing: 0px;
+            padding: 14px;
 
-            // 登录界面
-            if (!logged_in): HorizontalLayout {
+            if (!root.logged_in): HorizontalLayout {
                 horizontal-stretch: 1;
                 vertical-stretch: 1;
                 alignment: center;
@@ -917,141 +1372,171 @@ export component MainWindow inherits Window {
                     width: 420px;
                     height: 520px;
                     error_text: root.login_error;
-                        show_captcha: root.show_captcha;
-                        captcha_image: root.captcha_image;
-                        qr_image: root.qr_image;
-                        qr_status_text: root.qr_status;
-                        login_loading: root.login_loading;
-                        qr_mode: root.qr_mode;
-                        saved_accounts: root.saved_accounts;
+                    show_captcha: root.show_captcha;
+                    captcha_image: root.captcha_image;
+                    qr_image: root.qr_image;
+                    qr_status_text: root.qr_status;
+                    login_loading: root.login_loading;
+                    qr_mode: root.qr_mode;
+                    saved_accounts: root.saved_accounts;
 
-                        do_login(username, password, captcha) => {
-                            root.login_request(username, password, captcha);
-                        }
-                        do_switch_mode(qr) => {
-                            root.switch_mode(qr);
-                        }
-                        do_qr_refresh() => {
-                            root.qr_refresh();
-                        }
-                        do_quick_login(username) => {
-                            root.quick_login(username);
-                        }
+                    do_login(username, password, captcha) => {
+                        root.login_request(username, password, captcha);
+                    }
+                    do_switch_mode(qr) => {
+                        root.switch_mode(qr);
+                    }
+                    do_qr_refresh() => {
+                        root.qr_refresh();
+                    }
+                    do_quick_login(username) => {
+                        root.quick_login(username);
                     }
                 }
+            }
 
-                // 已登录主界面
-                if (logged_in): VerticalLayout {
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
+            if (root.logged_in): Rectangle {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                background: transparent;
+                clip: true;
 
-                    // 搜索结果显示
-                    if (searching): Rectangle {
-                        background: #ffffff;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: #e5e7eb;
-                        horizontal-stretch: 1;
-                        vertical-stretch: 1;
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    x: root.current_page == 0 ? 0px : -28px;
+                    opacity: root.current_page == 0 ? 1.0 : 0.0;
+                    animate x { duration: 220ms; easing: ease-in-out; }
+                    animate opacity { duration: 180ms; easing: ease-in-out; }
 
-                        VerticalLayout {
-                            horizontal-stretch: 1;
-                            vertical-stretch: 1;
-                            padding: 12px;
-                            spacing: 8px;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-                                TextIconButton {
-                                    text: "返回";
-                                    icon: "\u{e5c4}";
-                                    clicked => { root.clear_search(); }
-                                }
-                                Text {
-                                    text: "搜索: " + root.search_keyword;
-                                    color: #374151;
-                                    font-size: 14px;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Rectangle {
-                                background: #f8fafc;
-                                border-radius: 8px;
-                                horizontal-stretch: 1;
-                                vertical-stretch: 1;
-
-                                VerticalLayout {
-                                    horizontal-stretch: 1;
-                                    vertical-stretch: 1;
-                                    ScrollView {
-                                        horizontal-stretch: 1;
-                                        vertical-stretch: 1;
-                                        VerticalLayout {
-                                            spacing: 2px;
-                                            padding: 6px;
-                                            for r in root.search_results : FileItem {
-                                                entry: r;
-                                                item_clicked() => {
-                                                    root.open_item(r.id, r.name, r.is_dir);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 正常文件列表
-                    if (!searching): FileListPanel {
-                        horizontal-stretch: 1;
-                        vertical-stretch: 1;
+                    CloudPage {
+                        width: parent.width;
+                        height: parent.height;
+                        page_title: "个人云";
+                        page_subtitle: "管理和同步您的个人文件";
                         files: root.file_list;
                         current_path: root.current_path;
                         status_text: root.status_text;
                         account_name: root.account_name;
-                        total-space: root.total_space;
-                        used-space: root.used_space;
+                        total_space: root.total_space;
+                        used_space: root.used_space;
+                        capacity_ratio: root.capacity_ratio;
                         selected_id: root.selected_id;
+                        transfers: root.transfer_list;
+                        searching: root.searching;
+                        search_keyword: root.search_keyword;
+                        search_results: root.search_results;
 
-                        item_open(id, name, is_dir) => {
-                            root.open_item(id, name, is_dir);
+                        open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
+                        select_item(id) => { root.select_item(id); }
+                        refresh_files() => { root.refresh_files(); }
+                        navigate_up() => { root.navigate_up(); }
+                        upload_files() => { root.upload_files(); }
+                        create_folder() => { root.create_folder(); }
+                        search_files(keyword) => { root.search_files(keyword); }
+                        clear_search() => { root.clear_search(); }
+                        logout() => { root.logout(); }
+                        switch_space(space) => {
+                            root.switch_space(space);
+                            root.current_page = space == "family" ? 1 : 0;
                         }
-                        item_select(id) => {
-                            root.select_item(id);
-                        }
-                        do_refresh() => { root.refresh_files(); }
-                        do_navigate_up() => { root.navigate_up(); }
-                        do_upload() => { root.upload_files(); }
-                        do_create_folder() => { root.create_folder(); }
-                        do_download(id, name) => { root.download_file(id); }
-                        do_delete(id, name) => { root.delete_file(id); }
-                        do_rename(id, name) => { root.rename_file(id); }
-                        do_copy(id, name) => { root.copy_file(id); }
-                        do_get_link(id, name) => { root.get_link(id); }
-                        do_search(keyword) => { root.search_files(keyword); }
-                        do_logout() => { root.logout(); }
-                        do_switch_space(space) => { root.switch_space(space); }
+                        download_file(id) => { root.download_file(id); }
+                        delete_file(id) => { root.delete_file(id); }
+                        rename_file(id) => { root.rename_file(id); }
+                        copy_file(id) => { root.copy_file(id); }
+                        get_link(id) => { root.get_link(id); }
+                        cancel_task(id) => { root.cancel_task(id); }
                     }
+                }
 
-                    // 传输面板
-                    Rectangle {
-                        height: 200px;
-                        background: #ffffff;
-                        border-radius: 10px;
-                        border-width: 1px;
-                        border-color: #e5e7eb;
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    x: root.current_page == 1 ? 0px : (root.current_page > 1 ? -28px : 28px);
+                    opacity: root.current_page == 1 ? 1.0 : 0.0;
+                    animate x { duration: 220ms; easing: ease-in-out; }
+                    animate opacity { duration: 180ms; easing: ease-in-out; }
 
-                        TransferPanel {
-                            horizontal-stretch: 1;
-                            vertical-stretch: 1;
-                            transfers: transfer_list;
-                            cancel_task(id) => { root.cancel_task(id); }
-                            pause_task(id) => { root.cancel_task(id); }
+                    CloudPage {
+                        width: parent.width;
+                        height: parent.height;
+                        page_title: "家庭云";
+                        page_subtitle: "与家人共享和管理文件";
+                        files: root.file_list;
+                        current_path: root.current_path;
+                        status_text: root.status_text;
+                        account_name: root.account_name;
+                        total_space: root.total_space;
+                        used_space: root.used_space;
+                        capacity_ratio: root.capacity_ratio;
+                        selected_id: root.selected_id;
+                        transfers: root.transfer_list;
+                        searching: root.searching;
+                        search_keyword: root.search_keyword;
+                        search_results: root.search_results;
+
+                        open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
+                        select_item(id) => { root.select_item(id); }
+                        refresh_files() => { root.refresh_files(); }
+                        navigate_up() => { root.navigate_up(); }
+                        upload_files() => { root.upload_files(); }
+                        create_folder() => { root.create_folder(); }
+                        search_files(keyword) => { root.search_files(keyword); }
+                        clear_search() => { root.clear_search(); }
+                        logout() => { root.logout(); }
+                        switch_space(space) => {
+                            root.switch_space(space);
+                            root.current_page = space == "family" ? 1 : 0;
+                        }
+                        download_file(id) => { root.download_file(id); }
+                        delete_file(id) => { root.delete_file(id); }
+                        rename_file(id) => { root.rename_file(id); }
+                        copy_file(id) => { root.copy_file(id); }
+                        get_link(id) => { root.get_link(id); }
+                        cancel_task(id) => { root.cancel_task(id); }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    x: root.current_page == 2 ? 0px : (root.current_page > 2 ? -28px : 28px);
+                    opacity: root.current_page == 2 ? 1.0 : 0.0;
+                    animate x { duration: 220ms; easing: ease-in-out; }
+                    animate opacity { duration: 180ms; easing: ease-in-out; }
+
+                    TransferPage {
+                        width: parent.width;
+                        height: parent.height;
+                        used_space: root.used_space;
+                        total_space: root.total_space;
+                        capacity_ratio: root.capacity_ratio;
+                        transfers: root.transfer_list;
+                        cancel_task(id) => { root.cancel_task(id); }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    x: root.current_page == 3 ? 0px : 28px;
+                    opacity: root.current_page == 3 ? 1.0 : 0.0;
+                    animate x { duration: 220ms; easing: ease-in-out; }
+                    animate opacity { duration: 180ms; easing: ease-in-out; }
+
+                    SharePage {
+                        width: parent.width;
+                        height: parent.height;
+                        used_space: root.used_space;
+                        total_space: root.total_space;
+                        capacity_ratio: root.capacity_ratio;
+                        go_personal() => {
+                            root.current_page = 0;
+                            root.switch_space("personal");
                         }
                     }
                 }
             }
         }
     }
+}
