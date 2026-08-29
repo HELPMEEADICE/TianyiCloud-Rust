@@ -6,7 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }
-slint = "1.17"
+slint = { version = "1.17", features = ["unstable-winit-030"] }
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true

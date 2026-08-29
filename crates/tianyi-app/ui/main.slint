@@ -1,6 +1,7 @@
 // 天翼云盘客户端 UI
 
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import "./fonts/MaterialIcons-Regular.ttf";
 
 export struct FileEntry {
     id: string,
@@ -22,39 +23,131 @@ export struct TransferEntry {
     speed: string,
 }
 
+// ===== 基础图标组件 =====
+// 使用 Material Icons 字体，所有图标在 fonts/MaterialIcons-Regular.ttf
+component Icon inherits Text {
+    in property <string> glyph: "\u{e2bd}";
+    in property <brush> icon-color: #1f2937;
+    font-family: "Material Icons";
+    text: glyph;
+    color: icon-color;
+    font-size: 20px;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+}
+
+// ===== 带图标的文字按钮 =====
+component TextIconButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 34px;
+    border-radius: 8px;
+    background: #ffffff;
+    border-width: 1px;
+    border-color: #e2e8f0;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 6px;
+        cross-axis-alignment: center;
+        alignment: center;
+
+        Icon {
+            glyph: root.icon;
+            icon-color: root.enabled ? #1e3a8a : #cbd5e1;
+            font-size: 16px;
+        }
+
+        Text {
+            text: root.text;
+            color: root.enabled ? #1e3a8a : #cbd5e1;
+            font-size: 13px;
+            font-weight: 500;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ===== 侧边栏导航按钮 =====
+component NavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 44px;
+    border-radius: 8px;
+    background: active ? #ffffff : #1e3a8a;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        spacing: 10px;
+        alignment: start;
+        cross-axis-alignment: center;
+
+        Icon {
+            glyph: root.icon;
+            icon-color: root.active ? #2563eb : #ffffff;
+            font-size: 20px;
+        }
+
+        Text {
+            text: root.label;
+            color: root.active ? #1e3a8a : #e2e8f0;
+            font-size: 13px;
+            font-weight: root.active ? 700 : 500;
+        }
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// ===== 文件列表项 =====
 component FileItem inherits Rectangle {
     in property <FileEntry> entry;
     in property <bool> selected: false;
     callback item_clicked();
     callback item_double_clicked();
 
-    height: 42px;
-    border-radius: 6px;
-    background: selected ? #dbeafe : #ffffff;
+    height: 52px;
+    border-radius: 8px;
+    background: selected ? #e0f2fe : transparent;
 
     HorizontalLayout {
-        padding: 8px;
-        spacing: 10px;
-        alignment: start;
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 12px;
+        cross-axis-alignment: center;
 
         Rectangle {
-            width: 26px;
-            height: 26px;
-            border-radius: 5px;
-            background: entry.is_dir ? #fde8b2 : #dbeafe;
-            Text {
-                text: entry.is_dir ? "D" : "F";
-                color: entry.is_dir ? #b45309 : #1d4ed8;
-                font-size: 12px;
-                font-weight: 700;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            background: entry.is_dir ? #fef3c7 : #e0f2fe;
+            Icon {
+                glyph: entry.is_dir ? "\u{e2c7}" : "\u{e24d}";
+                icon-color: entry.is_dir ? #d97706 : #2563eb;
+                font-size: 20px;
             }
         }
 
         Text {
             text: entry.name;
-            color: #1f2937;
+            color: #111827;
             font-size: 14px;
             overflow: elide;
             horizontal-stretch: 1;
@@ -64,13 +157,14 @@ component FileItem inherits Rectangle {
             text: entry.size_text;
             color: #9ca3af;
             font-size: 12px;
+            width: 80px;
         }
 
         Text {
             text: entry.modified;
             color: #9ca3af;
             font-size: 12px;
-            width: 120px;
+            width: 130px;
         }
     }
 
@@ -84,6 +178,7 @@ component FileItem inherits Rectangle {
     }
 }
 
+// ===== 登录面板 =====
 component LoginPanel inherits Rectangle {
     in property <string> error_text;
     in property <bool> show_captcha;
@@ -101,21 +196,39 @@ component LoginPanel inherits Rectangle {
 
     background: #ffffff;
     border-radius: 16px;
+    border-width: 1px;
+    border-color: #e2e8f0;
 
     VerticalLayout {
-        padding: 36px;
+        padding-left: 48px;
+        padding-right: 48px;
+        padding-top: 40px;
+        padding-bottom: 40px;
         spacing: 14px;
         alignment: center;
 
+        Rectangle {
+            width: 72px;
+            height: 72px;
+            border-radius: 18px;
+            background: #2563eb;
+            Icon {
+                glyph: "\u{e2bd}";
+                icon-color: #ffffff;
+                font-size: 40px;
+            }
+        }
+
         Text {
             text: "天翼云盘";
-            font-size: 26px;
+            font-size: 28px;
             font-weight: 700;
-            color: #2563eb;
+            color: #1e3a8a;
             horizontal-alignment: center;
         }
+
         Text {
-            text: "Rust + Slint 第三方客户端";
+            text: "登录以同步您的云端文件";
             font-size: 13px;
             color: #6b7280;
             horizontal-alignment: center;
@@ -150,7 +263,7 @@ component LoginPanel inherits Rectangle {
             for account in saved_accounts : Button {
                 text: account;
                 enabled: !login_loading;
-                width: 260px;
+                width: 280px;
                 clicked => { root.do_quick_login(account); }
             }
         }
@@ -161,9 +274,11 @@ component LoginPanel inherits Rectangle {
 
             username-input := LineEdit {
                 placeholder-text: "手机号 / 邮箱";
+                width: 300px;
             }
             password-input := LineEdit {
                 placeholder-text: "密码";
+                width: 300px;
             }
 
             VerticalLayout {
@@ -172,11 +287,11 @@ component LoginPanel inherits Rectangle {
                 Image {
                     source: captcha_image;
                     height: 52px;
-                    width: 160px;
+                    width: 180px;
                 }
                 captcha-input := LineEdit {
                     placeholder-text: "验证码";
-                    width: 160px;
+                    width: 180px;
                 }
             }
 
@@ -196,15 +311,17 @@ component LoginPanel inherits Rectangle {
             alignment: center;
 
             Rectangle {
-                width: 200px;
-                height: 200px;
-                background: #f3f4f6;
+                width: 220px;
+                height: 220px;
+                background: #f8fafc;
                 border-radius: 12px;
+                border-width: 1px;
+                border-color: #e2e8f0;
 
                 Image {
                     source: qr_image;
-                    width: 180px;
-                    height: 180px;
+                    width: 190px;
+                    height: 190px;
                 }
             }
 
@@ -213,6 +330,7 @@ component LoginPanel inherits Rectangle {
                 color: #6b7280;
                 font-size: 13px;
                 horizontal-alignment: center;
+                wrap: word-wrap;
             }
 
             Button {
@@ -235,13 +353,41 @@ component LoginPanel inherits Rectangle {
     }
 }
 
-component FileListPanel inherits Rectangle {
+// ===== 工具栏图标按钮 =====
+component ToolButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 36px;
+    width: 46px;
+    border-radius: 8px;
+    background: #ffffff;
+    border-width: 1px;
+    border-color: #e2e8f0;
+
+    Icon {
+        glyph: root.icon;
+        icon-color: root.enabled ? #1e3a8a : #cbd5e1;
+        font-size: 20px;
+    }
+
+    TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ===== 文件管理面板 =====
+component FileListPanel inherits VerticalLayout {
     in property <[FileEntry]> files;
     in property <string> current_path;
     in property <string> status_text;
     in property <string> account_name;
     in property <string> total-space: "0 B";
     in property <string> used-space: "0 B";
+    in property <string> selected_id: "";
 
     callback item_open(string, string, bool);
     callback item_select(string);
@@ -259,24 +405,81 @@ component FileListPanel inherits Rectangle {
     callback do_move(string, string);
     callback do_copy(string, string);
 
-    in property <string> selected_id: "";
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
 
-    background: #f8fafc;
-
-    VerticalLayout {
-        padding: 14px;
-        spacing: 10px;
+    padding: 16px;
+    spacing: 12px;
 
         HorizontalLayout {
             spacing: 8px;
 
-            Text {
-                text: account_name == "" ? "未登录" : account_name;
-                color: #1f2937;
-                font-weight: 600;
-                font-size: 14px;
-                vertical-alignment: center;
+            Rectangle {
+                height: 36px;
+                border-radius: 18px;
+                background: #e0f2fe;
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 8px;
+                    Icon {
+                        glyph: "\u{e853}";
+                        icon-color: #2563eb;
+                        font-size: 18px;
+                    }
+                    Text {
+                        text: account_name == "" ? "未登录" : account_name;
+                        color: #1e3a8a;
+                        font-weight: 600;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
             }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            ToolButton {
+                icon: "\u{e2c4}";
+                label: "下载";
+                enabled: root.selected_id != "";
+                clicked => { root.do_download(root.selected_id, ""); }
+            }
+            ToolButton {
+                icon: "\u{e872}";
+                label: "删除";
+                enabled: root.selected_id != "";
+                clicked => { root.do_delete(root.selected_id, ""); }
+            }
+            ToolButton {
+                icon: "\u{e3c9}";
+                label: "重命名";
+                enabled: root.selected_id != "";
+                clicked => { root.do_rename(root.selected_id, ""); }
+            }
+            ToolButton {
+                icon: "\u{e14d}";
+                label: "复制";
+                enabled: root.selected_id != "";
+                clicked => { root.do_copy(root.selected_id, ""); }
+            }
+            ToolButton {
+                icon: "\u{e157}";
+                label: "提取链接";
+                enabled: root.selected_id != "";
+                clicked => { root.do_get_link(root.selected_id, ""); }
+            }
+            ToolButton {
+                icon: "\u{e9ba}";
+                label: "退出登录";
+                clicked => { root.do_logout(); }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 12px;
 
             Button {
                 text: "上传";
@@ -290,59 +493,44 @@ component FileListPanel inherits Rectangle {
                 text: "刷新";
                 clicked => { root.do_refresh(); }
             }
-            Button {
-                text: "下载";
-                enabled: root.selected_id != "";
-                clicked => { root.do_download(root.selected_id, ""); }
+
+            Rectangle {
+                width: 1px;
+                height: 24px;
+                background: #e2e8f0;
             }
-            Button {
-                text: "删除";
-                enabled: root.selected_id != "";
-                clicked => { root.do_delete(root.selected_id, ""); }
-            }
-            Button {
-                text: "重命名";
-                enabled: root.selected_id != "";
-                clicked => { root.do_rename(root.selected_id, ""); }
-            }
-            Button {
-                text: "复制";
-                enabled: root.selected_id != "";
-                clicked => { root.do_copy(root.selected_id, ""); }
-            }
-            Button {
-                text: "提取链接";
-                enabled: root.selected_id != "";
-                clicked => { root.do_get_link(root.selected_id, ""); }
-            }
-            Button {
+
+            TextIconButton {
                 text: "个人云";
+                icon: "\u{e853}";
                 clicked => { root.do_switch_space("personal"); }
             }
-            Button {
+            TextIconButton {
                 text: "家庭云";
+                icon: "\u{e7ef}";
                 clicked => { root.do_switch_space("family"); }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
             }
 
             search-input := LineEdit {
                 placeholder-text: "搜索文件...";
-                width: 180px;
+                width: 200px;
                 edited => {
                     if (search-input.text != "") {
                         root.do_search(search-input.text);
                     }
                 }
             }
-            Button {
-                text: "退出登录";
-                clicked => { root.do_logout(); }
-            }
         }
 
         HorizontalLayout {
             spacing: 6px;
-            Button {
+            TextIconButton {
                 text: "上级";
+                icon: "\u{e5c4}";
                 enabled: current_path != "";
                 clicked => { root.do_navigate_up(); }
             }
@@ -359,20 +547,28 @@ component FileListPanel inherits Rectangle {
             border-radius: 10px;
             border-width: 1px;
             border-color: #e5e7eb;
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
 
-            ScrollView {
-                VerticalLayout {
-                    spacing: 2px;
-                    padding: 6px;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                ScrollView {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 2px;
+                        padding: 6px;
 
-                    for entry in files : FileItem {
-                        entry: entry;
-                        selected: entry.id == root.selected_id;
-                        item_clicked() => {
-                            root.item_select(entry.id);
-                        }
-                        item_double_clicked() => {
-                            root.item_open(entry.id, entry.name, entry.is_dir);
+                        for entry in files : FileItem {
+                            entry: entry;
+                            selected: entry.id == root.selected_id;
+                            item_clicked() => {
+                                root.item_select(entry.id);
+                            }
+                            item_double_clicked() => {
+                                root.item_open(entry.id, entry.name, entry.is_dir);
+                            }
                         }
                     }
                 }
@@ -385,33 +581,44 @@ component FileListPanel inherits Rectangle {
                 text: status_text;
                 color: #6b7280;
                 font-size: 12px;
+                horizontal-stretch: 1;
             }
             Text {
                 text: "容量 " + used-space + " / " + total-space;
                 color: #9ca3af;
                 font-size: 12px;
-            }        }
-    }
+            }
+        }
 }
 
+// ===== 传输任务项 =====
 component TransferItem inherits Rectangle {
     in property <TransferEntry> entry;
     callback do_cancel();
     callback do_pause();
 
-    height: 52px;
+    height: 56px;
+    border-radius: 8px;
+    background: #ffffff;
 
     HorizontalLayout {
-        padding: 8px;
-        spacing: 10px;
-        alignment: start;
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 12px;
+        cross-axis-alignment: center;
 
-        Text {
-            text: entry.direction == "upload" ? "U" : "D";
-            color: entry.direction == "upload" ? #16a34a : #2563eb;
-            font-size: 14px;
-            font-weight: 700;
-            width: 20px;
+        Rectangle {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            background: entry.direction == "upload" ? #dcfce7 : #dbeafe;
+            Icon {
+                glyph: entry.direction == "upload" ? "\u{e2c6}" : "\u{e2c4}";
+                icon-color: entry.direction == "upload" ? #16a34a : #2563eb;
+                font-size: 18px;
+            }
         }
 
         VerticalLayout {
@@ -433,49 +640,75 @@ component TransferItem inherits Rectangle {
                     width: parent.width * entry.progress;
                     height: 6px;
                     border-radius: 3px;
-                    background: #2563eb;
+                    background: entry.direction == "upload" ? #16a34a : #2563eb;
                 }
             }
         }
 
         Text {
-            text: entry.status + " " + entry.progress + "%";
+            text: entry.status;
             color: #6b7280;
             font-size: 12px;
-            width: 90px;
+            width: 70px;
         }
 
-        Button {
-            text: "P";
-            width: 26px;
-            height: 26px;
+        Text {
+            text: Math.round(entry.progress) + "%";
+            color: #374151;
+            font-size: 12px;
+            width: 40px;
+        }
+
+        ToolButton {
+            icon: "\u{e034}";
+            label: "暂停";
             clicked => { root.do_pause(); }
         }
-        Button {
-            text: "X";
-            width: 26px;
-            height: 26px;
+        ToolButton {
+            icon: "\u{e5cd}";
+            label: "取消";
             clicked => { root.do_cancel(); }
         }
     }
 }
 
+// ===== 传输面板 =====
 component TransferPanel inherits Rectangle {
     in property <[TransferEntry]> transfers;
     callback cancel_task(int);
     callback pause_task(int);
 
     background: #ffffff;
+    horizontal-stretch: 1;
+    vertical-stretch: 1;
 
     VerticalLayout {
-        padding: 10px;
-        spacing: 8px;
+        horizontal-stretch: 1;
+        vertical-stretch: 1;
+        padding: 14px;
+        spacing: 10px;
 
-        Text {
-            text: "传输任务 (" + transfers.length + ")";
-            font-size: 14px;
-            font-weight: 600;
-            color: #374151;
+        HorizontalLayout {
+            spacing: 8px;
+            Icon {
+                glyph: "\u{e8b6}";
+                icon-color: #2563eb;
+                font-size: 18px;
+            }
+            Text {
+                text: "传输任务 (" + transfers.length + ")";
+                font-size: 14px;
+                font-weight: 600;
+                color: #374151;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: "实时进度";
+                color: #9ca3af;
+                font-size: 12px;
+            }
         }
 
         Rectangle {
@@ -483,15 +716,23 @@ component TransferPanel inherits Rectangle {
             border-radius: 8px;
             border-width: 1px;
             border-color: #e5e7eb;
+            horizontal-stretch: 1;
+            vertical-stretch: 1;
 
-            ScrollView {
-                VerticalLayout {
-                    spacing: 2px;
-                    padding: 4px;
-                    for t in transfers : TransferItem {
-                        entry: t;
-                        do_cancel() => { root.cancel_task(t.id); }
-                        do_pause() => { root.pause_task(t.id); }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                ScrollView {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    VerticalLayout {
+                        spacing: 4px;
+                        padding: 6px;
+                        for t in transfers : TransferItem {
+                            entry: t;
+                            do_cancel() => { root.cancel_task(t.id); }
+                            do_pause() => { root.pause_task(t.id); }
+                        }
                     }
                 }
             }
@@ -501,9 +742,11 @@ component TransferPanel inherits Rectangle {
 
 export component MainWindow inherits Window {
     title: "天翼云盘客户端";
-    width: 1100px;
-    height: 720px;
-    background: #eef2f7;
+    preferred-width: 1100px;
+    preferred-height: 720px;
+    min-width: 900px;
+    min-height: 620px;
+    background: #f1f5f9;
 
     in property <bool> logged_in: false;
     in property <[FileEntry]> file_list: [];
@@ -550,53 +793,130 @@ export component MainWindow inherits Window {
     callback switch_space(string);
 
     HorizontalLayout {
+        // ===== 左侧导航栏 =====
         Rectangle {
-            width: 68px;
-            background: #1d4ed8;
+            width: 200px;
+            background: #1e3a8a;
 
             VerticalLayout {
-                padding: 14px;
-                spacing: 18px;
-                alignment: start;
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                padding: 16px;
+                spacing: 6px;
 
-                Text {
-                    text: "C";
-                    font-size: 24px;
-                    color: white;
-                    font-weight: 700;
-                    horizontal-alignment: center;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Rectangle {
+                        width: 36px;
+                        height: 36px;
+                        border-radius: 10px;
+                        background: #2563eb;
+                        Icon {
+                            glyph: "\u{e2bd}";
+                            icon-color: #ffffff;
+                            font-size: 22px;
+                        }
+                    }
+                    Text {
+                        text: "天翼云盘";
+                        color: #ffffff;
+                        font-size: 17px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
                 }
-                Text {
-                    text: "F";
-                    font-size: 18px;
-                    color: white;
-                    opacity: logged_in ? 1 : 0.4;
-                    horizontal-alignment: center;
+
+                Rectangle {
+                    height: 20px;
                 }
-                Text {
-                    text: "T";
-                    font-size: 18px;
-                    color: white;
-                    opacity: logged_in ? 1 : 0.4;
-                    horizontal-alignment: center;
+
+                NavItem {
+                    icon: "\u{e88a}";
+                    label: "首页";
+                    active: true;
+                    clicked => { root.switch_space("personal"); }
+                }
+                NavItem {
+                    icon: "\u{e7ef}";
+                    label: "家庭云";
+                    enabled: logged_in;
+                    clicked => { root.switch_space("family"); }
+                }
+                NavItem {
+                    icon: "\u{e2c4}";
+                    label: "传输任务";
+                    enabled: logged_in;
+                    clicked => { root.refresh_files(); }
+                }
+                NavItem {
+                    icon: "\u{e157}";
+                    label: "分享链接";
+                    enabled: logged_in;
+                    clicked => { root.refresh_files(); }
+                }
+
+                Rectangle {
+                    height: 20px;
+                }
+
+                Rectangle {
+                    height: 90px;
+                    border-radius: 10px;
+                    background: #2563eb;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        Icon {
+                            glyph: "\u{e2be}";
+                            icon-color: #ffffff;
+                            font-size: 22px;
+                        }
+                        VerticalLayout {
+                            spacing: 4px;
+                            Text {
+                                text: "云存储容量";
+                                color: #bfdbfe;
+                                font-size: 11px;
+                            }
+                            Text {
+                                text: root.used_space + " / " + root.total_space;
+                                color: #ffffff;
+                                font-size: 12px;
+                                font-weight: 600;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                NavItem {
+                    icon: "\u{e9ba}";
+                    label: "退出登录";
+                    enabled: logged_in;
+                    clicked => { root.logout(); }
                 }
             }
         }
 
-        Rectangle {
+        // ===== 右侧主区域 =====
+        VerticalLayout {
             horizontal-stretch: 1;
+            vertical-stretch: 1;
+            spacing: 10px;
+            padding: 12px;
 
-            VerticalLayout {
-                spacing: 10px;
-                padding: 10px;
-
-                VerticalLayout {
-                    visible: !logged_in;
-                    alignment: center;
-                    LoginPanel {
-                        width: 460px;
-                        height: 480px;
-                        error_text: root.login_error;
+            // 登录界面
+            if (!logged_in): HorizontalLayout {
+                horizontal-stretch: 1;
+                vertical-stretch: 1;
+                alignment: center;
+                LoginPanel {
+                    width: 420px;
+                    height: 520px;
+                    error_text: root.login_error;
                         show_captcha: root.show_captcha;
                         captcha_image: root.captcha_image;
                         qr_image: root.qr_image;
@@ -620,27 +940,31 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    visible: logged_in;
+                // 已登录主界面
+                if (logged_in): VerticalLayout {
                     horizontal-stretch: 1;
                     vertical-stretch: 1;
 
                     // 搜索结果显示
-                    Rectangle {
-                        visible: searching;
+                    if (searching): Rectangle {
                         background: #ffffff;
                         border-radius: 10px;
                         border-width: 1px;
                         border-color: #e5e7eb;
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
 
                         VerticalLayout {
+                            horizontal-stretch: 1;
+                            vertical-stretch: 1;
                             padding: 12px;
                             spacing: 8px;
 
                             HorizontalLayout {
                                 spacing: 8px;
-                                Button {
+                                TextIconButton {
                                     text: "返回";
+                                    icon: "\u{e5c4}";
                                     clicked => { root.clear_search(); }
                                 }
                                 Text {
@@ -657,14 +981,20 @@ export component MainWindow inherits Window {
                                 horizontal-stretch: 1;
                                 vertical-stretch: 1;
 
-                                ScrollView {
-                                    VerticalLayout {
-                                        spacing: 2px;
-                                        padding: 6px;
-                                        for r in root.search_results : FileItem {
-                                            entry: r;
-                                            item_clicked() => {
-                                                root.open_item(r.id, r.name, r.is_dir);
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    vertical-stretch: 1;
+                                    ScrollView {
+                                        horizontal-stretch: 1;
+                                        vertical-stretch: 1;
+                                        VerticalLayout {
+                                            spacing: 2px;
+                                            padding: 6px;
+                                            for r in root.search_results : FileItem {
+                                                entry: r;
+                                                item_clicked() => {
+                                                    root.open_item(r.id, r.name, r.is_dir);
+                                                }
                                             }
                                         }
                                     }
@@ -674,54 +1004,54 @@ export component MainWindow inherits Window {
                     }
 
                     // 正常文件列表
-                    Rectangle {
-                        visible: !searching;
-                        FileListPanel {
-                            files: root.file_list;
-                            current_path: root.current_path;
-                            status_text: root.status_text;
-                            account_name: root.account_name;
-                            total-space: root.total_space;
-                            used-space: root.used_space;
-                            selected_id: root.selected_id;
+                    if (!searching): FileListPanel {
+                        horizontal-stretch: 1;
+                        vertical-stretch: 1;
+                        files: root.file_list;
+                        current_path: root.current_path;
+                        status_text: root.status_text;
+                        account_name: root.account_name;
+                        total-space: root.total_space;
+                        used-space: root.used_space;
+                        selected_id: root.selected_id;
 
-                            item_open(id, name, is_dir) => {
-                                root.open_item(id, name, is_dir);
-                            }
-                            item_select(id) => {
-                                root.select_item(id);
-                            }
-                            do_refresh() => { root.refresh_files(); }
-                            do_navigate_up() => { root.navigate_up(); }
-                            do_upload() => { root.upload_files(); }
-                            do_create_folder() => { root.create_folder(); }
-                            do_download(id, name) => { root.download_file(id); }
-                            do_delete(id, name) => { root.delete_file(id); }
-                            do_rename(id, name) => { root.rename_file(id); }
-                            do_copy(id, name) => { root.copy_file(id); }
-                            do_get_link(id, name) => { root.get_link(id); }
-                            do_search(keyword) => { root.search_files(keyword); }
-                            do_logout() => { root.logout(); }
-                            do_switch_space(space) => { root.switch_space(space); }
+                        item_open(id, name, is_dir) => {
+                            root.open_item(id, name, is_dir);
                         }
+                        item_select(id) => {
+                            root.select_item(id);
+                        }
+                        do_refresh() => { root.refresh_files(); }
+                        do_navigate_up() => { root.navigate_up(); }
+                        do_upload() => { root.upload_files(); }
+                        do_create_folder() => { root.create_folder(); }
+                        do_download(id, name) => { root.download_file(id); }
+                        do_delete(id, name) => { root.delete_file(id); }
+                        do_rename(id, name) => { root.rename_file(id); }
+                        do_copy(id, name) => { root.copy_file(id); }
+                        do_get_link(id, name) => { root.get_link(id); }
+                        do_search(keyword) => { root.search_files(keyword); }
+                        do_logout() => { root.logout(); }
+                        do_switch_space(space) => { root.switch_space(space); }
                     }
-                }
 
-                Rectangle {
-                    visible: logged_in;
-                    height: 180px;
-                    background: #ffffff;
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #e5e7eb;
+                    // 传输面板
+                    Rectangle {
+                        height: 200px;
+                        background: #ffffff;
+                        border-radius: 10px;
+                        border-width: 1px;
+                        border-color: #e5e7eb;
 
-                    TransferPanel {
-                        transfers: transfer_list;
-                        cancel_task(id) => { root.cancel_task(id); }
-                        pause_task(id) => { root.cancel_task(id); }
+                        TransferPanel {
+                            horizontal-stretch: 1;
+                            vertical-stretch: 1;
+                            transfers: transfer_list;
+                            cancel_task(id) => { root.cancel_task(id); }
+                            pause_task(id) => { root.cancel_task(id); }
+                        }
                     }
                 }
             }
         }
     }
-}
