@@ -187,9 +187,13 @@ impl Controller {
 
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
-            ui.on_rename_file(move |id| {
+            ui.on_rename_file(move |id, name| {
                 let c = c.clone();
-                c.rename_selected(id.as_str());
+                if name.is_empty() {
+                    c.begin_rename(id.as_str());
+                } else {
+                    c.rename_selected(id.as_str(), name.as_str());
+                }
             });
         });
 
@@ -726,12 +730,35 @@ impl Controller {
         });
     }
 
-    fn rename_selected(self: &Arc<Self>, id: &str) {
+    fn begin_rename(&self, id: &str) {
+        if self.find_in_list(id).is_none() {
+            return;
+        }
+        let id = id.to_string();
+        self.set_ui_state(move |win| {
+            win.set_renaming_id(SharedString::from(id));
+            win.set_status_text(SharedString::from("请输入新文件名，按回车保存"));
+        });
+    }
+
+    fn rename_selected(self: &Arc<Self>, id: &str, new_name: &str) {
         let Some(file) = self.find_in_list(id) else {
             return;
         };
-        // 简化：使用固定后缀重命名（后续可弹窗）
-        let new_name = format!("{}_renamed", file.name);
+        let new_name = new_name.trim().to_string();
+        if new_name.is_empty() {
+            self.set_ui_state(|win| {
+                win.set_status_text(SharedString::from("文件名不能为空"));
+            });
+            return;
+        }
+        if new_name == file.name {
+            self.set_ui_state(|win| {
+                win.set_renaming_id(SharedString::default());
+                win.set_status_text(SharedString::from("文件名未改变"));
+            });
+            return;
+        }
         let this = Arc::clone(&self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
@@ -740,6 +767,7 @@ impl Controller {
                 match client.rename(&file, &new_name).await {
                     Ok(_) => {
                         invoke_ui(&ui, |win| {
+                            win.set_renaming_id(SharedString::default());
                             win.set_status_text(SharedString::from("已重命名"));
                         });
                         this.refresh_files();

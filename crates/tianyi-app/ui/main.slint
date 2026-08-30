@@ -120,8 +120,10 @@ component NavItem inherits Rectangle {
 component FileItem inherits Rectangle {
     in property <FileEntry> entry;
     in property <bool> selected: false;
+    in property <bool> renaming: false;
     callback item_clicked();
     callback item_double_clicked();
+    callback rename_submitted(string);
 
     height: 52px;
     border-radius: 8px;
@@ -145,12 +147,22 @@ component FileItem inherits Rectangle {
             }
         }
 
-        Text {
+        if !root.renaming: Text {
             text: entry.name;
             color: #111827;
             font-size: 14px;
             overflow: elide;
             horizontal-stretch: 1;
+        }
+
+        rename-input := LineEdit {
+            visible: root.renaming;
+            text: entry.name;
+            font-size: 14px;
+            horizontal-stretch: 1;
+            accepted => {
+                root.rename_submitted(rename-input.text);
+            }
         }
 
         Text {
@@ -169,11 +181,20 @@ component FileItem inherits Rectangle {
     }
 
     TouchArea {
+        enabled: !root.renaming;
         clicked => {
             root.item_clicked();
         }
         double-clicked => {
             root.item_double_clicked();
+        }
+    }
+
+    changed renaming => {
+        if (renaming) {
+            rename-input.text = entry.name;
+            rename-input.focus();
+            rename-input.select-all();
         }
     }
 }
@@ -569,6 +590,7 @@ component FileListPanel inherits VerticalLayout {
     in property <string> total-space: "0 B";
     in property <string> used-space: "0 B";
     in property <string> selected_id: "";
+    in property <string> renaming_id: "";
 
     callback item_open(string, string, bool);
     callback item_select(string);
@@ -744,11 +766,15 @@ component FileListPanel inherits VerticalLayout {
                         for entry in files : FileItem {
                             entry: entry;
                             selected: entry.id == root.selected_id;
+                            renaming: entry.id == root.renaming_id;
                             item_clicked() => {
                                 root.item_select(entry.id);
                             }
                             item_double_clicked() => {
                                 root.item_open(entry.id, entry.name, entry.is_dir);
+                            }
+                            rename_submitted(name) => {
+                                root.do_rename(entry.id, name);
                             }
                         }
                     }
@@ -960,6 +986,7 @@ component CloudPage inherits Rectangle {
     in property <string> used_space: "0 B";
     in property <float> capacity_ratio: 0.0;
     in property <string> selected_id: "";
+    in property <string> renaming_id: "";
     in property <[TransferEntry]> transfers: [];
     in property <bool> searching: false;
     in property <string> search_keyword: "";
@@ -977,7 +1004,7 @@ component CloudPage inherits Rectangle {
     callback switch_space(string);
     callback download_file(string);
     callback delete_file(string);
-    callback rename_file(string);
+    callback rename_file(string, string);
     callback copy_file(string);
     callback get_link(string);
     callback cancel_task(int);
@@ -1061,6 +1088,7 @@ component CloudPage inherits Rectangle {
             total-space: root.total_space;
             used-space: root.used_space;
             selected_id: root.selected_id;
+            renaming_id: root.renaming_id;
 
             item_open(id, name, is_dir) => {
                 root.open_item(id, name, is_dir);
@@ -1074,7 +1102,7 @@ component CloudPage inherits Rectangle {
             do_create_folder() => { root.create_folder(); }
             do_download(id, name) => { root.download_file(id); }
             do_delete(id, name) => { root.delete_file(id); }
-            do_rename(id, name) => { root.rename_file(id); }
+            do_rename(id, name) => { root.rename_file(id, name); }
             do_copy(id, name) => { root.copy_file(id); }
             do_get_link(id, name) => { root.get_link(id); }
             do_search(keyword) => { root.search_files(keyword); }
@@ -1229,6 +1257,7 @@ export component MainWindow inherits Window {
     in property <string> search_keyword: "";
     in property <[FileEntry]> search_results: [];
     in property <string> selected_id: "";
+    in property <string> renaming_id: "";
     in property <bool> qr_mode: false;
 
     in property <string> login_error: "";
@@ -1256,7 +1285,7 @@ export component MainWindow inherits Window {
     callback create_folder();
     callback download_file(string);
     callback delete_file(string);
-    callback rename_file(string);
+    callback rename_file(string, string);
     callback copy_file(string);
     callback get_link(string);
     callback search_files(string);
@@ -1419,6 +1448,7 @@ export component MainWindow inherits Window {
                     CloudPage {
                         width: parent.width;
                         height: parent.height;
+                        visible: root.current_page == 0;
                         page_title: "个人云";
                         page_subtitle: "管理和同步您的个人文件";
                         files: root.file_list;
@@ -1429,6 +1459,7 @@ export component MainWindow inherits Window {
                         used_space: root.used_space;
                         capacity_ratio: root.capacity_ratio;
                         selected_id: root.selected_id;
+                        renaming_id: root.renaming_id;
                         transfers: root.transfer_list;
                         searching: root.searching;
                         search_keyword: root.search_keyword;
@@ -1449,7 +1480,7 @@ export component MainWindow inherits Window {
                         }
                         download_file(id) => { root.download_file(id); }
                         delete_file(id) => { root.delete_file(id); }
-                        rename_file(id) => { root.rename_file(id); }
+                        rename_file(id, name) => { root.rename_file(id, name); }
                         copy_file(id) => { root.copy_file(id); }
                         get_link(id) => { root.get_link(id); }
                         cancel_task(id) => { root.cancel_task(id); }
@@ -1467,6 +1498,7 @@ export component MainWindow inherits Window {
                     CloudPage {
                         width: parent.width;
                         height: parent.height;
+                        visible: root.current_page == 1;
                         page_title: "家庭云";
                         page_subtitle: "与家人共享和管理文件";
                         files: root.file_list;
@@ -1477,6 +1509,7 @@ export component MainWindow inherits Window {
                         used_space: root.used_space;
                         capacity_ratio: root.capacity_ratio;
                         selected_id: root.selected_id;
+                        renaming_id: root.renaming_id;
                         transfers: root.transfer_list;
                         searching: root.searching;
                         search_keyword: root.search_keyword;
@@ -1497,7 +1530,7 @@ export component MainWindow inherits Window {
                         }
                         download_file(id) => { root.download_file(id); }
                         delete_file(id) => { root.delete_file(id); }
-                        rename_file(id) => { root.rename_file(id); }
+                        rename_file(id, name) => { root.rename_file(id, name); }
                         copy_file(id) => { root.copy_file(id); }
                         get_link(id) => { root.get_link(id); }
                         cancel_task(id) => { root.cancel_task(id); }
@@ -1515,6 +1548,7 @@ export component MainWindow inherits Window {
                     TransferPage {
                         width: parent.width;
                         height: parent.height;
+                        visible: root.current_page == 2;
                         used_space: root.used_space;
                         total_space: root.total_space;
                         capacity_ratio: root.capacity_ratio;
@@ -1534,6 +1568,7 @@ export component MainWindow inherits Window {
                     SharePage {
                         width: parent.width;
                         height: parent.height;
+                        visible: root.current_page == 3;
                         used_space: root.used_space;
                         total_space: root.total_space;
                         capacity_ratio: root.capacity_ratio;
