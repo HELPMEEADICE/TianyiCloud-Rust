@@ -36,6 +36,14 @@ pub struct Task {
     pub status: TaskStatus,
     pub progress: f32,
     pub bytes_done: u64,
+    /// 上传/下载速度（bytes/s，自适应显示）
+    #[serde(default)]
+    pub speed: u64,
+    /// 上次进度上报的字节数与时间戳（用于计算瞬时速度）
+    #[serde(default)]
+    pub last_done: u64,
+    #[serde(default)]
+    pub last_speed_time: u64,
     pub error: Option<String>,
     pub created_at: i64,
 }

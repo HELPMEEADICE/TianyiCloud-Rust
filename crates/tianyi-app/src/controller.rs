@@ -92,6 +92,8 @@ pub struct Controller {
     current_folder: Mutex<String>,
     last_list: Mutex<Vec<FileObject>>,
     tasks: Arc<TaskManager>,
+    /// 本会话启动时间戳（秒），传输列表只显示本会话创建的任务
+    session_start: i64,
 }
 
 impl Controller {
@@ -108,6 +110,7 @@ impl Controller {
             current_folder: Mutex::new("-11".to_string()),
             last_list: Mutex::new(Vec::new()),
             tasks: Arc::new(tasks),
+            session_start: chrono_used_now(),
         });
         Self::bind_ui(Arc::clone(&c));
         c.refresh_saved_accounts();
@@ -637,6 +640,9 @@ impl Controller {
             status: tianyi_core::task::TaskStatus::Running,
             progress: 0.0,
             bytes_done: 0,
+            speed: 0,
+            last_done: 0,
+            last_speed_time: 0,
             error: None,
             created_at: chrono_used_now(),
         };
@@ -654,16 +660,21 @@ impl Controller {
             if let Some(client) = client {
                 let opts = tianyi_core::transfer::DownloadOptions::default();
                 let this_cb = this.clone();
+                let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let cb: tianyi_core::transfer::ProgressCallback =
                     Arc::new(move |done| {
-                        this_cb.tasks.update(task_id, |t| {
-                            t.bytes_done = done;
-                            t.progress = if size > 0 {
-                                (done as f32) / (size as f32) * 100.0
-                            } else {
-                                100.0
-                            };
-                        });
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
+                        this_cb.update_progress(task_id, size.max(0) as u64, done);
+                        // 节流：最多每 200ms 刷新一次 UI
+                        if now - prev >= 200 {
+                            last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
+                            this_cb.refresh_transfers();
+                        }
+                        log::debug!("download progress: {done}/{size}");
                     });
                 match tianyi_core::transfer::download(&client, &file, &dest, &opts, cb).await {
                     Ok(_) => {
@@ -920,6 +931,9 @@ impl Controller {
             status: tianyi_core::task::TaskStatus::Running,
             progress: 0.0,
             bytes_done: 0,
+            speed: 0,
+            last_done: 0,
+            last_speed_time: 0,
             error: None,
             created_at: chrono_used_now(),
         };
@@ -936,16 +950,21 @@ impl Controller {
                     ..Default::default()
                 };
                 let this_cb = this.clone();
+                let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let cb: tianyi_core::transfer::ProgressCallback =
                     Arc::new(move |done| {
-                        this_cb.tasks.update(task_id, |t| {
-                            t.bytes_done = done;
-                            t.progress = if file_size > 0 {
-                                (done as f32) / (file_size as f32) * 100.0
-                            } else {
-                                100.0
-                            };
-                        });
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
+                        this_cb.update_progress(task_id, file_size, done);
+                        // 节流：最多每 200ms 刷新一次 UI
+                        if now - prev >= 200 {
+                            last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
+                            this_cb.refresh_transfers();
+                        }
+                        log::debug!("upload progress: {done}/{file_size}");
                     });
                 match tianyi_core::transfer::upload(
                     &client,
@@ -1096,9 +1115,11 @@ impl Controller {
     }
 
     fn refresh_transfers(&self) {
+        let session_start = self.session_start;
         let tasks = self.tasks.list();
         let entries = tasks
             .iter()
+            .filter(|t| t.created_at >= session_start)
             .map(|t| crate::app::TransferEntry {
                 id: t.id as i32,
                 name: t.file_name.clone().into(),
@@ -1110,11 +1131,38 @@ impl Controller {
                 size_text: file::format_size(t.file_size).into(),
                 progress: t.progress as f32,
                 status: format!("{:?}", t.status).into(),
-                speed: String::new().into(),
+                speed: file::format_speed(t.speed).into(),
             })
             .collect::<Vec<_>>();
         self.set_ui_state(move |ui| {
             ui.set_transfer_list(transfers_model(entries));
+        });
+    }
+
+    /// 更新任务进度并自适应计算瞬时速度（bytes/s）
+    fn update_progress(&self, task_id: u64, total_size: u64, done: u64) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        self.tasks.update(task_id, |t| {
+            let delta_ms = now_ms.saturating_sub(t.last_speed_time);
+            let delta_bytes = done.saturating_sub(t.last_done);
+            // 至少 200ms 采样窗口才计算速度，避免抖动
+            if delta_ms >= 200 && delta_bytes > 0 {
+                t.speed = delta_bytes as u64 * 1000 / delta_ms;
+                t.last_speed_time = now_ms;
+                t.last_done = done;
+            } else if t.last_speed_time == 0 {
+                t.last_speed_time = now_ms;
+                t.last_done = done;
+            }
+            t.bytes_done = done;
+            t.progress = if total_size > 0 {
+                (done as f32) / (total_size as f32) * 100.0
+            } else {
+                100.0
+            };
         });
     }
 

@@ -3,7 +3,6 @@
 //! 上传：initMultiUpload → getMultiUploadUrls → 分片 PUT → commitMultiUploadFile
 //! 下载：getDownloadUrl → 并发 Range 分片下载 → 断点续传
 
-use crate::client::consts;
 use crate::client::TianyiClient;
 use crate::crypto;
 use crate::error::{Error, Result};
@@ -84,6 +83,13 @@ pub async fn upload(
 
     // 计算整文件 MD5 + 分片 MD5 + SHA-1 piece hashes（一次性读取计算）
     let (file_md5, slice_md5s, piece_sha1s) = compute_md5s(&local_path, part_size).await?;
+    info!(
+        "upload start: name={} size={} parts={} part_size={}",
+        file_name,
+        file_size,
+        slice_md5s.len(),
+        part_size
+    );
 
     // 秒传尝试
     if opts.rapid_upload {
@@ -100,6 +106,7 @@ pub async fn upload(
         .await
         {
             Ok(Some(f)) => {
+                info!("rapid upload success: {}", f.file_name);
                 progress(file_size);
                 return Ok(f);
             }
@@ -121,6 +128,10 @@ pub async fn upload(
         part_size,
     )
     .await?;
+    info!(
+        "initMultiUpload ok: upload_file_id={} file_data_exists={}",
+        init.upload_file_id, init.file_data_exists
+    );
 
     if init.file_data_exists == 1 {
         // 服务端已有，直接提交
@@ -178,6 +189,7 @@ pub async fn upload(
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.map_err(|_| Error::Transfer("sem".into()))?;
             // 获取分片上传 URL
+            let part_no = part_info.split('-').next().unwrap_or("?").to_string();
             let urls = get_multi_upload_urls(&client, &upload_file_id, &[part_info]).await?;
             let url_info = &urls[0];
             let part_number = url_info.0;
@@ -198,7 +210,11 @@ pub async fn upload(
             f.read_exact(&mut buf).await?;
 
             // PUT 上传
-            put_part(&client, &req_url, &headers, &buf).await?;
+            if let Err(e) = put_part(&client, &req_url, &headers, &buf).await {
+                warn!("part {part_no} put failed: {e} (url={req_url})");
+                return Err(e);
+            }
+            info!("part {part_no} uploaded, {} bytes", len);
             uploaded.fetch_add(len, Ordering::SeqCst);
             progress(uploaded.load(Ordering::SeqCst));
             let _ = file_size_u;
@@ -215,7 +231,9 @@ pub async fn upload(
     }
 
     // 提交
+    info!("all {} parts uploaded, committing", count);
     let commit = commit_multipart_upload(client, &init.upload_file_id, opts.overwrite).await?;
+    info!("commit ok: file_id={} name={}", commit.user_file_id, commit.file_name);
 
     // 生成 CAS torrent（可选，异步不影响结果）
     if opts.generate_torrent && !piece_sha1s.is_empty() && file_size > 0 {
@@ -264,9 +282,12 @@ async fn compute_md5s(
     let mut buf = vec![0u8; 1024 * 1024];
     let part_size = part_size as u64;
 
+    // 与 OpenList 189pc FastUpload 保持一致：分片 MD5 是分片内容哈希的 hex，
+    // 而非分片原始字节的 hex
     let flush_part = |part_buf: &[u8], whole: &mut Md5, parts: &mut Vec<String>, part_sha1s: &mut Vec<u8>| {
         whole.update(part_buf);
-        parts.push(hex::encode_upper(part_buf));
+        let h = Md5::digest(part_buf);
+        parts.push(hex::encode_upper(h.as_slice()));
         let h = Sha1::digest(part_buf);
         part_sha1s.extend_from_slice(&h);
     };
@@ -286,7 +307,8 @@ async fn compute_md5s(
         flush_part(&part_buf, &mut whole, &mut parts, &mut part_sha1s);
     }
     if parts.is_empty() {
-        parts.push(hex::encode_upper(&[]));
+        let h = Md5::digest(&[]);
+        parts.push(hex::encode_upper(h.as_slice()));
         let h = Sha1::digest(&[]);
         part_sha1s.extend_from_slice(&h);
     }
@@ -340,7 +362,6 @@ pub async fn init_multipart_upload(
     params.insert("fileName".to_string(), urlencoding(file_name));
     params.insert("fileSize".to_string(), file_size.to_string());
     params.insert("sliceSize".to_string(), slice_size.to_string());
-    params.insert("lazyCheck".to_string(), "1".to_string());
     let slice_md5 = if slice_md5s.len() > 1 {
         crypto::md5_of_joined(&slice_md5s.iter().map(|s| s.as_str()).collect::<Vec<_>>())
     } else {
@@ -353,19 +374,26 @@ pub async fn init_multipart_upload(
     }
 
     let url = if is_family {
-        format!("{}/family/initMultiUpload", consts::UPLOAD_URL)
+        format!("{}/family/initMultiUpload", client.upload_base_url())
     } else {
-        format!("{}/person/initMultiUpload", consts::UPLOAD_URL)
+        format!("{}/person/initMultiUpload", client.upload_base_url())
     };
 
     let text = client.get_json_encrypted(&url, params, is_family).await?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| Error::Api(format!("parse init: {e}")))?;
     let data = &v["data"];
+    let upload_file_id = data["uploadFileId"].as_str().unwrap_or("").to_string();
+    if upload_file_id.is_empty() {
+        return Err(Error::Api(format!(
+            "initMultiUpload: no uploadFileId in resp: {}",
+            text.chars().take(300).collect::<String>()
+        )));
+    }
     Ok(InitMultiUploadResp {
         upload_type: data["uploadType"].as_i64().unwrap_or(0) as i32,
         upload_host: data["uploadHost"].as_str().unwrap_or("").to_string(),
-        upload_file_id: data["uploadFileId"].as_str().unwrap_or("").to_string(),
+        upload_file_id,
         file_data_exists: data["fileDataExists"].as_i64().unwrap_or(0) as i32,
     })
 }
@@ -385,9 +413,9 @@ pub async fn get_multi_upload_urls(
     );
 
     let url = if is_family {
-        format!("{}/family/getMultiUploadUrls", consts::UPLOAD_URL)
+        format!("{}/family/getMultiUploadUrls", client.upload_base_url())
     } else {
-        format!("{}/person/getMultiUploadUrls", consts::UPLOAD_URL)
+        format!("{}/person/getMultiUploadUrls", client.upload_base_url())
     };
 
     let text = client.get_json_encrypted(&url, params, is_family).await?;
@@ -416,6 +444,12 @@ pub async fn get_multi_upload_urls(
         }
     }
     list.sort_by_key(|(n, _)| *n);
+    if list.is_empty() {
+        return Err(Error::Api(format!(
+            "getMultiUploadUrls: no usable partNumber entries, resp: {}",
+            text.chars().take(300).collect::<String>()
+        )));
+    }
     Ok(list)
 }
 
@@ -444,10 +478,12 @@ pub async fn put_part(
     data: &[u8],
 ) -> Result<()> {
     let mut req = client
-        .http_client()
+        .upload_client()
         .put(url)
         .body(data.to_vec())
-        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream");
+        .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+        // 与 OpenList 189pc put 一致：追加 clientSuffix 查询参数
+        .query(&crate::crypto::client_suffix());
     for (k, v) in headers {
         req = req.header(k.as_str(), v.as_str());
     }
@@ -472,7 +508,6 @@ pub async fn commit_multipart_upload(
     let is_family = client.is_family();
     let mut params = std::collections::HashMap::new();
     params.insert("uploadFileId".to_string(), upload_file_id.to_string());
-    params.insert("lazyCheck".to_string(), "1".to_string());
     params.insert("isLog".to_string(), "0".to_string());
     params.insert(
         "opertype".to_string(),
@@ -480,15 +515,21 @@ pub async fn commit_multipart_upload(
     );
 
     let url = if is_family {
-        format!("{}/family/commitMultiUploadFile", consts::UPLOAD_URL)
+        format!("{}/family/commitMultiUploadFile", client.upload_base_url())
     } else {
-        format!("{}/person/commitMultiUploadFile", consts::UPLOAD_URL)
+        format!("{}/person/commitMultiUploadFile", client.upload_base_url())
     };
 
     let text = client.get_json_encrypted(&url, params, is_family).await?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| Error::Api(format!("parse commit: {e}")))?;
     let f = &v["file"];
+    if f["userFileId"].as_str().unwrap_or("").is_empty() {
+        return Err(Error::Api(format!(
+            "commitMultiUploadFile: no file in resp: {}",
+            text.chars().take(300).collect::<String>()
+        )));
+    }
     Ok(CommitFile {
         user_file_id: f["userFileId"].as_str().unwrap_or("").to_string(),
         file_name: f["fileName"].as_str().unwrap_or("").to_string(),
@@ -651,4 +692,210 @@ async fn download_chunk(
     }
     file.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use md5::Md5;
+    use std::io::Write;
+
+    /// 验证分片 MD5 计算与 Go 端 FastUpload 一致：
+    /// 分片 MD5 = MD5(分片内容) 的大写 hex，而非分片原始字节 hex
+    #[tokio::test]
+    async fn test_compute_md5s_slice_md5() {
+        let dir = std::env::temp_dir();
+        let path = dir.join("tianyi_md5_test.bin");
+        let mut f = std::fs::File::create(&path).unwrap();
+        let data: Vec<u8> = (0..10 * 1024 * 1024 + 123).map(|i| (i % 251) as u8).collect();
+        f.write_all(&data).unwrap();
+        drop(f);
+
+        let (whole_hex, parts, _) = compute_md5s(&path, 10 * 1024 * 1024).await.unwrap();
+
+        // 两个分片：满 10MiB + 123 字节
+        assert_eq!(parts.len(), 2);
+
+        // 与 Go 端 md5.Sum 一致
+        let expected1 = {
+            use md5::Digest;
+            let mut h = Md5::new();
+            Digest::update(&mut h, &data[..10 * 1024 * 1024]);
+            hex::encode_upper(h.finalize())
+        };
+        let expected2 = {
+            use md5::Digest;
+            let mut h = Md5::new();
+            Digest::update(&mut h, &data[10 * 1024 * 1024..]);
+            hex::encode_upper(h.finalize())
+        };
+        assert_eq!(parts[0], expected1);
+        assert_eq!(parts[1], expected2);
+
+        // 分片 MD5 是 32 位 hex（16 字节），而非原始字节 hex
+        assert_eq!(parts[0].len(), 32);
+
+        // 整文件 MD5 正确
+        use md5::Digest;
+        let mut whole = Md5::new();
+        Digest::update(&mut whole, &data);
+        assert_eq!(whole_hex, hex::encode_upper(whole.finalize()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_parse_http_headers() {
+        let h = parse_http_headers("a=1&b=hello%20world&c=");
+        assert_eq!(
+            h,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "hello%20world".to_string()),
+                ("c".to_string(), String::new()),
+            ]
+        );
+    }
+
+    /// 用本地 mock 服务跑通完整 upload() 流程，验证不会挂起/恐慌
+    #[tokio::test]
+    async fn test_upload_end_to_end_mock() {
+        use crate::config::AppConfig;
+        use crate::models::{AccountConfig, TokenInfo};
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let put_count = Arc::new(AtomicU32::new(0));
+        let put_count_clone = put_count.clone();
+        let commit_lazy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let commit_lazy_clone = commit_lazy.clone();
+
+        // 简单 HTTP 服务：根据路径返回对应 JSON，PUT 上传分片返回 200
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{}", addr);
+        let server_base = base.clone();
+        let server = tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                let put_count = put_count_clone.clone();
+                let server_base = server_base.clone();
+                let commit_lazy = commit_lazy_clone.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    // 只读请求头（到 \r\n\r\n），避免等待 keep-alive 关闭连接
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    for _ in 0..65536 {
+                        match sock.read(&mut byte).await {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                head.extend_from_slice(&byte);
+                                if head.ends_with(b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&head);
+                    let req_line = req.lines().next().unwrap_or("").to_string();
+                    let path = req_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    // 读取请求体（PUT 上传分片带有 Content-Length body），避免连接被中止
+                    if path.starts_with("/part") {
+                        let cl = req
+                            .lines()
+                            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                            .and_then(|l| l.split(':').nth(1))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        let mut remaining = cl;
+                        let mut buf = [0u8; 8192];
+                        while remaining > 0 {
+                            let n = sock.read(&mut buf).await.unwrap_or(0);
+                            if n == 0 {
+                                break;
+                            }
+                            remaining = remaining.saturating_sub(n);
+                        }
+                    }
+
+                    let mut headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".to_string();
+                    let body = if path.starts_with("/person/initMultiUpload") {
+                        r#"{"code":"SUCCESS","data":{"uploadFileId":"U1","fileDataExists":0,"uploadType":0,"uploadHost":""}}"#.to_string()
+                    } else if path.starts_with("/person/getMultiUploadUrls") {
+                        format!(
+                            r#"{{"code":"SUCCESS","uploadUrls":{{"partNumber_1":{{"requestURL":"{server_base}/part1","requestHeader":"a=b&c=d"}},"partNumber_2":{{"requestURL":"{server_base}/part2","requestHeader":"e=f"}}}}}}"#
+                        )
+                    } else if path.starts_with("/part") {
+                        put_count.fetch_add(1, Ordering::SeqCst);
+                        r#""#.to_string()
+                    } else if path.starts_with("/person/commitMultiUploadFile") {
+                        if req.contains("lazyCheck") {
+                            commit_lazy.store(true, Ordering::SeqCst);
+                        }
+                        r#"{"code":"SUCCESS","file":{"userFileId":"F1","fileName":"mock.bin","fileSize":0,"fileMd5":"","createDate":""}}"#.to_string()
+                    } else {
+                        r#"{"code":"FAIL","msg":"not found"}"#.to_string()
+                    };
+                    headers.push_str(&body.len().to_string());
+                    headers.push_str("\r\n\r\n");
+                    let _ = sock.write_all(headers.as_bytes()).await;
+                    let _ = sock.write_all(body.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+
+        // 构造带会话 token 的客户端
+        let config = AppConfig::default();
+        let account = AccountConfig {
+            token: TokenInfo {
+                session_key: "SK".to_string(),
+                session_secret: "0123456789abcdef".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let client = TianyiClient::new(config, account);
+        client.set_upload_base(&base);
+
+        // 构造一个 2 分片的小文件（>1 分片才走分片路径）
+        let dir = std::env::temp_dir();
+        let file_path = dir.join("tianyi_mock_upload.bin");
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        let data: Vec<u8> = (0..(10 * 1024 * 1024 + 7)).map(|i| (i % 253) as u8).collect();
+        f.write_all(&data).unwrap();
+        drop(f);
+
+        let opts = UploadOptions {
+            rapid_upload: false,
+            thread_count: 2,
+            part_size: 10 * 1024 * 1024,
+            ..Default::default()
+        };
+        let done = Arc::new(AtomicU64::new(0));
+        let done_cb = done.clone();
+        let progress: ProgressCallback = Arc::new(move |n| {
+            done_cb.store(n, Ordering::SeqCst);
+        });
+
+        let commit = upload(&client, "FOLDER", &file_path, &opts, progress)
+            .await
+            .expect("upload should complete without hang");
+
+        assert_eq!(commit.user_file_id, "F1");
+        assert_eq!(done.load(Ordering::SeqCst), data.len() as u64);
+        assert_eq!(put_count.load(Ordering::SeqCst), 2, "both parts should be PUT");
+        assert!(
+            !commit_lazy.load(Ordering::SeqCst),
+            "commit must NOT carry lazyCheck without fileMd5/sliceMd5"
+        );
+
+        let _ = std::fs::remove_file(&file_path);
+        server.abort();
+    }
 }

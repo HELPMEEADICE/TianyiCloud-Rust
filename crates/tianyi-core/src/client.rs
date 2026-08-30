@@ -10,6 +10,7 @@ use crate::models::*;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// 天翼云盘常量
@@ -40,6 +41,8 @@ pub struct TianyiClient {
     account: std::sync::Mutex<AccountConfig>,
     /// 会话缓存（刷新后更新），内部可变以便并发刷新
     session: std::sync::Mutex<SessionCache>,
+    /// 上传基地址覆盖（测试用；默认 None 使用 consts::UPLOAD_URL）
+    upload_base: std::sync::Mutex<Option<String>>,
 }
 
 /// 会话缓存（刷新后更新）
@@ -82,7 +85,23 @@ impl TianyiClient {
             config,
             account: std::sync::Mutex::new(account),
             session: std::sync::Mutex::new(session),
+            upload_base: std::sync::Mutex::new(None),
         }
+    }
+
+    /// 设置上传基地址覆盖（供测试注入本地 mock 服务）
+    #[cfg(test)]
+    pub fn set_upload_base(&self, url: &str) {
+        *self.upload_base.lock().unwrap() = Some(url.to_string());
+    }
+
+    /// 获取上传基地址（测试覆盖优先）
+    pub fn upload_base_url(&self) -> String {
+        self.upload_base
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| consts::UPLOAD_URL.to_string())
     }
 
     /// 获取账号配置
@@ -841,6 +860,20 @@ impl TianyiClient {
         &self.http
     }
 
+    /// 分片上传专用客户端：与 OpenList `base.HttpClient` 一致，
+    /// 不携带 API 默认头（Referer/Accept），避免上传 CDN 拒绝。
+    /// 上传 URL 由服务端签名，仅需 part headers + clientSuffix。
+    pub fn upload_client(&self) -> &Client {
+        static UPLOAD: OnceLock<Client> = OnceLock::new();
+        UPLOAD.get_or_init(|| {
+            Client::builder()
+                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+                .timeout(Duration::from_secs(48 * 60 * 60))
+                .build()
+                .expect("build upload client")
+        })
+    }
+
     /// 克隆一个独立客户端实例（供并发任务使用，共享 cookie store）
     pub fn clone_for_transfer(&self) -> Self {
         TianyiClient {
@@ -850,6 +883,7 @@ impl TianyiClient {
             session: std::sync::Mutex::new(SessionCache {
                 token: self.session_token(),
             }),
+            upload_base: std::sync::Mutex::new(self.upload_base.lock().unwrap().clone()),
         }
     }
 }
