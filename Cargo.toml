@@ -39,3 +39,4 @@ tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1"
 chrono = { version = "0.4", features = ["clock"] }
 rand = "0.8"
+arboard = "3"

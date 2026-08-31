@@ -21,6 +21,7 @@ base64.workspace = true
 dirs.workspace = true
 uuid.workspace = true
 rfd = "0.15"
+arboard.workspace = true
 
 [build-dependencies]
 slint-build = "1.17"

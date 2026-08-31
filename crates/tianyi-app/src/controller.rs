@@ -820,8 +820,12 @@ impl Controller {
             if let Some(client) = this.client() {
                 match client.get_download_url(&id).await {
                     Ok(url) => {
-                        // 复制到剪贴板（简化：显示在状态栏）
-                        let msg = format!("链接: {url}");
+                        let copied = copy_to_clipboard(&url).is_ok();
+                        let msg = if copied {
+                            format!("下载链接已复制到剪贴板")
+                        } else {
+                            format!("链接: {url}")
+                        };
                         invoke_ui(&ui, move |win| {
                             win.set_status_text(SharedString::from(msg));
                         });
@@ -1263,6 +1267,13 @@ fn load_image_file(path: &std::path::Path) -> slint::Image {
         Ok(img) => rgba_to_slint_image(img.to_rgba8()),
         Err(_) => slint::Image::default(),
     }
+}
+
+/// 将文本复制到系统剪贴板
+fn copy_to_clipboard(text: &str) -> anyhow::Result<()> {
+    let mut clip = arboard::Clipboard::new()?;
+    clip.set_text(text.to_string())?;
+    Ok(())
 }
 
 /// 当前 Unix 时间戳（秒）
