@@ -3,6 +3,7 @@
 use crate::app::MainWindow;
 use crate::backend::{invoke_ui, Backend};
 use slint::{SharedString, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
@@ -92,6 +93,12 @@ pub struct Controller {
     current_folder: Mutex<String>,
     last_list: Mutex<Vec<FileObject>>,
     tasks: Arc<TaskManager>,
+    /// 拖拽状态（与 winit 事件钩子共享）
+    drag_state: Mutex<Option<&'static crate::DragDropState>>,
+    /// 正在等待拖出下载的文件 id
+    drag_out_pending: Mutex<Option<String>>,
+    /// 拖出下载进行中标记（防止重复触发）
+    drag_out_busy: AtomicBool,
     /// 本会话启动时间戳（秒），传输列表只显示本会话创建的任务
     session_start: i64,
 }
@@ -110,6 +117,9 @@ impl Controller {
             current_folder: Mutex::new("-11".to_string()),
             last_list: Mutex::new(Vec::new()),
             tasks: Arc::new(tasks),
+            drag_state: Mutex::new(None),
+            drag_out_pending: Mutex::new(None),
+            drag_out_busy: AtomicBool::new(false),
             session_start: chrono_used_now(),
         });
         Self::bind_ui(Arc::clone(&c));
@@ -282,6 +292,33 @@ impl Controller {
             ui.on_switch_space(move |space| {
                 let c = c.clone();
                 c.switch_space(space.as_str());
+            });
+        });
+
+        // 拖拽上传（系统文件拖入窗口）
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_files_dropped(move |joined| {
+                let c = c.clone();
+                let joined = joined.to_string();
+                let paths: Vec<std::path::PathBuf> = joined
+                    .split('\n')
+                    .map(std::path::PathBuf::from)
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .collect();
+                if paths.is_empty() {
+                    return;
+                }
+                c.handle_files_dropped(paths);
+            });
+        });
+
+        // 拖出下载（拖拽云端文件到本地）
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_drag_out(move |id, name| {
+                let c = c.clone();
+                c.handle_drag_out(id.as_str(), name.as_str());
             });
         });
     }
@@ -952,22 +989,99 @@ impl Controller {
             return;
         };
         let folder_id = self.current_folder.lock().unwrap().clone();
-        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        self.upload_paths(vec![path], &folder_id);
+    }
+
+    /// 批量上传本地路径到指定云端目录（文件直接上传，文件夹递归）。
+    /// 每个文件注册为一个独立任务。
+    pub fn upload_paths(self: &Arc<Self>, paths: Vec<std::path::PathBuf>, folder_id: &str) {
+        // 展开文件夹为文件列表，收集 (本地路径, 最终云端父目录)
+        // 文件夹采用递归上传，顶层目录名由核心层自动创建
+        let mut tasks_to_spawn: Vec<(std::path::PathBuf, u64)> = Vec::new();
+        let mut spawned = 0usize;
+
+        for path in paths {
+            if path.is_dir() {
+                // 递归上传整个文件夹：注册一个任务，进度累计
+                let task_id = self.tasks.next_id();
+                let total_files = count_local_files(&path);
+                let file_size = total_files; // 用文件数作为进度分母的占位（进度由回调累计字节数）
+                let task = tianyi_core::task::Task {
+                    id: task_id,
+                    direction: TaskDirection::Upload,
+                    file_name: path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("folder")
+                        .to_string(),
+                    file_size,
+                    local_path: path.clone(),
+                    remote_folder_id: folder_id.to_string(),
+                    status: tianyi_core::task::TaskStatus::Running,
+                    progress: 0.0,
+                    bytes_done: 0,
+                    speed: 0,
+                    last_done: 0,
+                    last_speed_time: 0,
+                    error: None,
+                    created_at: chrono_used_now(),
+                };
+                self.tasks.add(task);
+                tasks_to_spawn.push((path.clone(), task_id));
+                spawned += 1;
+            } else if path.is_file() {
+                tasks_to_spawn.push((path.clone(), 0));
+                spawned += 1;
+            }
+        }
+        if spawned == 0 {
+            return;
+        }
+        self.refresh_transfers();
+
+        let this = Arc::clone(&self);
+        let backend = self.backend.clone();
+        let ui = self.ui.clone();
+        let folder_id = folder_id.to_string();
+        let count = spawned;
+
+        backend.spawn(move || async move {
+            for (path, folder_task_id) in tasks_to_spawn {
+                if path.is_dir() {
+                    this.spawn_folder_upload(&folder_id, &path, folder_task_id).await;
+                } else {
+                    this.spawn_file_upload(&folder_id, &path, None).await;
+                }
+            }
+            let msg = format!("拖入上传完成，共 {} 个文件/文件夹", count);
+            invoke_ui(&ui, move |win| {
+                win.set_status_text(SharedString::from(msg));
+            });
+            this.refresh_files();
+        });
+    }
+
+    /// 上传单个文件（注册任务并执行）
+    async fn spawn_file_upload(
+        self: &Arc<Self>,
+        folder_id: &str,
+        path: &std::path::Path,
+        _task_hint: Option<u64>,
+    ) {
+        let file_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let file_name = path
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("file")
             .to_string();
-
-        // 注册任务
         let task_id = self.tasks.next_id();
         let task = tianyi_core::task::Task {
             id: task_id,
             direction: TaskDirection::Upload,
             file_name: file_name.clone(),
             file_size,
-            local_path: path.clone(),
-            remote_folder_id: folder_id.clone(),
+            local_path: path.to_path_buf(),
+            remote_folder_id: folder_id.to_string(),
             status: tianyi_core::task::TaskStatus::Running,
             progress: 0.0,
             bytes_done: 0,
@@ -980,66 +1094,198 @@ impl Controller {
         self.tasks.add(task);
         self.refresh_transfers();
 
+        let Some(client) = self.client() else {
+            return;
+        };
+        let opts = tianyi_core::transfer::UploadOptions {
+            rapid_upload: true,
+            ..Default::default()
+        };
+        let this_cb = Arc::clone(self);
+        let ui = self.ui.clone();
+        let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let path = path.to_path_buf();
+        let folder_id = folder_id.to_string();
+        let cb: tianyi_core::transfer::ProgressCallback = Arc::new(move |done| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
+            this_cb.update_progress(task_id, file_size, done);
+            if now - prev >= 200 {
+                last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
+                this_cb.refresh_transfers();
+            }
+        });
+        match tianyi_core::transfer::upload(&client, &folder_id, &path, &opts, cb).await {
+            Ok(_) => {
+                self.tasks.update(task_id, |t| {
+                    t.status = tianyi_core::task::TaskStatus::Completed;
+                    t.progress = 100.0;
+                });
+            }
+            Err(e) => {
+                self.tasks.update(task_id, |t| {
+                    t.status = tianyi_core::task::TaskStatus::Failed;
+                    t.error = Some(e.to_string());
+                });
+                let msg = format!("上传失败 {}: {e}", file_name);
+                invoke_ui(&ui, move |win| {
+                    win.set_status_text(SharedString::from(msg));
+                });
+            }
+        }
+        self.refresh_transfers();
+    }
+
+    /// 递归上传文件夹（单个任务，进度累计）
+    async fn spawn_folder_upload(
+        self: &Arc<Self>,
+        folder_id: &str,
+        path: &std::path::Path,
+        task_id: u64,
+    ) {
+        let Some(client) = self.client() else {
+            return;
+        };
+        let opts = tianyi_core::transfer::UploadOptions {
+            rapid_upload: true,
+            ..Default::default()
+        };
+        let this_cb = Arc::clone(self);
+        let ui = self.ui.clone();
+        let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let path = path.to_path_buf();
+        let folder_id = folder_id.to_string();
+        let cb: tianyi_core::transfer::ProgressCallback = Arc::new(move |done| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
+            this_cb.update_progress(task_id, done, done);
+            if now - prev >= 200 {
+                last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
+                this_cb.refresh_transfers();
+            }
+        });
+        match tianyi_core::transfer::upload_folder_recursive(&client, &folder_id, &path, &opts, cb)
+            .await
+        {
+            Ok(_) => {
+                self.tasks.update(task_id, |t| {
+                    t.status = tianyi_core::task::TaskStatus::Completed;
+                    t.progress = 100.0;
+                });
+            }
+            Err(e) => {
+                self.tasks.update(task_id, |t| {
+                    t.status = tianyi_core::task::TaskStatus::Failed;
+                    t.error = Some(e.to_string());
+                });
+                let msg = format!("文件夹上传失败 {}: {e}", path.display());
+                invoke_ui(&ui, move |win| {
+                    win.set_status_text(SharedString::from(msg));
+                });
+            }
+        }
+        self.refresh_transfers();
+    }
+
+    /// 系统文件拖入窗口 → 上传到当前目录
+    fn handle_files_dropped(self: &Arc<Self>, paths: Vec<std::path::PathBuf>) {
+        if self.client().is_none() {
+            self.set_ui_state(|ui| {
+                ui.set_status_text(SharedString::from("请先登录"));
+            });
+            return;
+        }
+        let folder_id = self.current_folder.lock().unwrap().clone();
+        self.upload_paths(paths, &folder_id);
+    }
+
+    /// 设置拖拽状态引用（由 main.rs 传入）
+    pub fn set_drag_state(&self, state: &'static crate::DragDropState) {
+        *self.drag_state.lock().unwrap() = Some(state);
+    }
+
+    /// 拖出下载：拖拽云端文件到本地
+    fn handle_drag_out(self: &Arc<Self>, id: &str, name: &str) {
+        if self.client().is_none() {
+            return;
+        }
+        // 从最近列表查找文件信息
+        let Some(file) = self.find_in_list(id) else {
+            return;
+        };
+        let file = file.clone();
+        let id = id.to_string();
+        let name = name.to_string();
         let this = Arc::clone(&self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
+        let ui2 = self.ui.clone();
+
+        // 标记拖出进行中，防止重复触发
+        if self.drag_out_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        *self.drag_out_pending.lock().unwrap() = Some(id.clone());
+        let this2 = this.clone();
+        let name2 = name.clone();
+        let file2 = file.clone();
+
         backend.spawn(move || async move {
-            if let Some(client) = this.client() {
-                let opts = tianyi_core::transfer::UploadOptions {
-                    rapid_upload: true,
-                    ..Default::default()
-                };
-                let this_cb = this.clone();
-                let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
-                let cb: tianyi_core::transfer::ProgressCallback =
-                    Arc::new(move |done| {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
-                        this_cb.update_progress(task_id, file_size, done);
-                        // 节流：最多每 200ms 刷新一次 UI
-                        if now - prev >= 200 {
-                            last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
-                            this_cb.refresh_transfers();
-                        }
-                        log::debug!("upload progress: {done}/{file_size}");
-                    });
-                match tianyi_core::transfer::upload(
-                    &client,
-                    &folder_id,
-                    &path,
-                    &opts,
-                    cb,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        this.tasks.update(task_id, |t| {
-                            t.status = tianyi_core::task::TaskStatus::Completed;
-                            t.progress = 100.0;
-                        });
-                        invoke_ui(&ui, move |win| {
-                            win.set_status_text(SharedString::from("上传完成"));
-                        });
-                        this.refresh_files();
-                    }
-                    Err(e) => {
-                        this.tasks.update(task_id, |t| {
-                            t.status = tianyi_core::task::TaskStatus::Failed;
-                            t.error = Some(e.to_string());
-                        });
-                        let msg = format!("上传失败: {e}");
-                        invoke_ui(&ui, move |win| {
-                            win.set_status_text(SharedString::from(msg));
-                        });
-                    }
-                }
-                this.refresh_transfers();
+            // 先下载到临时目录
+            let temp_dir = std::env::temp_dir().join("tianyi-dragout");
+            let _ = std::fs::create_dir_all(&temp_dir);
+            let temp_path = temp_dir.join(&name2);
+            let dl_ok = if let Some(client) = this2.client() {
+                let opts = tianyi_core::transfer::DownloadOptions::default();
+                let prog: tianyi_core::transfer::ProgressCallback = Arc::new(|_| {});
+                tianyi_core::transfer::download(&client, &file2, &temp_path, &opts, prog)
+                    .await
+                    .is_ok()
+            } else {
+                false
+            };
+            if !dl_ok {
+                invoke_ui(&ui, move |win| {
+                    win.set_status_text(SharedString::from("拖出下载失败：无法获取文件"));
+                });
+                this2.drag_out_busy.store(false, Ordering::SeqCst);
+                *this2.drag_out_pending.lock().unwrap() = None;
+                invoke_ui(&ui, move |win| win.set_drag_out_active(false));
+                return;
             }
+            // 启动系统拖拽（阻塞直到松开/取消）
+            let dropped = crate::dragout::do_drag_drop(&[temp_path.clone()]).unwrap_or(false);
+            // 清理临时文件
+            crate::dragout::cleanup_temp_paths(&[temp_path]);
+
+            this2.drag_out_busy.store(false, Ordering::SeqCst);
+            *this2.drag_out_pending.lock().unwrap() = None;
+            invoke_ui(&ui, move |win| {
+                win.set_drag_out_active(false);
+                let msg = if dropped {
+                    format!("已拖出 {name2}")
+                } else {
+                    "已取消拖拽".to_string()
+                };
+                win.set_status_text(SharedString::from(msg));
+            });
+        });
+
+        // 记录拖出高亮
+        invoke_ui(&ui2, move |win| {
+            win.set_drag_out_item_id(SharedString::from(id));
+            win.set_drag_out_item_name(SharedString::from(name));
+            win.set_drag_out_active(true);
+            win.set_status_text(SharedString::from("拖拽到本地文件夹即可下载"));
         });
     }
+
 
     fn create_folder(self: &Arc<Self>) {
         let this = Arc::clone(&self);
@@ -1240,8 +1486,23 @@ impl Controller {
     }
 }
 
-fn files_to_entries(files: &[FileObject]) -> Vec<crate::app::FileEntry> {
-    files
+/// 统计本地文件夹（递归）下的文件数量
+fn count_local_files(root: &std::path::Path) -> u64 {
+    let mut n = 0u64;
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                n += count_local_files(&path);
+            } else if path.is_file() {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+fn files_to_entries(files: &[FileObject]) -> Vec<crate::app::FileEntry> {    files
         .iter()
         .map(|f| {
             let size_text = if f.is_dir {

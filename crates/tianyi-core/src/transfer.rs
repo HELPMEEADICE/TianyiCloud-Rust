@@ -570,6 +570,77 @@ fn urlencoding(s: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// 文件夹递归上传
+// ---------------------------------------------------------------------------
+
+/// 递归上传一个本地文件夹到云端目录。
+///
+/// 在 `parent_folder_id` 下创建与 `local_dir` 同名的子文件夹，然后递归上传其中的
+/// 所有文件（子目录逐层建文件夹）。进度回调累计整个文件夹的字节数。
+/// 返回上传的文件总数。
+pub async fn upload_folder_recursive(
+    client: &TianyiClient,
+    parent_folder_id: &str,
+    local_dir: &Path,
+    opts: &UploadOptions,
+    progress: ProgressCallback,
+) -> Result<usize> {
+    let dir_name = local_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("folder")
+        .to_string();
+    let folder = client.create_folder(parent_folder_id, &dir_name).await?;
+    upload_folder_contents_recursive(client, &folder.id, local_dir, opts, progress).await
+}
+
+/// 上传文件夹下的全部内容（不新建顶层文件夹），返回文件总数。
+pub async fn upload_folder_contents_recursive(
+    client: &TianyiClient,
+    folder_id: &str,
+    local_dir: &Path,
+    opts: &UploadOptions,
+    progress: ProgressCallback,
+) -> Result<usize> {
+    let mut count = 0usize;
+    let mut entries = tokio::fs::read_dir(local_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let ft = entry.file_type().await?;
+        if ft.is_dir() {
+            let name = entry.file_name().to_str().unwrap_or("folder").to_string();
+            let child = client.create_folder(folder_id, &name).await?;
+            let sub = upload_folder_contents_recursive(
+                client,
+                &child.id,
+                &path,
+                opts,
+                progress.clone(),
+            );
+            count += Box::pin(sub).await?;
+        } else {
+            upload(client, folder_id, &path, opts, progress.clone()).await?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// 递归列出本地文件夹下的所有文件路径（用于拖入上传批量注册任务）
+pub fn collect_local_files(root: &Path, out: &mut Vec<std::path::PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_local_files(&path, out);
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 下载
 // ---------------------------------------------------------------------------
 
