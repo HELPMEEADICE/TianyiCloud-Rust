@@ -34,7 +34,9 @@ impl Default for UploadOptions {
             overwrite: true,
             rapid_upload: true,
             thread_count: 3,
-            part_size: 10 * 1024 * 1024,
+            // 0 = 按文件大小自动计算分片大小（crypto::part_size），
+            // 与 OpenList 189pc 一致，避免大文件分片数超过服务端限制
+            part_size: 0,
             generate_torrent: false,
         }
     }
@@ -204,15 +206,26 @@ pub async fn upload(
                 part_size_u
             };
 
-            let mut f = tokio::fs::File::open(local_path).await?;
+            let mut f = tokio::fs::File::open(&local_path).await?;
             f.seek(SeekFrom::Start(offset)).await?;
             let mut buf = vec![0u8; len as usize];
             f.read_exact(&mut buf).await?;
 
-            // PUT 上传
-            if let Err(e) = put_part(&client, &req_url, &headers, &buf).await {
-                warn!("part {part_no} put failed: {e} (url={req_url})");
-                return Err(e);
+            // PUT 上传（带重试）
+            let mut attempt = 0u32;
+            loop {
+                match put_part(&client, &req_url, &headers, &buf).await {
+                    Ok(()) => break,
+                    Err(e) => {
+                        attempt += 1;
+                        if attempt >= 3 {
+                            warn!("part {part_no} put failed after {attempt} tries: {e} (url={req_url})");
+                            return Err(e);
+                        }
+                        warn!("part {part_no} put failed (try {attempt}): {e}, retrying");
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    }
+                }
             }
             info!("part {part_no} uploaded, {} bytes", len);
             uploaded.fetch_add(len, Ordering::SeqCst);
@@ -284,6 +297,8 @@ async fn compute_md5s(
 
     // 与 OpenList 189pc FastUpload 保持一致：分片 MD5 是分片内容哈希的 hex，
     // 而非分片原始字节的 hex
+    // 与 OpenList 189pc FastUpload 保持一致：
+    // 分片 MD5 = MD5(分片内容) 的大写 hex；partInfo 的 base64 由这些 hex 解码而来
     let flush_part = |part_buf: &[u8], whole: &mut Md5, parts: &mut Vec<String>, part_sha1s: &mut Vec<u8>| {
         whole.update(part_buf);
         let h = Md5::digest(part_buf);
@@ -307,10 +322,9 @@ async fn compute_md5s(
         flush_part(&part_buf, &mut whole, &mut parts, &mut part_sha1s);
     }
     if parts.is_empty() {
+        // 空文件：一个分片，MD5 为空内容 MD5；无需 SHA-1 piece hash
         let h = Md5::digest(&[]);
         parts.push(hex::encode_upper(h.as_slice()));
-        let h = Sha1::digest(&[]);
-        part_sha1s.extend_from_slice(&h);
     }
 
     let whole_hex = hex::encode_upper(whole.finalize().as_slice());
@@ -742,6 +756,37 @@ mod tests {
         assert_eq!(whole_hex, hex::encode_upper(whole.finalize()));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// 回归：>4GB 乃至 >10GB 文件必须使用动态分片大小，
+    /// 确保分片数不超过天翼云服务端限制（10MiB 分片 ≤999 片，更大 ≤1999 片），
+    /// 否则会报 InvalidPartSize / 405。
+    #[test]
+    fn test_upload_part_size_large_file() {
+        const MB: i64 = 1024 * 1024;
+        // 4GB 边界
+        let size_4g: i64 = 4 * 1024 * MB;
+        let ps_4g = crypto::part_size(size_4g) as u64;
+        let cnt_4g = ((size_4g as u64 + ps_4g - 1) / ps_4g) as i64;
+        assert_eq!(ps_4g, 10 * MB as u64, "4GB should still use 10MiB slices");
+        assert!(cnt_4g <= 999, "4GB part count {cnt_4g} exceeds 999");
+
+        // 10GB 边界（此前固定 10MiB 分片会达到 1024 片，超出服务端限制）
+        let size_10g: i64 = 10 * 1024 * MB;
+        let ps_10g = crypto::part_size(size_10g) as u64;
+        let cnt_10g = ((size_10g as u64 + ps_10g - 1) / ps_10g) as i64;
+        assert_eq!(ps_10g, 20 * MB as u64, ">9.5GB should use 20MiB slices");
+        assert!(cnt_10g <= 999, "10GB part count {cnt_10g} exceeds 999");
+
+        // 100GB：按 1999 片封顶分配更大分片
+        let size_100g: i64 = 100 * 1024 * MB;
+        let ps_100g = crypto::part_size(size_100g) as u64;
+        let cnt_100g = ((size_100g as u64 + ps_100g - 1) / ps_100g) as i64;
+        assert!(cnt_100g <= 1999, "100GB part count {cnt_100g} exceeds 1999");
+        assert!(
+            ps_100g >= 50 * MB as u64,
+            "100GB slice should be >= 50MiB, got {ps_100g}"
+        );
     }
 
     #[test]

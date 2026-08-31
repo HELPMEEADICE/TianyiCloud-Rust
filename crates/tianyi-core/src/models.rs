@@ -382,9 +382,10 @@ pub struct Cloud189FileRaw {
 pub struct Icon {
     pub small_url: String,
     pub large_url: String,
+    // 仅 iconOption=10 时返回；iconOption=5 的列表请求不含这些字段，故设为可选
     #[serde(rename = "max600")]
-    pub max600: String,
-    pub medium_url: String,
+    pub max600: Option<String>,
+    pub medium_url: Option<String>,
 }
 
 /// 原始文件夹 JSON（对应 Cloud189Folder）
