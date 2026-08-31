@@ -1113,6 +1113,9 @@ impl Controller {
                     Ok(files) => {
                         let entries = files_to_entries(&files);
                         let count = files.len();
+                        // Keep context-menu actions (download, delete, rename, copy)
+                        // working for items returned by search as well.
+                        *this.last_list.lock().unwrap() = files.clone();
                         invoke_ui(&ui, move |win| {
                                 win.set_search_results(entries_model(entries));
                                 win.set_searching(true);

@@ -123,6 +123,7 @@ component FileItem inherits Rectangle {
     in property <bool> renaming: false;
     callback item_clicked();
     callback item_double_clicked();
+    callback item_context_requested(string, string, bool, length, length);
     callback rename_submitted(string);
 
     height: 52px;
@@ -188,6 +189,17 @@ component FileItem inherits Rectangle {
         double-clicked => {
             root.item_double_clicked();
         }
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                root.item_context_requested(
+                    entry.id,
+                    entry.name,
+                    entry.is_dir,
+                    self.absolute-position.x + self.mouse-x,
+                    self.absolute-position.y + self.mouse-y
+                );
+            }
+        }
     }
 
     changed renaming => {
@@ -196,6 +208,44 @@ component FileItem inherits Rectangle {
             rename-input.focus();
             rename-input.select-all();
         }
+    }
+}
+
+// ===== 右键菜单项 =====
+component ContextMenuItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> danger: false;
+    callback triggered();
+
+    height: 34px;
+    border-radius: 7px;
+    background: touch-area.has-hover ? (root.danger ? #fee2e2 : #eff6ff) : transparent;
+    animate background { duration: 110ms; easing: ease-out; }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Icon {
+            glyph: root.icon;
+            icon-color: root.danger ? #dc2626 : #475569;
+            font-size: 18px;
+        }
+
+        Text {
+            text: root.label;
+            color: root.danger ? #dc2626 : #1f2937;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    touch-area := TouchArea {
+        clicked => { root.triggered(); }
     }
 }
 
@@ -594,6 +644,7 @@ component FileListPanel inherits VerticalLayout {
 
     callback item_open(string, string, bool);
     callback item_select(string);
+    callback item_context_requested(string, string, bool, length, length);
     callback do_refresh();
     callback do_navigate_up();
     callback do_upload();
@@ -772,6 +823,9 @@ component FileListPanel inherits VerticalLayout {
                             }
                             item_double_clicked() => {
                                 root.item_open(entry.id, entry.name, entry.is_dir);
+                            }
+                            item_context_requested(id, name, is_dir, x, y) => {
+                                root.item_context_requested(id, name, is_dir, x, y);
                             }
                             rename_submitted(name) => {
                                 root.do_rename(entry.id, name);
@@ -994,6 +1048,7 @@ component CloudPage inherits Rectangle {
 
     callback open_item(string, string, bool);
     callback select_item(string);
+    callback item_context_requested(string, string, bool, length, length);
     callback refresh_files();
     callback navigate_up();
     callback upload_files();
@@ -1065,11 +1120,15 @@ component CloudPage inherits Rectangle {
                             padding: 6px;
                             for result in root.search_results : FileItem {
                                 entry: result;
+                                selected: result.id == root.selected_id;
                                 item_clicked() => {
                                     root.open_item(result.id, result.name, result.is_dir);
                                 }
                                 item_double_clicked() => {
                                     root.open_item(result.id, result.name, result.is_dir);
+                                }
+                                item_context_requested(id, name, is_dir, x, y) => {
+                                    root.item_context_requested(id, name, is_dir, x, y);
                                 }
                             }
                         }
@@ -1095,6 +1154,9 @@ component CloudPage inherits Rectangle {
             }
             item_select(id) => {
                 root.select_item(id);
+            }
+            item_context_requested(id, name, is_dir, x, y) => {
+                root.item_context_requested(id, name, is_dir, x, y);
             }
             do_refresh() => { root.refresh_files(); }
             do_navigate_up() => { root.navigate_up(); }
@@ -1272,12 +1334,20 @@ export component MainWindow inherits Window {
     in property <string> used_space: "0 B";
     in property <float> capacity_ratio: 0.0;
     property <int> current_page: 0;
+    property <bool> context-menu-visible: false;
+    property <length> context-menu-x: 0px;
+    property <length> context-menu-y: 0px;
+    property <string> context-item-id: "";
+    property <string> context-item-name: "";
+    property <bool> context-item-is-dir: false;
+    property <length> context-menu-height: context-item-is-dir ? 196px : 270px;
 
     callback login_request(string, string, string);
     callback qr_refresh();
     callback switch_mode(bool);
     callback quick_login(string);
     callback open_item(string, string, bool);
+    callback item_context_requested(string, string, bool, length, length);
     callback select_item(string);
     callback refresh_files();
     callback navigate_up();
@@ -1466,6 +1536,15 @@ export component MainWindow inherits Window {
                         search_results: root.search_results;
 
                         open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
+                        item_context_requested(id, name, is_dir, x, y) => {
+                            root.context-item-id = id;
+                            root.context-item-name = name;
+                            root.context-item-is-dir = is_dir;
+                            root.context-menu-x = clamp(x, 12px, root.width - 250px);
+                            root.context-menu-y = clamp(y, 12px, root.height - root.context-menu-height - 12px);
+                            root.context-menu-visible = true;
+                            root.select_item(id);
+                        }
                         select_item(id) => { root.select_item(id); }
                         refresh_files() => { root.refresh_files(); }
                         navigate_up() => { root.navigate_up(); }
@@ -1516,6 +1595,15 @@ export component MainWindow inherits Window {
                         search_results: root.search_results;
 
                         open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
+                        item_context_requested(id, name, is_dir, x, y) => {
+                            root.context-item-id = id;
+                            root.context-item-name = name;
+                            root.context-item-is-dir = is_dir;
+                            root.context-menu-x = clamp(x, 12px, root.width - 250px);
+                            root.context-menu-y = clamp(y, 12px, root.height - root.context-menu-height - 12px);
+                            root.context-menu-visible = true;
+                            root.select_item(id);
+                        }
                         select_item(id) => { root.select_item(id); }
                         refresh_files() => { root.refresh_files(); }
                         navigate_up() => { root.navigate_up(); }
@@ -1577,6 +1665,131 @@ export component MainWindow inherits Window {
                             root.switch_space("personal");
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Rectangle {
+        visible: root.context-menu-visible;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        background: #00000000;
+
+        TouchArea {
+            clicked => { root.context-menu-visible = false; }
+        }
+    }
+
+    Rectangle {
+        visible: root.context-menu-visible;
+        x: root.context-menu-x + 3px;
+        y: root.context-menu-y + 5px;
+        width: 238px;
+        height: root.context-menu-height;
+        border-radius: 12px;
+        background: #0f172a;
+        opacity: root.context-menu-visible ? 0.16 : 0.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+    }
+
+    Rectangle {
+        visible: root.context-menu-visible;
+        x: root.context-menu-x;
+        y: root.context-menu-visible ? root.context-menu-y : root.context-menu-y - 8px;
+        width: 238px;
+        height: root.context-menu-height;
+        border-radius: 12px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #dbe3ef;
+        opacity: root.context-menu-visible ? 1.0 : 0.0;
+        animate y { duration: 170ms; easing: ease-out; }
+        animate opacity { duration: 150ms; easing: ease-out; }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 3px;
+
+            Text {
+                text: root.context-item-name;
+                color: #94a3b8;
+                font-size: 11px;
+                height: 20px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            Rectangle {
+                height: 1px;
+                background: #eef2f7;
+            }
+
+            ContextMenuItem {
+                icon: "\u{e89e}";
+                label: root.context-item-is-dir ? "打开文件夹" : "预览 / 打开";
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.open_item(root.context-item-id, root.context-item-name, root.context-item-is-dir);
+                }
+            }
+
+            if !root.context-item-is-dir : ContextMenuItem {
+                icon: "\u{e2c4}";
+                label: "下载到本地";
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.download_file(root.context-item-id);
+                }
+            }
+
+            Rectangle {
+                visible: !root.context-item-is-dir;
+                height: 1px;
+                background: #eef2f7;
+            }
+
+            ContextMenuItem {
+                icon: "\u{e3c9}";
+                label: "重命名";
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.rename_file(root.context-item-id, "");
+                }
+            }
+
+            ContextMenuItem {
+                icon: "\u{e14d}";
+                label: "复制到当前目录";
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.copy_file(root.context-item-id);
+                }
+            }
+
+            if !root.context-item-is-dir : ContextMenuItem {
+                icon: "\u{e157}";
+                label: "提取下载链接";
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.get_link(root.context-item-id);
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: #eef2f7;
+            }
+
+            ContextMenuItem {
+                icon: "\u{e872}";
+                label: "删除";
+                danger: true;
+                triggered => {
+                    root.context-menu-visible = false;
+                    root.delete_file(root.context-item-id);
                 }
             }
         }
