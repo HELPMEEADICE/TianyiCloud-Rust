@@ -28,3 +28,6 @@ tokio-util.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 rand.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"

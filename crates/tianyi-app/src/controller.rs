@@ -1064,20 +1064,35 @@ impl Controller {
         backend.spawn(move || async move {
             if let Some(client) = this.client() {
                 match client.get_download_url(&id).await {
-                    Ok(url) => match this.download_to_temp(&client, &url, &name).await {
-                        Ok(path) => {
-                            if kind == FileKind::Image {
-                                invoke_ui(&ui, move |win| {
-                                        let img = load_image_file(&path);
-                                        win.set_captcha_image(img);
-                                        win.set_qr_status(SharedString::from(format!("预览: {name}")));
-                                });
+                    Ok(url) => {
+                        // 视频/音频：取直链后交给默认播放器流式播放，无需下载到本地
+                        if kind == FileKind::Video || kind == FileKind::Audio {
+                            let opened = file::open_media_url_with_player(&name, &url);
+                            let msg = if opened.is_ok() {
+                                format!("已在默认播放器中打开: {name}")
                             } else {
-                                let _ = file::open_with_system(&path);
-                            }
+                                format!("打开播放器失败: {}", opened.unwrap_err())
+                            };
+                            invoke_ui(&ui, move |win| {
+                                win.set_status_text(SharedString::from(msg));
+                            });
+                            return;
                         }
-                        Err(e) => log::error!("preview download failed: {e}"),
-                    },
+                        match this.download_to_temp(&client, &url, &name).await {
+                            Ok(path) => {
+                                if kind == FileKind::Image {
+                                    invoke_ui(&ui, move |win| {
+                                            let img = load_image_file(&path);
+                                            win.set_captcha_image(img);
+                                            win.set_qr_status(SharedString::from(format!("预览: {name}")));
+                                    });
+                                } else {
+                                    let _ = file::open_with_system(&path);
+                                }
+                            }
+                            Err(e) => log::error!("preview download failed: {e}"),
+                        }
+                    }
                     Err(e) => log::error!("get download url failed: {e}"),
                 }
             }
