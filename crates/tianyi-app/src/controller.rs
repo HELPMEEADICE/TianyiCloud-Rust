@@ -623,11 +623,19 @@ impl Controller {
             return;
         };
         let size = size.unwrap_or(0);
-        let dest = self
+        let default_dir = self
             .store
             .load_config()
-            .map(|c| c.download_dir.join(&name))
-            .unwrap_or_else(|_| std::env::current_dir().unwrap().join(&name));
+            .map(|c| c.download_dir)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap());
+        let picked = rfd::FileDialog::new()
+            .set_title("选择下载位置")
+            .set_directory(&default_dir)
+            .set_file_name(&name)
+            .save_file();
+        let Some(dest) = picked else {
+            return;
+        };
         let this = Arc::clone(&self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
