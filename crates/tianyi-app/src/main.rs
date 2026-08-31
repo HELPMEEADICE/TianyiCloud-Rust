@@ -3,7 +3,6 @@
 mod app;
 mod backend;
 mod controller;
-mod dragout;
 
 use app::MainWindow;
 use backend::Backend;

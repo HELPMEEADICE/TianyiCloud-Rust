@@ -121,100 +121,104 @@ component FileItem inherits Rectangle {
     in property <FileEntry> entry;
     in property <bool> selected: false;
     in property <bool> renaming: false;
-    in property <bool> drag-out-active: false;
+    in property <data-transfer> drag-data;
+    in property <bool> is-drop-target: false;
     callback item_clicked();
     callback item_double_clicked();
     callback item_context_requested(string, string, bool, length, length);
     callback rename_submitted(string);
-    callback drag_started();
+    callback drop_can_accept(DropEvent, string) -> DragAction;
+    callback drop_requested(DropEvent, string) -> DragAction;
 
     height: 52px;
     border-radius: 8px;
-    background: selected ? #e0f2fe : (ta.has-hover ? #f1f5f9 : transparent);
-    opacity: root.drag-out-active ? 0.35 : 1.0;
+    background: selected ? #e0f2fe : (da.has-drag ? #eff6ff : transparent);
+    border-width: 1px;
+    border-color: da.has-drag ? #93c5fd : transparent;
 
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 12px;
-        cross-axis-alignment: center;
-
-        Rectangle {
-            width: 34px;
-            height: 34px;
-            border-radius: 8px;
-            background: entry.is_dir ? #fef3c7 : #e0f2fe;
-            Icon {
-                glyph: entry.is_dir ? "\u{e2c7}" : "\u{e24d}";
-                icon-color: entry.is_dir ? #d97706 : #2563eb;
-                font-size: 20px;
-            }
-        }
-
-        if !root.renaming: Text {
-            text: entry.name;
-            color: #111827;
-            font-size: 14px;
-            overflow: elide;
-            horizontal-stretch: 1;
-        }
-
-        rename-input := LineEdit {
-            visible: root.renaming;
-            text: entry.name;
-            font-size: 14px;
-            horizontal-stretch: 1;
-            accepted => {
-                root.rename_submitted(rename-input.text);
-            }
-        }
-
-        Text {
-            text: entry.size_text;
-            color: #9ca3af;
-            font-size: 12px;
-            width: 80px;
-        }
-
-        Text {
-            text: entry.modified;
-            color: #9ca3af;
-            font-size: 12px;
-            width: 130px;
-        }
-    }
-
-    ta := TouchArea {
+    DragArea {
         enabled: !root.renaming;
-        clicked => {
-            root.item_clicked();
+        data: root.drag-data;
+        allow-move: true;
+
+        HorizontalLayout {
+            padding-left: 12px;
+            padding-right: 12px;
+            spacing: 12px;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                width: 34px;
+                height: 34px;
+                border-radius: 8px;
+                background: entry.is_dir ? #fef3c7 : #e0f2fe;
+                Icon {
+                    glyph: entry.is_dir ? "\u{e2c7}" : "\u{e24d}";
+                    icon-color: entry.is_dir ? #d97706 : #2563eb;
+                    font-size: 20px;
+                }
+            }
+
+            if !root.renaming: Text {
+                text: entry.name;
+                color: #111827;
+                font-size: 14px;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            rename-input := LineEdit {
+                visible: root.renaming;
+                text: entry.name;
+                font-size: 14px;
+                horizontal-stretch: 1;
+                accepted => {
+                    root.rename_submitted(rename-input.text);
+                }
+            }
+
+            Text {
+                text: entry.size_text;
+                color: #9ca3af;
+                font-size: 12px;
+                width: 80px;
+            }
+
+            Text {
+                text: entry.modified;
+                color: #9ca3af;
+                font-size: 12px;
+                width: 130px;
+            }
         }
-        double-clicked => {
-            root.item_double_clicked();
-        }
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                root.item_context_requested(
-                    entry.id,
-                    entry.name,
-                    entry.is_dir,
-                    self.absolute-position.x + self.mouse-x,
-                    self.absolute-position.y + self.mouse-y
-                );
+
+        ta := TouchArea {
+            enabled: !root.renaming;
+            clicked => {
+                root.item_clicked();
             }
-            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
-                drag-pressed = true;
+            double-clicked => {
+                root.item_double_clicked();
             }
-            if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
-                drag-pressed = false;
-            }
-            if (drag-pressed && event.kind == PointerEventKind.move) {
-                root.drag_started();
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                    root.item_context_requested(
+                        entry.id,
+                        entry.name,
+                        entry.is_dir,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y
+                    );
+                }
             }
         }
     }
 
-    property <bool> drag-pressed: false;
+    da := DropArea {
+        enabled: root.is-drop-target;
+        can-drop(event) => { root.drop_can_accept(event, entry.id); }
+        dropped(event) => { root.drop_requested(event, entry.id); }
+    }
 
     changed renaming => {
         if (renaming) {
@@ -655,8 +659,6 @@ component FileListPanel inherits VerticalLayout {
     in property <string> used-space: "0 B";
     in property <string> selected_id: "";
     in property <string> renaming_id: "";
-    in property <string> drag-out-id: "";
-    in property <bool> drag-out-active: false;
 
     callback item_open(string, string, bool);
     callback item_select(string);
@@ -674,7 +676,9 @@ component FileListPanel inherits VerticalLayout {
     callback do_get_link(string, string);
     callback do_move(string, string);
     callback do_copy(string, string);
-    callback do_drag_out(string, string);
+    pure callback make_drag_data(string, string, bool) -> data-transfer;
+    callback drop_can_accept(DropEvent, string) -> DragAction;
+    callback drop_requested(DropEvent, string) -> DragAction;
 
     horizontal-stretch: 1;
     vertical-stretch: 1;
@@ -835,7 +839,8 @@ component FileListPanel inherits VerticalLayout {
                             entry: entry;
                             selected: entry.id == root.selected_id;
                             renaming: entry.id == root.renaming_id;
-                            drag-out-active: root.drag-out-active && entry.id == root.drag-out-id;
+                            drag-data: root.make_drag_data(entry.id, entry.name, entry.is_dir);
+                            is-drop-target: entry.is_dir;
                             item_clicked() => {
                                 root.item_select(entry.id);
                             }
@@ -848,8 +853,11 @@ component FileListPanel inherits VerticalLayout {
                             rename_submitted(name) => {
                                 root.do_rename(entry.id, name);
                             }
-                            drag_started() => {
-                                root.do_drag_out(entry.id, entry.name);
+                            drop_can_accept(event, folder_id) => {
+                                root.drop_can_accept(event, folder_id);
+                            }
+                            drop_requested(event, folder_id) => {
+                                root.drop_requested(event, folder_id);
                             }
                         }
                     }
@@ -1124,9 +1132,6 @@ component CloudPage inherits Rectangle {
     in property <[FileEntry]> search_results: [];
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
-    in property <string> drag-out-item-id: "";
-    in property <string> drag-out-item-name: "";
-    in property <bool> drag-out-active: false;
 
     callback open_item(string, string, bool);
     callback select_item(string);
@@ -1145,7 +1150,9 @@ component CloudPage inherits Rectangle {
     callback copy_file(string);
     callback get_link(string);
     callback cancel_task(int);
-    callback drag_out(string, string);
+    pure callback make_drag_data(string, string, bool) -> data-transfer;
+    callback drop_can_accept(DropEvent, string) -> DragAction;
+    callback drop_requested(DropEvent, string) -> DragAction;
 
     background: #f1f5f9;
 
@@ -1236,8 +1243,6 @@ component CloudPage inherits Rectangle {
                 used-space: root.used_space;
                 selected_id: root.selected_id;
                 renaming_id: root.renaming_id;
-                drag-out-id: root.drag-out-item-id;
-                drag-out-active: root.drag-out-active;
 
                 item_open(id, name, is_dir) => {
                     root.open_item(id, name, is_dir);
@@ -1260,7 +1265,9 @@ component CloudPage inherits Rectangle {
                 do_search(keyword) => { root.search_files(keyword); }
                 do_logout() => { root.logout(); }
                 do_switch_space(space) => { root.switch_space(space); }
-                do_drag_out(id, name) => { root.drag_out(id, name); }
+                make_drag_data(id, name, is_dir) => { root.make_drag_data(id, name, is_dir); }
+                drop_can_accept(event, folder_id) => { root.drop_can_accept(event, folder_id); }
+                drop_requested(event, folder_id) => { root.drop_requested(event, folder_id); }
             }
 
             DropOverlay {
@@ -1443,9 +1450,6 @@ export component MainWindow inherits Window {
 
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
-    in property <string> drag-out-item-id: "";
-    in property <string> drag-out-item-name: "";
-    in property <bool> drag-out-active: false;
 
     callback login_request(string, string, string);
     callback qr_refresh();
@@ -1469,7 +1473,9 @@ export component MainWindow inherits Window {
     callback logout();
     callback switch_space(string);
     callback files_dropped(string);
-    callback drag_out(string, string);
+    pure callback make_drag_data(string, string, bool) -> data-transfer;
+    callback drop_can_accept(DropEvent, string) -> DragAction;
+    callback drop_requested(DropEvent, string) -> DragAction;
 
     // ===== 四个独立页面与滑动淡入切换 =====
     HorizontalLayout {
@@ -1643,9 +1649,6 @@ export component MainWindow inherits Window {
                         search_results: root.search_results;
                         drop-active: root.drop-active;
                         drop-target-name: root.drop-target-name;
-                        drag-out-item-id: root.drag-out-item-id;
-                        drag-out-item-name: root.drag-out-item-name;
-                        drag-out-active: root.drag-out-active;
 
                         open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
                         item_context_requested(id, name, is_dir, x, y) => {
@@ -1675,7 +1678,15 @@ export component MainWindow inherits Window {
                         copy_file(id) => { root.copy_file(id); }
                         get_link(id) => { root.get_link(id); }
                         cancel_task(id) => { root.cancel_task(id); }
-                        drag_out(id, name) => { root.drag_out(id, name); }
+                        make_drag_data(id, name, is_dir) => {
+                            root.make_drag_data(id, name, is_dir);
+                        }
+                        drop_can_accept(event, folder_id) => {
+                            root.drop_can_accept(event, folder_id);
+                        }
+                        drop_requested(event, folder_id) => {
+                            root.drop_requested(event, folder_id);
+                        }
                     }
                 }
 
@@ -1708,9 +1719,6 @@ export component MainWindow inherits Window {
                         search_results: root.search_results;
                         drop-active: root.drop-active;
                         drop-target-name: root.drop-target-name;
-                        drag-out-item-id: root.drag-out-item-id;
-                        drag-out-item-name: root.drag-out-item-name;
-                        drag-out-active: root.drag-out-active;
 
                         open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
                         item_context_requested(id, name, is_dir, x, y) => {
@@ -1740,7 +1748,15 @@ export component MainWindow inherits Window {
                         copy_file(id) => { root.copy_file(id); }
                         get_link(id) => { root.get_link(id); }
                         cancel_task(id) => { root.cancel_task(id); }
-                        drag_out(id, name) => { root.drag_out(id, name); }
+                        make_drag_data(id, name, is_dir) => {
+                            root.make_drag_data(id, name, is_dir);
+                        }
+                        drop_can_accept(event, folder_id) => {
+                            root.drop_can_accept(event, folder_id);
+                        }
+                        drop_requested(event, folder_id) => {
+                            root.drop_requested(event, folder_id);
+                        }
                     }
                 }
 

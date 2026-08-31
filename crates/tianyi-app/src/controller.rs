@@ -3,7 +3,6 @@
 use crate::app::MainWindow;
 use crate::backend::{invoke_ui, Backend};
 use slint::{SharedString, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
@@ -15,6 +14,13 @@ use tianyi_core::task::{TaskDirection, TaskManager};
 /// 登录通知器（向 UI 推送验证码/二维码）
 struct AppNotifier {
     ui: Weak<MainWindow>,
+}
+
+/// 网盘内拖拽移动的数据载荷（存放在 DataTransfer.user_data）
+#[derive(Debug, Clone)]
+struct MovedFile {
+    id: String,
+    name: String,
 }
 
 impl LoginNotifier for AppNotifier {
@@ -95,10 +101,6 @@ pub struct Controller {
     tasks: Arc<TaskManager>,
     /// 拖拽状态（与 winit 事件钩子共享）
     drag_state: Mutex<Option<&'static crate::DragDropState>>,
-    /// 正在等待拖出下载的文件 id
-    drag_out_pending: Mutex<Option<String>>,
-    /// 拖出下载进行中标记（防止重复触发）
-    drag_out_busy: AtomicBool,
     /// 本会话启动时间戳（秒），传输列表只显示本会话创建的任务
     session_start: i64,
 }
@@ -118,8 +120,6 @@ impl Controller {
             last_list: Mutex::new(Vec::new()),
             tasks: Arc::new(tasks),
             drag_state: Mutex::new(None),
-            drag_out_pending: Mutex::new(None),
-            drag_out_busy: AtomicBool::new(false),
             session_start: chrono_used_now(),
         });
         Self::bind_ui(Arc::clone(&c));
@@ -313,12 +313,33 @@ impl Controller {
             });
         });
 
-        // 拖出下载（拖拽云端文件到本地）
+        // 网盘内拖动：构造拖拽数据载荷
+        this.ui_set(move |ui| {
+            ui.on_make_drag_data(move |id, name, _is_dir| {
+                let mut dt = slint::private_unstable_api::re_exports::DataTransfer::default();
+                dt.set_user_data(std::rc::Rc::new(MovedFile {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                }));
+                dt
+            });
+        });
+
+        // 网盘内拖动：目标可接受性判断（拒绝拖到自身/同目录）
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
-            ui.on_drag_out(move |id, name| {
+            ui.on_drop_can_accept(move |event, folder_id| {
+                c.check_drop_target(&event, folder_id.as_str())
+            });
+        });
+
+        // 网盘内拖动：移动到目标文件夹
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_drop_requested(move |event, folder_id| {
                 let c = c.clone();
-                c.handle_drag_out(id.as_str(), name.as_str());
+                c.handle_drop_move(&event, folder_id.as_str());
+                slint::language::DragAction::Move
             });
         });
     }
@@ -1211,81 +1232,69 @@ impl Controller {
     }
 
     /// 拖出下载：拖拽云端文件到本地
-    fn handle_drag_out(self: &Arc<Self>, id: &str, name: &str) {
-        if self.client().is_none() {
+    /// 从 DropEvent 提取拖拽的源文件信息
+    fn dragged_file(event: &slint::language::DropEvent) -> Option<MovedFile> {
+        event.data.user_data().and_then(|d| {
+            d.downcast::<MovedFile>().ok().map(|m| m.as_ref().clone())
+        })
+    }
+
+    /// 判断目标文件夹是否可接收（拒绝拖到自身）
+    fn check_drop_target(
+        &self,
+        event: &slint::language::DropEvent,
+        folder_id: &str,
+    ) -> slint::language::DragAction {
+        let Some(src) = Self::dragged_file(event) else {
+            return slint::language::DragAction::None;
+        };
+        // 不能把文件夹拖进它自己
+        if src.id == folder_id {
+            return slint::language::DragAction::None;
+        }
+        slint::language::DragAction::Move
+    }
+
+    /// 移动文件到目标文件夹
+    fn handle_drop_move(
+        self: &Arc<Self>,
+        event: &slint::language::DropEvent,
+        folder_id: &str,
+    ) {
+        let Some(src) = Self::dragged_file(event) else {
+            return;
+        };
+        if src.id == folder_id {
             return;
         }
-        // 从最近列表查找文件信息
-        let Some(file) = self.find_in_list(id) else {
+        let Some(file) = self.find_in_list(&src.id) else {
             return;
         };
         let file = file.clone();
-        let id = id.to_string();
-        let name = name.to_string();
+        let folder_id = folder_id.to_string();
+        let src_name = src.name.clone();
         let this = Arc::clone(&self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
-        let ui2 = self.ui.clone();
-
-        // 标记拖出进行中，防止重复触发
-        if self.drag_out_busy.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        *self.drag_out_pending.lock().unwrap() = Some(id.clone());
-        let this2 = this.clone();
-        let name2 = name.clone();
-        let file2 = file.clone();
-
         backend.spawn(move || async move {
-            // 先下载到临时目录
-            let temp_dir = std::env::temp_dir().join("tianyi-dragout");
-            let _ = std::fs::create_dir_all(&temp_dir);
-            let temp_path = temp_dir.join(&name2);
-            let dl_ok = if let Some(client) = this2.client() {
-                let opts = tianyi_core::transfer::DownloadOptions::default();
-                let prog: tianyi_core::transfer::ProgressCallback = Arc::new(|_| {});
-                tianyi_core::transfer::download(&client, &file2, &temp_path, &opts, prog)
-                    .await
-                    .is_ok()
-            } else {
-                false
-            };
-            if !dl_ok {
-                invoke_ui(&ui, move |win| {
-                    win.set_status_text(SharedString::from("拖出下载失败：无法获取文件"));
-                });
-                this2.drag_out_busy.store(false, Ordering::SeqCst);
-                *this2.drag_out_pending.lock().unwrap() = None;
-                invoke_ui(&ui, move |win| win.set_drag_out_active(false));
-                return;
+            if let Some(client) = this.client() {
+                match client.move_to(&file, &folder_id).await {
+                    Ok(_) => {
+                        invoke_ui(&ui, move |win| {
+                            win.set_status_text(SharedString::from(format!("已移动 {src_name}")));
+                        });
+                        this.refresh_files();
+                    }
+                    Err(e) => {
+                        let msg = format!("移动失败: {e}");
+                        invoke_ui(&ui, move |win| {
+                            win.set_status_text(SharedString::from(msg));
+                        });
+                    }
+                }
             }
-            // 启动系统拖拽（阻塞直到松开/取消）
-            let dropped = crate::dragout::do_drag_drop(&[temp_path.clone()]).unwrap_or(false);
-            // 清理临时文件
-            crate::dragout::cleanup_temp_paths(&[temp_path]);
-
-            this2.drag_out_busy.store(false, Ordering::SeqCst);
-            *this2.drag_out_pending.lock().unwrap() = None;
-            invoke_ui(&ui, move |win| {
-                win.set_drag_out_active(false);
-                let msg = if dropped {
-                    format!("已拖出 {name2}")
-                } else {
-                    "已取消拖拽".to_string()
-                };
-                win.set_status_text(SharedString::from(msg));
-            });
-        });
-
-        // 记录拖出高亮
-        invoke_ui(&ui2, move |win| {
-            win.set_drag_out_item_id(SharedString::from(id));
-            win.set_drag_out_item_name(SharedString::from(name));
-            win.set_drag_out_active(true);
-            win.set_status_text(SharedString::from("拖拽到本地文件夹即可下载"));
         });
     }
-
 
     fn create_folder(self: &Arc<Self>) {
         let this = Arc::clone(&self);
