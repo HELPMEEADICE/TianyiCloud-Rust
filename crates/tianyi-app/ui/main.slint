@@ -23,6 +23,13 @@ export struct TransferEntry {
     speed: string,
 }
 
+export global DragOutApi {
+    in property <bool> mod-pressed: false;
+    in property <bool> active: false;
+    in property <string> active-id: "";
+    callback drag_out(string, string);
+}
+
 // ===== 基础图标组件 =====
 // 使用 Material Icons 字体，所有图标在 fonts/MaterialIcons-Regular.ttf
 component Icon inherits Text {
@@ -130,14 +137,19 @@ component FileItem inherits Rectangle {
     callback drop_can_accept(DropEvent, string) -> DragAction;
     callback drop_requested(DropEvent, string) -> DragAction;
 
+    property <bool> drag-pressed: false;
+    property <bool> drag-armed: false;
+    property <bool> drag-out-fired: false;
+
     height: 52px;
     border-radius: 8px;
     background: selected ? #e0f2fe : (da.has-drag ? #eff6ff : transparent);
+    opacity: DragOutApi.active && DragOutApi.active-id == entry.id ? 0.45 : 1.0;
     border-width: 1px;
     border-color: da.has-drag ? #93c5fd : transparent;
 
     DragArea {
-        enabled: !root.renaming;
+        enabled: !root.renaming && !(DragOutApi.mod-pressed && !entry.is_dir);
         data: root.drag-data;
         allow-move: true;
 
@@ -201,6 +213,29 @@ component FileItem inherits Rectangle {
                 root.item_double_clicked();
             }
             pointer-event(event) => {
+                if (event.button == PointerEventButton.left) {
+                    if (event.kind == PointerEventKind.down) {
+                        root.drag-pressed = true;
+                        root.drag-armed = DragOutApi.mod-pressed && !entry.is_dir;
+                        if (!root.drag-armed) {
+                            root.drag-out-fired = false;
+                        }
+                    } else if (event.kind == PointerEventKind.up) {
+                        root.drag-pressed = false;
+                        root.drag-armed = false;
+                        root.drag-out-fired = false;
+                    }
+                }
+                if (event.kind == PointerEventKind.move) {
+                    if (root.drag-armed && !root.drag-out-fired && DragOutApi.mod-pressed && !root.renaming) {
+                        let dx = self.mouse-x - self.pressed-x;
+                        let dy = self.mouse-y - self.pressed-y;
+                        if (dx > 5px || dx < -5px || dy > 5px || dy < -5px) {
+                            root.drag-out-fired = true;
+                            DragOutApi.drag_out(entry.id, entry.name);
+                        }
+                    }
+                }
                 if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
                     root.item_context_requested(
                         entry.id,
@@ -1128,6 +1163,7 @@ component CloudPage inherits Rectangle {
     in property <string> renaming_id: "";
     in property <[TransferEntry]> transfers: [];
     in property <bool> searching: false;
+    in property <bool> search_loading: false;
     in property <string> search_keyword: "";
     in property <[FileEntry]> search_results: [];
     in property <bool> drop-active: false;
@@ -1188,15 +1224,44 @@ component CloudPage inherits Rectangle {
                         icon: "\u{e5c4}";
                         clicked => { root.clear_search(); }
                     }
+                    query-input := LineEdit {
+                        text: root.search_keyword;
+                        placeholder-text: "搜索文件...";
+                        horizontal-stretch: 1;
+                        edited => { root.search_files(query-input.text); }
+                    }
+                }
+
+                if (root.search_loading): Rectangle {
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
                     Text {
-                        text: "搜索: " + root.search_keyword;
-                        color: #374151;
+                        text: "正在搜索…";
+                        color: #64748b;
                         font-size: 14px;
+                        horizontal-alignment: center;
                         vertical-alignment: center;
                     }
                 }
 
-                Rectangle {
+                if (!root.search_loading && root.search_results.length == 0): Rectangle {
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    Text {
+                        text: root.status_text;
+                        color: #64748b;
+                        font-size: 14px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if (!root.search_loading && root.search_results.length > 0): Rectangle {
                     background: #f8fafc;
                     border-radius: 8px;
                     horizontal-stretch: 1;
@@ -1422,6 +1487,7 @@ export component MainWindow inherits Window {
     in property <string> account_name: "";
     in property <[TransferEntry]> transfer_list: [];
     in property <bool> searching: false;
+    in property <bool> search_loading: false;
     in property <string> search_keyword: "";
     in property <[FileEntry]> search_results: [];
     in property <string> selected_id: "";
@@ -1439,7 +1505,7 @@ export component MainWindow inherits Window {
     in property <string> total_space: "0 B";
     in property <string> used_space: "0 B";
     in property <float> capacity_ratio: 0.0;
-    property <int> current_page: 0;
+    in-out property <int> current_page: 0;
     property <bool> context-menu-visible: false;
     property <length> context-menu-x: 0px;
     property <length> context-menu-y: 0px;
@@ -1477,7 +1543,7 @@ export component MainWindow inherits Window {
     callback drop_can_accept(DropEvent, string) -> DragAction;
     callback drop_requested(DropEvent, string) -> DragAction;
 
-    // ===== 四个独立页面与滑动淡入切换 =====
+    // ===== 共享云盘工作区与独立功能页 =====
     HorizontalLayout {
         Rectangle {
             width: 216px;
@@ -1623,17 +1689,17 @@ export component MainWindow inherits Window {
                 Rectangle {
                     width: parent.width;
                     height: parent.height;
-                    x: root.current_page == 0 ? 0px : -28px;
-                    opacity: root.current_page == 0 ? 1.0 : 0.0;
+                    x: root.current_page < 2 ? 0px : (root.current_page == 2 ? 28px : -28px);
+                    opacity: root.current_page < 2 ? 1.0 : 0.0;
                     animate x { duration: 220ms; easing: ease-in-out; }
                     animate opacity { duration: 180ms; easing: ease-in-out; }
 
                     CloudPage {
                         width: parent.width;
                         height: parent.height;
-                        visible: root.current_page == 0;
-                        page_title: "个人云";
-                        page_subtitle: "管理和同步您的个人文件";
+                        visible: root.current_page < 2;
+                        page_title: root.current_page == 1 ? "家庭云" : "个人云";
+                        page_subtitle: root.current_page == 1 ? "与家人共享和管理文件" : "管理和同步您的个人文件";
                         files: root.file_list;
                         current_path: root.current_path;
                         status_text: root.status_text;
@@ -1645,76 +1711,7 @@ export component MainWindow inherits Window {
                         renaming_id: root.renaming_id;
                         transfers: root.transfer_list;
                         searching: root.searching;
-                        search_keyword: root.search_keyword;
-                        search_results: root.search_results;
-                        drop-active: root.drop-active;
-                        drop-target-name: root.drop-target-name;
-
-                        open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
-                        item_context_requested(id, name, is_dir, x, y) => {
-                            root.context-item-id = id;
-                            root.context-item-name = name;
-                            root.context-item-is-dir = is_dir;
-                            root.context-menu-x = clamp(x, 12px, root.width - 250px);
-                            root.context-menu-y = clamp(y, 12px, root.height - root.context-menu-height - 12px);
-                            root.context-menu-visible = true;
-                            root.select_item(id);
-                        }
-                        select_item(id) => { root.select_item(id); }
-                        refresh_files() => { root.refresh_files(); }
-                        navigate_up() => { root.navigate_up(); }
-                        upload_files() => { root.upload_files(); }
-                        create_folder() => { root.create_folder(); }
-                        search_files(keyword) => { root.search_files(keyword); }
-                        clear_search() => { root.clear_search(); }
-                        logout() => { root.logout(); }
-                        switch_space(space) => {
-                            root.switch_space(space);
-                            root.current_page = space == "family" ? 1 : 0;
-                        }
-                        download_file(id) => { root.download_file(id); }
-                        delete_file(id) => { root.delete_file(id); }
-                        rename_file(id, name) => { root.rename_file(id, name); }
-                        copy_file(id) => { root.copy_file(id); }
-                        get_link(id) => { root.get_link(id); }
-                        cancel_task(id) => { root.cancel_task(id); }
-                        make_drag_data(id, name, is_dir) => {
-                            root.make_drag_data(id, name, is_dir);
-                        }
-                        drop_can_accept(event, folder_id) => {
-                            root.drop_can_accept(event, folder_id);
-                        }
-                        drop_requested(event, folder_id) => {
-                            root.drop_requested(event, folder_id);
-                        }
-                    }
-                }
-
-                Rectangle {
-                    width: parent.width;
-                    height: parent.height;
-                    x: root.current_page == 1 ? 0px : (root.current_page > 1 ? -28px : 28px);
-                    opacity: root.current_page == 1 ? 1.0 : 0.0;
-                    animate x { duration: 220ms; easing: ease-in-out; }
-                    animate opacity { duration: 180ms; easing: ease-in-out; }
-
-                    CloudPage {
-                        width: parent.width;
-                        height: parent.height;
-                        visible: root.current_page == 1;
-                        page_title: "家庭云";
-                        page_subtitle: "与家人共享和管理文件";
-                        files: root.file_list;
-                        current_path: root.current_path;
-                        status_text: root.status_text;
-                        account_name: root.account_name;
-                        total_space: root.total_space;
-                        used_space: root.used_space;
-                        capacity_ratio: root.capacity_ratio;
-                        selected_id: root.selected_id;
-                        renaming_id: root.renaming_id;
-                        transfers: root.transfer_list;
-                        searching: root.searching;
+                        search_loading: root.search_loading;
                         search_keyword: root.search_keyword;
                         search_results: root.search_results;
                         drop-active: root.drop-active;

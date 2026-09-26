@@ -1,8 +1,9 @@
 //! 应用控制器：桥接 UI 事件与 tianyi-core 异步操作
 
-use crate::app::MainWindow;
+use crate::app::{MainWindow, DragOutApi};
 use crate::backend::{invoke_ui, Backend};
-use slint::{SharedString, Weak};
+use slint::{ComponentHandle, SharedString, Weak};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
@@ -98,9 +99,19 @@ pub struct Controller {
     path_stack: Mutex<Vec<(String, String)>>,
     current_folder: Mutex<String>,
     last_list: Mutex<Vec<FileObject>>,
+    /// 当前目录的快照；搜索结束时用于恢复文件操作上下文
+    directory_list: Mutex<Vec<FileObject>>,
+    /// 丢弃过期的目录、空间切换和搜索响应
+    list_revision: AtomicU64,
+    search_revision: AtomicU64,
+    search_active: AtomicBool,
+    space_revision: AtomicU64,
+    status_notice: Mutex<Option<String>>,
     tasks: Arc<TaskManager>,
     /// 拖拽状态（与 winit 事件钩子共享）
     drag_state: Mutex<Option<&'static crate::DragDropState>>,
+    /// 拖出下载进行中标记（防止重复触发）
+    drag_out_busy: AtomicBool,
     /// 本会话启动时间戳（秒），传输列表只显示本会话创建的任务
     session_start: i64,
 }
@@ -118,8 +129,15 @@ impl Controller {
             path_stack: Mutex::new(Vec::new()),
             current_folder: Mutex::new("-11".to_string()),
             last_list: Mutex::new(Vec::new()),
+            directory_list: Mutex::new(Vec::new()),
+            list_revision: AtomicU64::new(0),
+            search_revision: AtomicU64::new(0),
+            search_active: AtomicBool::new(false),
+            space_revision: AtomicU64::new(0),
+            status_notice: Mutex::new(None),
             tasks: Arc::new(tasks),
             drag_state: Mutex::new(None),
+            drag_out_busy: AtomicBool::new(false),
             session_start: chrono_used_now(),
         });
         Self::bind_ui(Arc::clone(&c));
@@ -340,6 +358,16 @@ impl Controller {
                 let c = c.clone();
                 c.handle_drop_move(&event, folder_id.as_str());
                 slint::language::DragAction::Move
+            });
+        });
+
+        // 修饰键拖出下载：拖拽云端文件到本地文件夹
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            let api = ui.global::<DragOutApi>();
+            api.on_drag_out(move |id, name| {
+                let c = c.clone();
+                c.handle_drag_out(id.as_str(), name.as_str());
             });
         });
     }
@@ -585,8 +613,17 @@ impl Controller {
     }
 
     fn logout(&self) {
+        self.list_revision.fetch_add(1, Ordering::SeqCst);
+        self.search_revision.fetch_add(1, Ordering::SeqCst);
+        self.search_active.store(false, Ordering::SeqCst);
+        self.space_revision.fetch_add(1, Ordering::SeqCst);
         *self.client.lock().unwrap() = None;
         *self.current_user.lock().unwrap() = String::new();
+        *self.current_folder.lock().unwrap() = "-11".to_string();
+        self.path_stack.lock().unwrap().clear();
+        self.last_list.lock().unwrap().clear();
+        self.directory_list.lock().unwrap().clear();
+        *self.status_notice.lock().unwrap() = None;
         if let Ok(mut cfg) = self.store.load_config() {
             cfg.last_account = String::new();
             let _ = self.store.save_config(&cfg);
@@ -594,21 +631,60 @@ impl Controller {
         self.refresh_saved_accounts();
         self.set_ui_state(|ui| {
             ui.set_logged_in(false);
+            ui.set_current_page(0);
             ui.set_account_name(SharedString::default());
             ui.set_file_list(slint::ModelRc::default());
+            ui.set_search_results(slint::ModelRc::default());
+            ui.set_searching(false);
+            ui.set_search_loading(false);
+            ui.set_search_keyword(SharedString::default());
+            ui.set_current_path(SharedString::default());
+            ui.set_selected_id(SharedString::default());
+            ui.set_renaming_id(SharedString::default());
+            ui.set_total_space(SharedString::from("0 B"));
+            ui.set_used_space(SharedString::from("0 B"));
+            ui.set_capacity_ratio(0.0);
             ui.set_login_error(SharedString::default());
+            ui.set_status_text(SharedString::from("已退出登录"));
         });
     }
 
     fn switch_space(self: &Arc<Self>, space: &str) {
-        if let Some(c) = self.client() {
-            c.set_account(|acc| acc.space_type = space.to_string());
+        let space = if space == "family" { "family" } else { "personal" }.to_string();
+        let revision = self.space_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.list_revision.fetch_add(1, Ordering::SeqCst);
+        self.search_revision.fetch_add(1, Ordering::SeqCst);
+        self.search_active.store(false, Ordering::SeqCst);
+        if let Some(client) = self.client() {
+            client.set_account(|acc| acc.space_type = space.clone());
         }
         *self.current_folder.lock().unwrap() = "-11".to_string();
-        *self.path_stack.lock().unwrap() = Vec::new();
+        self.path_stack.lock().unwrap().clear();
+        self.last_list.lock().unwrap().clear();
+        self.directory_list.lock().unwrap().clear();
+        *self.status_notice.lock().unwrap() = None;
+        let switching = Arc::clone(self);
+        self.set_ui_state(move |ui| {
+            if switching.space_revision.load(Ordering::SeqCst) != revision {
+                return;
+            }
+            ui.set_file_list(slint::ModelRc::default());
+            ui.set_search_results(slint::ModelRc::default());
+            ui.set_searching(false);
+            ui.set_search_loading(false);
+            ui.set_search_keyword(SharedString::default());
+            ui.set_current_path(SharedString::default());
+            ui.set_selected_id(SharedString::default());
+            ui.set_renaming_id(SharedString::default());
+            ui.set_total_space(SharedString::from("0 B"));
+            ui.set_used_space(SharedString::from("0 B"));
+            ui.set_capacity_ratio(0.0);
+            ui.set_status_text(SharedString::from("正在切换云空间…"));
+        });
+
         if space == "family" {
             // 家庭云需先自动获取 familyId
-            let this = Arc::clone(&self);
+            let this = Arc::clone(self);
             let backend = self.backend.clone();
             let ui = self.ui.clone();
             backend.spawn(move || async move {
@@ -618,19 +694,36 @@ impl Controller {
                             log::info!("family_id 已获取: {id}");
                         }
                         Err(e) => {
-                            invoke_ui(&ui, move |win| {
-                                win.set_status_text(SharedString::from(format!("家庭云: {e}")));
-                            });
-                            // 获取失败则切回个人云
-                            if let Some(client) = this.client() {
-                                client.set_account(|acc| acc.space_type = "personal".to_string());
+                            if this.space_revision.load(Ordering::SeqCst) != revision {
+                                return;
                             }
+                            let fallback = Arc::clone(&this);
+                            let message = format!("家庭云不可用，已返回个人云: {e}");
+                            invoke_ui(&ui, move |win| {
+                                if fallback.space_revision.load(Ordering::SeqCst) != revision {
+                                    return;
+                                }
+                                if let Some(client) = fallback.client() {
+                                    client.set_account(|acc| acc.space_type = "personal".to_string());
+                                }
+                                *fallback.status_notice.lock().unwrap() = Some(message.clone());
+                                win.set_current_page(0);
+                                win.set_status_text(SharedString::from(message));
+                                fallback.refresh_files();
+                                fallback.load_capacity();
+                            });
                             return;
                         }
                     }
                 }
-                this.refresh_files();
-                this.load_capacity();
+                let ready = Arc::clone(&this);
+                invoke_ui(&ui, move |_| {
+                    if ready.space_revision.load(Ordering::SeqCst) != revision {
+                        return;
+                    }
+                    ready.refresh_files();
+                    ready.load_capacity();
+                });
             });
         } else {
             self.refresh_files();
@@ -661,26 +754,12 @@ impl Controller {
     }
 
     fn download_selected(self: &Arc<Self>, id: &str) {
-        // 查找文件信息：从最近加载的列表中获取
-        let name = self
-            .last_list
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|f| f.id == id)
-            .map(|f| f.name.clone());
-        let size = self
-            .last_list
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|f| f.id == id)
-            .map(|f| f.size);
-        let Some(name) = name else {
+        let Some(file) = self.find_in_list(id) else {
             log::warn!("selected file {id} not in last list");
             return;
         };
-        let size = size.unwrap_or(0);
+        let name = file.name;
+        let size = file.size;
         let default_dir = self
             .store
             .load_config()
@@ -931,11 +1010,35 @@ impl Controller {
     }
 
     pub fn refresh_files(self: &Arc<Self>) {
-        let this = Arc::clone(&self);
+        let revision = self.list_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.search_revision.fetch_add(1, Ordering::SeqCst);
+        self.search_active.store(false, Ordering::SeqCst);
+        self.last_list.lock().unwrap().clear();
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let folder_id = self.current_folder.lock().unwrap().clone();
         let path_text = self.current_path_text();
+
+        let this_ui = Arc::clone(self);
+        let loading_path = path_text.clone();
+        invoke_ui(&ui, move |win| {
+            if this_ui.list_revision.load(Ordering::SeqCst) != revision {
+                return;
+            }
+            if this_ui.search_active.load(Ordering::SeqCst) {
+                return;
+            }
+            win.set_file_list(slint::ModelRc::default());
+            win.set_current_path(SharedString::from(loading_path));
+            win.set_status_text(SharedString::from("正在加载文件…"));
+            win.set_searching(false);
+            win.set_search_loading(false);
+            win.set_search_keyword(SharedString::default());
+            win.set_search_results(slint::ModelRc::default());
+            win.set_selected_id(SharedString::default());
+            win.set_renaming_id(SharedString::default());
+        });
 
         backend.spawn(move || async move {
             match this.client() {
@@ -943,23 +1046,53 @@ impl Controller {
                     Ok(files) => {
                         let entries = files_to_entries(&files);
                         let count = files.len();
-                        *this.last_list.lock().unwrap() = files.clone();
                         invoke_ui(&ui, move |win| {
-                                win.set_file_list(entries_model(entries));
-                                win.set_current_path(SharedString::from(path_text));
-                                win.set_status_text(SharedString::from(format!("共 {count} 项")));
-                                win.set_searching(false);
+                            if this.list_revision.load(Ordering::SeqCst) != revision {
+                                return;
+                            }
+                            *this.directory_list.lock().unwrap() = files.clone();
+                            if !this.search_active.load(Ordering::SeqCst) {
+                                *this.last_list.lock().unwrap() = files;
+                                let status = this
+                                    .status_notice
+                                    .lock()
+                                    .unwrap()
+                                    .take()
+                                    .map(|notice| format!("{notice} · 共 {count} 项"))
+                                    .unwrap_or_else(|| format!("共 {count} 项"));
+                                win.set_status_text(SharedString::from(status));
+                            }
+                            win.set_file_list(entries_model(entries));
+                            win.set_current_path(SharedString::from(path_text));
                         });
                     }
                     Err(e) => {
                         invoke_ui(&ui, move |win| {
-                                win.set_status_text(SharedString::from(format!("加载失败: {e}")));
+                            if this.list_revision.load(Ordering::SeqCst) != revision {
+                                return;
+                            }
+                            if this.search_active.load(Ordering::SeqCst) {
+                                return;
+                            }
+                            let status = this
+                                .status_notice
+                                .lock()
+                                .unwrap()
+                                .take()
+                                .map(|notice| format!("{notice} · 加载失败: {e}"))
+                                .unwrap_or_else(|| format!("加载失败: {e}"));
+                            win.set_status_text(SharedString::from(status));
                         });
                     }
                 },
                 None => {
                     invoke_ui(&ui, move |win| {
+                        if this.list_revision.load(Ordering::SeqCst) != revision {
+                            return;
+                        }
+                        if !this.search_active.load(Ordering::SeqCst) {
                             win.set_status_text(SharedString::from("未登录"));
+                        }
                     });
                 }
             }
@@ -967,12 +1100,16 @@ impl Controller {
     }
 
     fn load_capacity(self: &Arc<Self>) {
-        let this = Arc::clone(&self);
+        let revision = self.space_revision.load(Ordering::SeqCst);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         backend.spawn(move || async move {
             if let Some(client) = this.client() {
                 if let Ok(cap) = client.get_capacity().await {
+                    if this.space_revision.load(Ordering::SeqCst) != revision {
+                        return;
+                    }
                     let (total, used) = if client.is_family() {
                         (
                             cap.family_capacity_info.total_size,
@@ -992,6 +1129,9 @@ impl Controller {
                         0.0
                     };
                     invoke_ui(&ui, move |win| {
+                        if this.space_revision.load(Ordering::SeqCst) != revision {
+                            return;
+                        }
                         win.set_total_space(SharedString::from(total_s));
                         win.set_used_space(SharedString::from(used_s));
                         win.set_capacity_ratio(capacity_ratio);
@@ -1231,6 +1371,100 @@ impl Controller {
         *self.drag_state.lock().unwrap() = Some(state);
     }
 
+    /// 修饰键拖出下载：先把云端文件下载到临时目录，再启动系统拖拽，
+    /// 用户把它拖到本地文件夹/桌面即可完成下载。
+    #[cfg(windows)]
+    fn handle_drag_out(self: &Arc<Self>, id: &str, name: &str) {
+        if self.client().is_none() {
+            self.set_ui_state(|ui| {
+                ui.set_status_text(SharedString::from("请先登录"));
+            });
+            return;
+        }
+        let Some(file) = self.find_in_list(id) else {
+            log::warn!("drag out file {id} not in last list");
+            return;
+        };
+        if self.drag_out_busy.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let file = file.clone();
+        let name = name.to_string();
+        let this = Arc::clone(&self);
+        let backend = self.backend.clone();
+        let ui = self.ui.clone();
+        let id = id.to_string();
+        self.set_ui_state(move |win| {
+            win.set_status_text(SharedString::from("正在准备文件，拖到本地文件夹即可下载…"));
+            let api = win.global::<DragOutApi>();
+            api.set_active(true);
+            api.set_active_id(SharedString::from(id.as_str()));
+        });
+        backend.spawn(move || async move {
+            // 下载到临时目录
+            let temp_dir = std::env::temp_dir().join("tianyi-dragout");
+            let _ = std::fs::create_dir_all(&temp_dir);
+            let temp_path = temp_dir.join(&name);
+            let dl_ok = if let Some(client) = this.client() {
+                let opts = tianyi_core::transfer::DownloadOptions::default();
+                let prog: tianyi_core::transfer::ProgressCallback = Arc::new(|_| {});
+                tianyi_core::transfer::download(&client, &file, &temp_path, &opts, prog)
+                    .await
+                    .is_ok()
+            } else {
+                false
+            };
+            if !dl_ok {
+                this.clear_drag_out_active();
+                invoke_ui(&ui, move |win| {
+                    win.set_status_text(SharedString::from("拖出下载失败：无法获取文件"));
+                });
+                this.drag_out_busy.store(false, Ordering::SeqCst);
+                return;
+            }
+            // 启动系统拖拽（阻塞直到松开/取消）
+            let temp_refs = [temp_path.clone()];
+            let dropped = crate::dragout::do_drag_drop(&temp_refs).unwrap_or(false);
+            crate::dragout::cleanup_temp_paths(&temp_refs);
+            this.drag_out_busy.store(false, Ordering::SeqCst);
+            this.clear_drag_out_active();
+            invoke_ui(&ui, move |win| {
+                // 系统拖拽结束后松开左键的消息可能被 OLE 消费，
+                // 主动派发一次 PointerReleased 让 TouchArea 解除按压。
+                use slint::platform::{PointerEventButton, WindowEvent};
+                use slint::LogicalPosition;
+                let _ = win
+                    .window()
+                    .try_dispatch_event(WindowEvent::PointerReleased {
+                        position: LogicalPosition::new(-1000.0, -1000.0),
+                        button: PointerEventButton::Left,
+                    });
+                let msg = if dropped {
+                    format!("已拖出 {name}")
+                } else {
+                    "已取消拖拽".to_string()
+                };
+                win.set_status_text(SharedString::from(msg));
+            });
+        });
+    }
+
+    #[cfg(not(windows))]
+    fn handle_drag_out(self: &Arc<Self>, _id: &str, _name: &str) {
+        self.set_ui_state(|ui| {
+            ui.set_status_text(SharedString::from("当前系统暂不支持拖出下载"));
+        });
+    }
+
+    /// 清除拖出下载的高亮状态
+    fn clear_drag_out_active(&self) {
+        self.set_ui_state(|win| {
+            let api = win.global::<DragOutApi>();
+            api.set_active(false);
+            api.set_active_id(SharedString::default());
+        });
+    }
+
     /// 拖出下载：拖拽云端文件到本地
     /// 从 DropEvent 提取拖拽的源文件信息
     fn dragged_file(event: &slint::language::DropEvent) -> Option<MovedFile> {
@@ -1382,32 +1616,67 @@ impl Controller {
     }
 
     fn search_files(self: &Arc<Self>, keyword: &str) {
-        if keyword.trim().is_empty() {
+        let keyword = keyword.trim().to_string();
+        if keyword.is_empty() {
+            self.clear_search();
             return;
         }
-        let this = Arc::clone(&self);
-        let backend = self.backend.clone();
+
+        let revision = self.search_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.search_active.store(true, Ordering::SeqCst);
+        let directory_snapshot = self.directory_list.lock().unwrap().clone();
+        *self.last_list.lock().unwrap() = directory_snapshot;
+        let this = Arc::clone(self);
         let ui = self.ui.clone();
-        let keyword = keyword.to_string();
+        let visible_keyword = keyword.clone();
+        let search_ui = Arc::clone(self);
+        self.set_ui_state(move |win| {
+            if search_ui.search_revision.load(Ordering::SeqCst) != revision {
+                return;
+            }
+            win.set_searching(true);
+            win.set_search_loading(true);
+            win.set_search_keyword(SharedString::from(visible_keyword));
+            win.set_search_results(slint::ModelRc::default());
+            win.set_status_text(SharedString::from("搜索中…"));
+        });
+
+        let backend = self.backend.clone();
         backend.spawn(move || async move {
+            // 输入框逐字编辑时只保留最后一个关键词的请求。
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            if this.search_revision.load(Ordering::SeqCst) != revision {
+                return;
+            }
             if let Some(client) = this.client() {
                 match client.search_files(&keyword).await {
                     Ok(files) => {
                         let entries = files_to_entries(&files);
                         let count = files.len();
-                        // Keep context-menu actions (download, delete, rename, copy)
-                        // working for items returned by search as well.
-                        *this.last_list.lock().unwrap() = files.clone();
                         invoke_ui(&ui, move |win| {
-                                win.set_search_results(entries_model(entries));
-                                win.set_searching(true);
-                                win.set_search_keyword(SharedString::from(keyword.clone()));
-                                win.set_status_text(SharedString::from(format!("找到 {count} 项")));
+                            if this.search_revision.load(Ordering::SeqCst) != revision {
+                                return;
+                            }
+                            *this.last_list.lock().unwrap() = files;
+                            win.set_search_results(entries_model(entries));
+                            win.set_searching(true);
+                            win.set_search_loading(false);
+                            win.set_search_keyword(SharedString::from(keyword));
+                            let status = if count == 0 {
+                                "没有找到匹配的文件".to_string()
+                            } else {
+                                format!("找到 {count} 项")
+                            };
+                            win.set_status_text(SharedString::from(status));
                         });
                     }
                     Err(e) => {
                         invoke_ui(&ui, move |win| {
-                                win.set_status_text(SharedString::from(format!("搜索失败: {e}")));
+                            if this.search_revision.load(Ordering::SeqCst) != revision {
+                                return;
+                            }
+                            win.set_search_loading(false);
+                            win.set_status_text(SharedString::from(format!("搜索失败: {e}")));
                         });
                     }
                 }
@@ -1415,10 +1684,24 @@ impl Controller {
         });
     }
 
-    fn clear_search(&self) {
-        self.set_ui_state(|ui| {
+    fn clear_search(self: &Arc<Self>) {
+        let revision = self.search_revision.fetch_add(1, Ordering::SeqCst) + 1;
+        self.search_active.store(false, Ordering::SeqCst);
+        let files = self.directory_list.lock().unwrap().clone();
+        *self.last_list.lock().unwrap() = files.clone();
+        let entries = files_to_entries(&files);
+        let count = files.len();
+        let search_ui = Arc::clone(self);
+        self.set_ui_state(move |ui| {
+            if search_ui.search_revision.load(Ordering::SeqCst) != revision {
+                return;
+            }
             ui.set_searching(false);
+            ui.set_search_loading(false);
+            ui.set_search_keyword(SharedString::default());
             ui.set_search_results(slint::ModelRc::default());
+            ui.set_file_list(entries_model(entries));
+            ui.set_status_text(SharedString::from(format!("共 {count} 项")));
         });
     }
 

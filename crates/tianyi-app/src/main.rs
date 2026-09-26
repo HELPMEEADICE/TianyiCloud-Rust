@@ -3,6 +3,8 @@
 mod app;
 mod backend;
 mod controller;
+#[cfg(windows)]
+mod dragout;
 
 use app::MainWindow;
 use backend::Backend;
@@ -66,6 +68,15 @@ fn install_drag_drop(ui: &Weak<MainWindow>, state: &'static DragDropState) {
     let ui: Weak<MainWindow> = ui.clone();
     window.on_winit_window_event(move |_slint_window, event| {
         match event {
+            winit::event::WindowEvent::ModifiersChanged(mods) => {
+                // Shift/Alt 拖文件行 = 拖出下载；普通拖动保留为网盘内移动
+                use winit::keyboard::ModifiersState;
+                let s = mods.state();
+                let armed = s.contains(ModifiersState::SHIFT) || s.contains(ModifiersState::ALT);
+                if let Some(app) = ui.upgrade() {
+                    app.global::<crate::app::DragOutApi>().set_mod_pressed(armed);
+                }
+            }
             winit::event::WindowEvent::HoveredFile(_) => {
                 state.hovering.store(true, Ordering::SeqCst);
                 // 由控制器根据当前目录刷新遮罩
