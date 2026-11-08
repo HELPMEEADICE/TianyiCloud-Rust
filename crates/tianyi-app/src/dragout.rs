@@ -6,16 +6,18 @@
 
 use windows::core::implement;
 use windows::Win32::Foundation::{
-    BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, GlobalFree, POINT,
+    GlobalFree, BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, POINT,
 };
 use windows::Win32::System::Com::{
-    FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA,
+    IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, FORMATETC,
     STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT};
+use windows::Win32::System::Memory::{
+    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE, GMEM_ZEROINIT,
+};
 use windows::Win32::System::Ole::{
-    DoDragDrop, OleInitialize, OleUninitialize, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE,
-    DROPEFFECT_NONE, IDropSource, IDropSource_Impl,
+    DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, OleUninitialize, DROPEFFECT,
+    DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE,
 };
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
@@ -72,16 +74,26 @@ impl IDataObject_Impl for DropSourceData_Impl {
                 let _ = GlobalFree(hglobal);
                 return Err(windows::core::Error::from_win32());
             }
-            std::ptr::copy_nonoverlapping(self.hdrop_bytes.as_ptr(), dst as *mut u8, self.hdrop_bytes.len());
+            std::ptr::copy_nonoverlapping(
+                self.hdrop_bytes.as_ptr(),
+                dst as *mut u8,
+                self.hdrop_bytes.len(),
+            );
             let _ = GlobalUnlock(hglobal);
-            let mut medium = STGMEDIUM::default();
-            medium.tymed = TYMED_HGLOBAL.0 as u32;
-            medium.u = STGMEDIUM_0 { hGlobal: hglobal };
+            let medium = STGMEDIUM {
+                tymed: TYMED_HGLOBAL.0 as u32,
+                u: STGMEDIUM_0 { hGlobal: hglobal },
+                ..Default::default()
+            };
             Ok(medium)
         }
     }
 
-    fn GetDataHere(&self, _pformatetc: *const FORMATETC, _pmedium: *mut STGMEDIUM) -> windows_core::Result<()> {
+    fn GetDataHere(
+        &self,
+        _pformatetc: *const FORMATETC,
+        _pmedium: *mut STGMEDIUM,
+    ) -> windows_core::Result<()> {
         Err(windows::core::Error::from_win32())
     }
 

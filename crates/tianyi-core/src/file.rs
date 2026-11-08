@@ -38,17 +38,29 @@ impl FileKind {
 }
 
 /// 图片扩展名集合
-const IMAGE_EXT: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "ico", "heic"];
+const IMAGE_EXT: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "ico", "heic",
+];
 /// 视频扩展名集合
-const VIDEO_EXT: &[&str] = &["mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "rmvb"];
+const VIDEO_EXT: &[&str] = &[
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "rmvb",
+];
 /// 音频扩展名集合
-const AUDIO_EXT: &[&str] = &["mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "ape", "alac"];
+const AUDIO_EXT: &[&str] = &[
+    "mp3", "wav", "flac", "aac", "ogg", "m4a", "opus", "wma", "ape", "alac",
+];
 /// 文本扩展名集合
-const TEXT_EXT: &[&str] = &["txt", "md", "log", "json", "xml", "yml", "yaml", "toml", "ini", "conf", "cfg", "csv", "tsv", "srt", "vtt", "sh", "bat", "py", "rs", "go", "c", "h", "cpp", "java", "js", "ts", "html", "css", "sql", "php", "rb", "kt"];
+const TEXT_EXT: &[&str] = &[
+    "txt", "md", "log", "json", "xml", "yml", "yaml", "toml", "ini", "conf", "cfg", "csv", "tsv",
+    "srt", "vtt", "sh", "bat", "py", "rs", "go", "c", "h", "cpp", "java", "js", "ts", "html",
+    "css", "sql", "php", "rb", "kt",
+];
 /// 压缩包扩展名集合
 const ARCHIVE_EXT: &[&str] = &["zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz", "zst"];
 /// Office 扩展名集合
-const OFFICE_EXT: &[&str] = &["doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp"];
+const OFFICE_EXT: &[&str] = &[
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+];
 
 /// 根据文件名判断类别
 pub fn classify(name: &str) -> FileKind {
@@ -168,7 +180,9 @@ fn windows_player_command(name: &str) -> Option<(String, Vec<String>)> {
     // 1. 用户选择的应用（UserChoice，优先级最高）
     let prog_id = {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let path = format!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext_key}\UserChoice");
+        let path = format!(
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\{ext_key}\UserChoice"
+        );
         hkcu.open_subkey(path)
             .ok()
             .and_then(|k| k.get_value::<String, _>("ProgId").ok())
@@ -311,9 +325,7 @@ pub fn open_with_system(path: &Path) -> Result<(), String> {
         let cmd = std::process::Command::new("cmd")
             .args(["/C", "start", "", &path])
             .spawn();
-        return cmd
-            .map(|_| ())
-            .map_err(|e| format!("open file: {e}"));
+        cmd.map(|_| ()).map_err(|e| format!("open file: {e}"))
     }
 
     #[cfg(target_os = "macos")]
@@ -390,7 +402,10 @@ mod tests {
         // 普通：程序路径含空格，参数含 %1
         assert_eq!(
             split_command_line(r#""C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe" "%1""#),
-            vec![r#"C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe"#, "%1"]
+            vec![
+                r#"C:\Program Files\DAUM\PotPlayer\PotPlayerMini64.exe"#,
+                "%1"
+            ]
         );
         // 无引号路径
         assert_eq!(

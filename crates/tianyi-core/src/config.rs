@@ -177,10 +177,7 @@ mod tests {
 
     #[test]
     fn test_app_store_save_token() {
-        let dir = std::env::temp_dir().join(format!(
-            "tianyi-config-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("tianyi-config-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let store = AppStore::new(Some(dir.clone())).unwrap();
 

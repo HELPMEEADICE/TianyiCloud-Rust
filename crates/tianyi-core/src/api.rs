@@ -76,11 +76,17 @@ async fn init_base_params(http: &reqwest::Client) -> Result<LoginParam> {
     );
     let resp = http
         .get(&url)
-        .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
         .send()
         .await
         .map_err(|e| Error::Login(format!("unifyLoginForPC: {e}")))?;
-    let text = resp.text().await.map_err(|e| Error::Login(format!("page body: {e}")))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| Error::Login(format!("page body: {e}")))?;
 
     let captcha_token = extract_param(&text, r"'captchaToken' value='(.+?)'")
         .ok_or_else(|| Error::Login("captchaToken not found".into()))?;
@@ -128,14 +134,20 @@ async fn init_login_param(
 
     // 获取 RSA 公钥
     let resp = http
-        .post(format!("{}/api/logbox/config/encryptConf.do", consts::AUTH_URL))
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .post(format!(
+            "{}/api/logbox/config/encryptConf.do",
+            consts::AUTH_URL
+        ))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
         .form(&[("appId", consts::APP_ID)])
         .send()
         .await?;
     let text = resp.text().await?;
-    let conf: EncryptConfResp = serde_json::from_str(&text)
-        .map_err(|e| Error::Login(format!("parse encryptConf: {e}")))?;
+    let conf: EncryptConfResp =
+        serde_json::from_str(&text).map_err(|e| Error::Login(format!("parse encryptConf: {e}")))?;
 
     let pre = &conf.data.pre;
     let rsa_user = crypto::rsa_encrypt(&conf.data.pub_key, username)?;
@@ -149,10 +161,20 @@ async fn init_login_param(
 /// 判断是否需要验证码
 async fn need_captcha(http: &reqwest::Client, param: &LoginParam) -> Result<bool> {
     let resp = http
-        .post(format!("{}/api/logbox/oauth2/needcaptcha.do", consts::AUTH_URL))
+        .post(format!(
+            "{}/api/logbox/oauth2/needcaptcha.do",
+            consts::AUTH_URL
+        ))
         .header("REQID", &param.req_id)
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .form(&[("appKey", consts::APP_ID), ("accountType", consts::ACCOUNT_TYPE), ("userName", &param.rsa_username)])
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .form(&[
+            ("appKey", consts::APP_ID),
+            ("accountType", consts::ACCOUNT_TYPE),
+            ("userName", &param.rsa_username),
+        ])
         .send()
         .await?;
     let text = resp.text().await?;
@@ -173,7 +195,10 @@ async fn fetch_captcha(http: &reqwest::Client, param: &LoginParam) -> Result<Str
     if bytes.len() <= 20 {
         return Err(Error::Login("captcha image empty".into()));
     }
-    Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes))
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        bytes,
+    ))
 }
 
 /// 密码登录
@@ -217,10 +242,16 @@ pub async fn login_by_password(
     ];
 
     let resp = http
-        .post(format!("{}/api/logbox/oauth2/loginSubmit.do", consts::AUTH_URL))
+        .post(format!(
+            "{}/api/logbox/oauth2/loginSubmit.do",
+            consts::AUTH_URL
+        ))
         .header("REQID", &param.req_id)
         .header("lt", &param.lt)
-        .header(reqwest::header::CONTENT_TYPE, "application/json;charset=UTF-8")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/json;charset=UTF-8",
+        )
         .form(&form)
         .send()
         .await?;
@@ -251,10 +282,14 @@ async fn get_session(http: &reqwest::Client, redirect_url: &str) -> Result<AppSe
         .send()
         .await?;
     let text = resp.text().await?;
-    log::info!("getSessionForPC redirectURL={} resp={}", redirect_url.chars().take(150).collect::<String>(), text.chars().take(300).collect::<String>());
+    log::info!(
+        "getSessionForPC redirectURL={} resp={}",
+        redirect_url.chars().take(150).collect::<String>(),
+        text.chars().take(300).collect::<String>()
+    );
 
-    let token: AppSessionResp = serde_json::from_str(&text)
-        .map_err(|e| Error::Login(format!("parse session: {e}")))?;
+    let token: AppSessionResp =
+        serde_json::from_str(&text).map_err(|e| Error::Login(format!("parse session: {e}")))?;
     if token.has_error() || token.session_key.is_empty() {
         let msg = if token.res_message.is_empty() {
             text.clone()
@@ -303,15 +338,22 @@ async fn get_session_from_brief(http: &reqwest::Client) -> Result<AppSessionResp
         let session_key = v["sessionKey"].as_str().unwrap_or("").to_string();
         let login_name = v["loginName"].as_str().unwrap_or("").to_string();
         if session_key.is_empty() {
-            log::warn!("getUserBriefInfo no sessionKey: {}", text.chars().take(200).collect::<String>());
+            log::warn!(
+                "getUserBriefInfo no sessionKey: {}",
+                text.chars().take(200).collect::<String>()
+            );
             continue;
         }
-        let mut resp = AppSessionResp::default();
-        resp.session_key = session_key;
-        resp.login_name = login_name;
+        let resp = AppSessionResp {
+            session_key,
+            login_name,
+            ..Default::default()
+        };
         return Ok(resp);
     }
-    Err(Error::Login("getUserBriefInfo no sessionKey on all paths".into()))
+    Err(Error::Login(
+        "getUserBriefInfo no sessionKey on all paths".into(),
+    ))
 }
 
 /// 获取二维码参数（uuid/encryuuid 等）
@@ -319,14 +361,17 @@ async fn get_qr_uuid(http: &reqwest::Client) -> Result<QRParam> {
     let base = init_base_params(http).await?;
     let resp = http
         .post(format!("{}/api/logbox/oauth2/getUUID.do", consts::AUTH_URL))
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
         .header("REQID", &base.req_id)
         .form(&[("appId", consts::APP_ID)])
         .send()
         .await?;
     let text = resp.text().await?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Login(format!("parse uuid: {e}")))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| Error::Login(format!("parse uuid: {e}")))?;
 
     Ok(QRParam {
         lt: base.lt,
@@ -374,13 +419,16 @@ pub async fn check_qr_status(
         .header("REQID", &param.req_id)
         .header("lt", &param.lt)
         .header("user-finger", "1586280166")
-        .header(reqwest::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
         .form(&form)
         .send()
         .await?;
     let text = resp.text().await?;
-    let v: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| Error::Login(format!("parse qr status: {e}")))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| Error::Login(format!("parse qr status: {e}")))?;
 
     // 可能返回 result:-103（参数错误）或 status
     let status = v["status"].as_i64().unwrap_or_else(|| {
@@ -431,7 +479,9 @@ pub async fn poll_qr_login(
                         Ok(s) => return Ok(s),
                         Err(Error::Login(msg)) if msg.contains("LoginRespIsNull") => {
                             // 兜底：GET redirectUrl 激活会话后重试，仍失败则回退 getUserBriefInfo
-                            log::warn!("getSessionForPC LoginRespIsNull, try GET redirectUrl then retry");
+                            log::warn!(
+                                "getSessionForPC LoginRespIsNull, try GET redirectUrl then retry"
+                            );
                             if let Ok(resp) = http.get(&url).send().await {
                                 let final_url = resp.url().to_string();
                                 if let Ok(s) = get_session(http, &final_url).await {
@@ -486,7 +536,10 @@ mod tests {
     #[test]
     fn test_extract_param() {
         let html = "<input name=\"j-captchaToken\" 'captchaToken' value='abc123'> <script>var lt = \"ltval\"; var paramId = \"pid\"; var reqId = \"rid\";</script>";
-        assert_eq!(extract_param(html, r"'captchaToken' value='(.+?)'").unwrap(), "abc123");
+        assert_eq!(
+            extract_param(html, r"'captchaToken' value='(.+?)'").unwrap(),
+            "abc123"
+        );
         assert_eq!(extract_param(html, r#"lt = "(.+?)""#).unwrap(), "ltval");
         assert_eq!(extract_param(html, r#"paramId = "(.+?)""#).unwrap(), "pid");
         assert_eq!(extract_param(html, r#"reqId = "(.+?)""#).unwrap(), "rid");

@@ -51,9 +51,8 @@ pub fn signature(
     params: &str,
 ) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"://[^/]+((/[^/\s?#]+)*)").expect("invalid urlpath regex")
-    });
+    let re =
+        RE.get_or_init(|| Regex::new(r"://[^/]+((/[^/\s?#]+)*)").expect("invalid urlpath regex"));
 
     let urlpath = re
         .captures(full_url)
@@ -152,7 +151,9 @@ mod tests {
         assert_eq!(part_size(11 * 1024 * 1024 * 999), 20 * 1024 * 1024);
         // 超过 20MiB*999 后按 1999 分片向上取 10MiB 倍数
         let big = 11 * 1024 * 1024 * 2000; // 22000 MiB
-        let multiplier = ((big as f64 / 1999.0 / (10 * 1024 * 1024) as f64).ceil().max(5.0)) as i64;
+        let multiplier = ((big as f64 / 1999.0 / (10 * 1024 * 1024) as f64)
+            .ceil()
+            .max(5.0)) as i64;
         assert_eq!(part_size(big), multiplier * 10 * 1024 * 1024);
     }
 

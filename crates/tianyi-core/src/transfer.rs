@@ -144,7 +144,7 @@ pub async fn upload(
 
     // 计算分片数
     let part_size = part_size as u64;
-    let count = ((file_size + part_size - 1) / part_size).max(1) as usize;
+    let count = file_size.div_ceil(part_size).max(1) as usize;
     let last_size = if file_size % part_size == 0 {
         part_size
     } else {
@@ -182,10 +182,6 @@ pub async fn upload(
         let sem = sem.clone();
         let uploaded = uploaded.clone();
         let progress = progress.clone();
-        let part_size_u = part_size_u;
-        let file_size_u = file_size_u;
-        let last_size = last_size;
-        let count = count;
         let local_path = local_path.clone();
 
         handles.push(tokio::spawn(async move {
@@ -246,7 +242,10 @@ pub async fn upload(
     // 提交
     info!("all {} parts uploaded, committing", count);
     let commit = commit_multipart_upload(client, &init.upload_file_id, opts.overwrite).await?;
-    info!("commit ok: file_id={} name={}", commit.user_file_id, commit.file_name);
+    info!(
+        "commit ok: file_id={} name={}",
+        commit.user_file_id, commit.file_name
+    );
 
     // 生成 CAS torrent（可选，异步不影响结果）
     if opts.generate_torrent && !piece_sha1s.is_empty() && file_size > 0 {
@@ -279,10 +278,7 @@ pub async fn upload(
 }
 
 /// 计算整文件 MD5、各分片 MD5、各分片 SHA-1 piece hash
-async fn compute_md5s(
-    path: &Path,
-    part_size: i64,
-) -> Result<(String, Vec<String>, Vec<u8>)> {
+async fn compute_md5s(path: &Path, part_size: i64) -> Result<(String, Vec<String>, Vec<u8>)> {
     use md5::Digest;
     use md5::Md5;
     use sha1::Sha1;
@@ -299,13 +295,14 @@ async fn compute_md5s(
     // 而非分片原始字节的 hex
     // 与 OpenList 189pc FastUpload 保持一致：
     // 分片 MD5 = MD5(分片内容) 的大写 hex；partInfo 的 base64 由这些 hex 解码而来
-    let flush_part = |part_buf: &[u8], whole: &mut Md5, parts: &mut Vec<String>, part_sha1s: &mut Vec<u8>| {
-        whole.update(part_buf);
-        let h = Md5::digest(part_buf);
-        parts.push(hex::encode_upper(h.as_slice()));
-        let h = Sha1::digest(part_buf);
-        part_sha1s.extend_from_slice(&h);
-    };
+    let flush_part =
+        |part_buf: &[u8], whole: &mut Md5, parts: &mut Vec<String>, part_sha1s: &mut Vec<u8>| {
+            whole.update(part_buf);
+            let h = Md5::digest(part_buf);
+            parts.push(hex::encode_upper(h.as_slice()));
+            let h = Sha1::digest(part_buf);
+            part_sha1s.extend_from_slice(&h);
+        };
 
     loop {
         let n = file.read(&mut buf).await?;
@@ -323,7 +320,7 @@ async fn compute_md5s(
     }
     if parts.is_empty() {
         // 空文件：一个分片，MD5 为空内容 MD5；无需 SHA-1 piece hash
-        let h = Md5::digest(&[]);
+        let h = Md5::digest([]);
         parts.push(hex::encode_upper(h.as_slice()));
     }
 
@@ -332,6 +329,7 @@ async fn compute_md5s(
 }
 
 /// 秒传
+#[allow(clippy::too_many_arguments)]
 async fn try_rapid_upload(
     client: &TianyiClient,
     parent_id: &str,
@@ -343,13 +341,7 @@ async fn try_rapid_upload(
     overwrite: bool,
 ) -> Result<Option<CommitFile>> {
     let init = init_multipart_upload(
-        client,
-        parent_id,
-        file_name,
-        file_size,
-        file_md5,
-        slice_md5s,
-        slice_size,
+        client, parent_id, file_name, file_size, file_md5, slice_md5s, slice_size,
     )
     .await?;
 
@@ -421,10 +413,7 @@ pub async fn get_multi_upload_urls(
     let is_family = client.is_family();
     let mut params = std::collections::HashMap::new();
     params.insert("uploadFileId".to_string(), upload_file_id.to_string());
-    params.insert(
-        "partInfo".to_string(),
-        part_infos.join(","),
-    );
+    params.insert("partInfo".to_string(), part_infos.join(","));
 
     let url = if is_family {
         format!("{}/family/getMultiUploadUrls", client.upload_base_url())
@@ -507,7 +496,10 @@ pub async fn put_part(
     if !status.is_success() {
         return Err(Error::Api(format!(
             "put part http {status}: {}",
-            String::from_utf8_lossy(&body).chars().take(200).collect::<String>()
+            String::from_utf8_lossy(&body)
+                .chars()
+                .take(200)
+                .collect::<String>()
         )));
     }
     Ok(())
@@ -525,7 +517,11 @@ pub async fn commit_multipart_upload(
     params.insert("isLog".to_string(), "0".to_string());
     params.insert(
         "opertype".to_string(),
-        if overwrite { "3".to_string() } else { "1".to_string() },
+        if overwrite {
+            "3".to_string()
+        } else {
+            "1".to_string()
+        },
     );
 
     let url = if is_family {
@@ -610,13 +606,8 @@ pub async fn upload_folder_contents_recursive(
         if ft.is_dir() {
             let name = entry.file_name().to_str().unwrap_or("folder").to_string();
             let child = client.create_folder(folder_id, &name).await?;
-            let sub = upload_folder_contents_recursive(
-                client,
-                &child.id,
-                &path,
-                opts,
-                progress.clone(),
-            );
+            let sub =
+                upload_folder_contents_recursive(client, &child.id, &path, opts, progress.clone());
             count += Box::pin(sub).await?;
         } else {
             upload(client, folder_id, &path, opts, progress.clone()).await?;
@@ -689,6 +680,7 @@ pub async fn download(
         }
         tokio::fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .read(true)
             .open(&part_path)
@@ -713,12 +705,10 @@ pub async fn download(
         let client = client.clone_for_transfer();
         let part_path = part_path.clone();
         let progress = progress.clone();
-        let file_size = file_size;
 
         handles.push(tokio::spawn(async move {
             download_chunk(client, &dl_url, start, end, &part_path).await?;
             progress(end);
-            let _ = file_size;
             Ok::<(), Error>(())
         }));
     }
@@ -758,7 +748,7 @@ async fn download_chunk(
     if status != reqwest::StatusCode::PARTIAL_CONTENT && status != reqwest::StatusCode::OK {
         return Err(Error::Api(format!(
             "download chunk http {status}: {}",
-            String::from_utf8_lossy(&resp.bytes().await.unwrap_or_default().as_ref())
+            String::from_utf8_lossy(resp.bytes().await.unwrap_or_default().as_ref())
                 .chars()
                 .take(200)
                 .collect::<String>()
@@ -792,7 +782,9 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("tianyi_md5_test.bin");
         let mut f = std::fs::File::create(&path).unwrap();
-        let data: Vec<u8> = (0..10 * 1024 * 1024 + 123).map(|i| (i % 251) as u8).collect();
+        let data: Vec<u8> = (0..10 * 1024 * 1024 + 123)
+            .map(|i| (i % 251) as u8)
+            .collect();
         f.write_all(&data).unwrap();
         drop(f);
 
@@ -838,21 +830,21 @@ mod tests {
         // 4GB 边界
         let size_4g: i64 = 4 * 1024 * MB;
         let ps_4g = crypto::part_size(size_4g) as u64;
-        let cnt_4g = ((size_4g as u64 + ps_4g - 1) / ps_4g) as i64;
+        let cnt_4g = (size_4g as u64).div_ceil(ps_4g) as i64;
         assert_eq!(ps_4g, 10 * MB as u64, "4GB should still use 10MiB slices");
         assert!(cnt_4g <= 999, "4GB part count {cnt_4g} exceeds 999");
 
         // 10GB 边界（此前固定 10MiB 分片会达到 1024 片，超出服务端限制）
         let size_10g: i64 = 10 * 1024 * MB;
         let ps_10g = crypto::part_size(size_10g) as u64;
-        let cnt_10g = ((size_10g as u64 + ps_10g - 1) / ps_10g) as i64;
+        let cnt_10g = (size_10g as u64).div_ceil(ps_10g) as i64;
         assert_eq!(ps_10g, 20 * MB as u64, ">9.5GB should use 20MiB slices");
         assert!(cnt_10g <= 999, "10GB part count {cnt_10g} exceeds 999");
 
         // 100GB：按 1999 片封顶分配更大分片
         let size_100g: i64 = 100 * 1024 * MB;
         let ps_100g = crypto::part_size(size_100g) as u64;
-        let cnt_100g = ((size_100g as u64 + ps_100g - 1) / ps_100g) as i64;
+        let cnt_100g = (size_100g as u64).div_ceil(ps_100g) as i64;
         assert!(cnt_100g <= 1999, "100GB part count {cnt_100g} exceeds 1999");
         assert!(
             ps_100g >= 50 * MB as u64,
@@ -919,7 +911,11 @@ mod tests {
                     }
                     let req = String::from_utf8_lossy(&head);
                     let req_line = req.lines().next().unwrap_or("").to_string();
-                    let path = req_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+                    let path = req_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
                     // 读取请求体（PUT 上传分片带有 Content-Length body），避免连接被中止
                     if path.starts_with("/part") {
                         let cl = req
@@ -939,7 +935,9 @@ mod tests {
                         }
                     }
 
-                    let mut headers = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".to_string();
+                    let mut headers =
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                            .to_string();
                     let body = if path.starts_with("/person/initMultiUpload") {
                         r#"{"code":"SUCCESS","data":{"uploadFileId":"U1","fileDataExists":0,"uploadType":0,"uploadHost":""}}"#.to_string()
                     } else if path.starts_with("/person/getMultiUploadUrls") {
@@ -983,7 +981,9 @@ mod tests {
         let dir = std::env::temp_dir();
         let file_path = dir.join("tianyi_mock_upload.bin");
         let mut f = std::fs::File::create(&file_path).unwrap();
-        let data: Vec<u8> = (0..(10 * 1024 * 1024 + 7)).map(|i| (i % 253) as u8).collect();
+        let data: Vec<u8> = (0..(10 * 1024 * 1024 + 7))
+            .map(|i| (i % 253) as u8)
+            .collect();
         f.write_all(&data).unwrap();
         drop(f);
 
@@ -1005,7 +1005,11 @@ mod tests {
 
         assert_eq!(commit.user_file_id, "F1");
         assert_eq!(done.load(Ordering::SeqCst), data.len() as u64);
-        assert_eq!(put_count.load(Ordering::SeqCst), 2, "both parts should be PUT");
+        assert_eq!(
+            put_count.load(Ordering::SeqCst),
+            2,
+            "both parts should be PUT"
+        );
         assert!(
             !commit_lazy.load(Ordering::SeqCst),
             "commit must NOT carry lazyCheck without fileMd5/sliceMd5"

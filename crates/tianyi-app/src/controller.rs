@@ -1,6 +1,6 @@
 //! 应用控制器：桥接 UI 事件与 tianyi-core 异步操作
 
-use crate::app::{MainWindow, DragOutApi};
+use crate::app::{DragOutApi, MainWindow};
 use crate::backend::{invoke_ui, Backend};
 use slint::{ComponentHandle, SharedString, Weak};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -78,14 +78,11 @@ fn decode_png_to_rgba(base64_png: &str) -> image::RgbaImage {
 }
 
 fn rgba_to_slint_image(img: image::RgbaImage) -> slint::Image {
-    let width = img.width() as u32;
-    let height = img.height() as u32;
+    let width = img.width();
+    let height = img.height();
     let raw = img.into_raw();
-    let mut buffer =
-        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
-    buffer
-        .make_mut_bytes()
-        .copy_from_slice(&raw);
+    let mut buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+    buffer.make_mut_bytes().copy_from_slice(&raw);
     slint::Image::from_rgba8(buffer)
 }
 
@@ -408,7 +405,7 @@ impl Controller {
     }
 
     fn handle_qr_login(self: &Arc<Self>) {
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let notifier = AppNotifier { ui };
@@ -445,7 +442,7 @@ impl Controller {
             return;
         };
         self.set_ui_state(|ui| ui.set_login_loading(true));
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let username = username.to_string();
@@ -499,9 +496,7 @@ impl Controller {
             .map(|a| SharedString::from(a.username.clone()))
             .collect();
         self.set_ui_state(move |ui| {
-            ui.set_saved_accounts(
-                slint::ModelRc::new(slint::VecModel::from(names)),
-            );
+            ui.set_saved_accounts(slint::ModelRc::new(slint::VecModel::from(names)));
         });
     }
 
@@ -523,7 +518,7 @@ impl Controller {
             });
             return;
         }
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let notifier = AppNotifier { ui };
@@ -537,8 +532,7 @@ impl Controller {
                 .cookie_store(true)
                 .build()
                 .expect("build http client");
-            let client =
-                TianyiClient::new(AppConfig::default_config(), AccountConfig::default());
+            let client = TianyiClient::new(AppConfig::default_config(), AccountConfig::default());
             let cap_opt = if captcha.is_empty() {
                 None
             } else {
@@ -590,7 +584,7 @@ impl Controller {
         ));
         *self.client.lock().unwrap() = Some(client);
 
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         this.refresh_saved_accounts();
@@ -650,7 +644,12 @@ impl Controller {
     }
 
     fn switch_space(self: &Arc<Self>, space: &str) {
-        let space = if space == "family" { "family" } else { "personal" }.to_string();
+        let space = if space == "family" {
+            "family"
+        } else {
+            "personal"
+        }
+        .to_string();
         let revision = self.space_revision.fetch_add(1, Ordering::SeqCst) + 1;
         self.list_revision.fetch_add(1, Ordering::SeqCst);
         self.search_revision.fetch_add(1, Ordering::SeqCst);
@@ -704,7 +703,8 @@ impl Controller {
                                     return;
                                 }
                                 if let Some(client) = fallback.client() {
-                                    client.set_account(|acc| acc.space_type = "personal".to_string());
+                                    client
+                                        .set_account(|acc| acc.space_type = "personal".to_string());
                                 }
                                 *fallback.status_notice.lock().unwrap() = Some(message.clone());
                                 win.set_current_page(0);
@@ -773,7 +773,7 @@ impl Controller {
         let Some(dest) = picked else {
             return;
         };
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let id = id.to_string();
@@ -810,21 +810,20 @@ impl Controller {
                 let opts = tianyi_core::transfer::DownloadOptions::default();
                 let this_cb = this.clone();
                 let last_refresh = Arc::new(std::sync::atomic::AtomicU64::new(0));
-                let cb: tianyi_core::transfer::ProgressCallback =
-                    Arc::new(move |done| {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
-                        this_cb.update_progress(task_id, size.max(0) as u64, done);
-                        // 节流：最多每 200ms 刷新一次 UI
-                        if now - prev >= 200 {
-                            last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
-                            this_cb.refresh_transfers();
-                        }
-                        log::debug!("download progress: {done}/{size}");
-                    });
+                let cb: tianyi_core::transfer::ProgressCallback = Arc::new(move |done| {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let prev = last_refresh.load(std::sync::atomic::Ordering::SeqCst);
+                    this_cb.update_progress(task_id, size.max(0) as u64, done);
+                    // 节流：最多每 200ms 刷新一次 UI
+                    if now - prev >= 200 {
+                        last_refresh.store(now, std::sync::atomic::Ordering::SeqCst);
+                        this_cb.refresh_transfers();
+                    }
+                    log::debug!("download progress: {done}/{size}");
+                });
                 match tianyi_core::transfer::download(&client, &file, &dest, &opts, cb).await {
                     Ok(_) => {
                         this.tasks.update(task_id, |t| {
@@ -851,7 +850,7 @@ impl Controller {
         let Some(file) = self.find_in_list(id) else {
             return;
         };
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let file = file.clone();
@@ -904,7 +903,7 @@ impl Controller {
             });
             return;
         }
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         backend.spawn(move || async move {
@@ -933,7 +932,7 @@ impl Controller {
             return;
         };
         let dst = self.current_folder.lock().unwrap().clone();
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         backend.spawn(move || async move {
@@ -957,7 +956,7 @@ impl Controller {
     }
 
     fn get_link(self: &Arc<Self>, id: &str) {
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let id = id.to_string();
@@ -967,7 +966,7 @@ impl Controller {
                     Ok(url) => {
                         let copied = copy_to_clipboard(&url).is_ok();
                         let msg = if copied {
-                            format!("下载链接已复制到剪贴板")
+                            "下载链接已复制到剪贴板".to_string()
                         } else {
                             format!("链接: {url}")
                         };
@@ -988,7 +987,12 @@ impl Controller {
 
     /// 从最近加载的文件列表中按 id 查找
     fn find_in_list(&self, id: &str) -> Option<FileObject> {
-        self.last_list.lock().unwrap().iter().find(|f| f.id == id).cloned()
+        self.last_list
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|f| f.id == id)
+            .cloned()
     }
 
     fn navigate_up(self: &Arc<Self>) {
@@ -1200,7 +1204,7 @@ impl Controller {
         }
         self.refresh_transfers();
 
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let folder_id = folder_id.to_string();
@@ -1209,7 +1213,8 @@ impl Controller {
         backend.spawn(move || async move {
             for (path, folder_task_id) in tasks_to_spawn {
                 if path.is_dir() {
-                    this.spawn_folder_upload(&folder_id, &path, folder_task_id).await;
+                    this.spawn_folder_upload(&folder_id, &path, folder_task_id)
+                        .await;
                 } else {
                     this.spawn_file_upload(&folder_id, &path, None).await;
                 }
@@ -1390,7 +1395,7 @@ impl Controller {
         }
         let file = file.clone();
         let name = name.to_string();
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let id = id.to_string();
@@ -1468,9 +1473,10 @@ impl Controller {
     /// 拖出下载：拖拽云端文件到本地
     /// 从 DropEvent 提取拖拽的源文件信息
     fn dragged_file(event: &slint::language::DropEvent) -> Option<MovedFile> {
-        event.data.user_data().and_then(|d| {
-            d.downcast::<MovedFile>().ok().map(|m| m.as_ref().clone())
-        })
+        event
+            .data
+            .user_data()
+            .and_then(|d| d.downcast::<MovedFile>().ok().map(|m| m.as_ref().clone()))
     }
 
     /// 判断目标文件夹是否可接收（拒绝拖到自身）
@@ -1490,11 +1496,7 @@ impl Controller {
     }
 
     /// 移动文件到目标文件夹
-    fn handle_drop_move(
-        self: &Arc<Self>,
-        event: &slint::language::DropEvent,
-        folder_id: &str,
-    ) {
+    fn handle_drop_move(self: &Arc<Self>, event: &slint::language::DropEvent, folder_id: &str) {
         let Some(src) = Self::dragged_file(event) else {
             return;
         };
@@ -1507,7 +1509,7 @@ impl Controller {
         let file = file.clone();
         let folder_id = folder_id.to_string();
         let src_name = src.name.clone();
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         backend.spawn(move || async move {
@@ -1531,7 +1533,7 @@ impl Controller {
     }
 
     fn create_folder(self: &Arc<Self>) {
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let folder_id = self.current_folder.lock().unwrap().clone();
         let backend = self.backend.clone();
         let ui = self.ui.clone();
@@ -1541,13 +1543,13 @@ impl Controller {
                 match client.create_folder(&folder_id, name).await {
                     Ok(_) => {
                         invoke_ui(&ui, move |win| {
-                                win.set_status_text(SharedString::from("文件夹已创建"));
+                            win.set_status_text(SharedString::from("文件夹已创建"));
                         });
                         this.refresh_files();
                     }
                     Err(e) => {
                         invoke_ui(&ui, move |win| {
-                                win.set_status_text(SharedString::from(format!("创建失败: {e}")));
+                            win.set_status_text(SharedString::from(format!("创建失败: {e}")));
                         });
                     }
                 }
@@ -1556,7 +1558,7 @@ impl Controller {
     }
 
     fn preview_file(self: &Arc<Self>, id: &str, name: &str) {
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         let ui = self.ui.clone();
         let id = id.to_string();
@@ -1569,10 +1571,9 @@ impl Controller {
                         // 视频/音频：取直链后交给默认播放器流式播放，无需下载到本地
                         if kind == FileKind::Video || kind == FileKind::Audio {
                             let opened = file::open_media_url_with_player(&name, &url);
-                            let msg = if opened.is_ok() {
-                                format!("已在默认播放器中打开: {name}")
-                            } else {
-                                format!("打开播放器失败: {}", opened.unwrap_err())
+                            let msg = match opened {
+                                Ok(()) => format!("已在默认播放器中打开: {name}"),
+                                Err(err) => format!("打开播放器失败: {err}"),
                             };
                             invoke_ui(&ui, move |win| {
                                 win.set_status_text(SharedString::from(msg));
@@ -1583,9 +1584,11 @@ impl Controller {
                             Ok(path) => {
                                 if kind == FileKind::Image {
                                     invoke_ui(&ui, move |win| {
-                                            let img = load_image_file(&path);
-                                            win.set_captcha_image(img);
-                                            win.set_qr_status(SharedString::from(format!("预览: {name}")));
+                                        let img = load_image_file(&path);
+                                        win.set_captcha_image(img);
+                                        win.set_qr_status(SharedString::from(format!(
+                                            "预览: {name}"
+                                        )));
                                     });
                                 } else {
                                     let _ = file::open_with_system(&path);
@@ -1725,7 +1728,7 @@ impl Controller {
                     "download".into()
                 },
                 size_text: file::format_size(t.file_size).into(),
-                progress: t.progress as f32,
+                progress: t.progress,
                 status: format!("{:?}", t.status).into(),
                 speed: file::format_speed(t.speed).into(),
             })
@@ -1746,7 +1749,7 @@ impl Controller {
             let delta_bytes = done.saturating_sub(t.last_done);
             // 至少 200ms 采样窗口才计算速度，避免抖动
             if delta_ms >= 200 && delta_bytes > 0 {
-                t.speed = delta_bytes as u64 * 1000 / delta_ms;
+                t.speed = delta_bytes * 1000 / delta_ms;
                 t.last_speed_time = now_ms;
                 t.last_done = done;
             } else if t.last_speed_time == 0 {
@@ -1763,7 +1766,7 @@ impl Controller {
     }
 
     pub fn spawn_background(self: &Arc<Self>) {
-        let this = Arc::clone(&self);
+        let this = Arc::clone(self);
         let backend = self.backend.clone();
         backend.spawn(move || async move {
             loop {
@@ -1794,7 +1797,8 @@ fn count_local_files(root: &std::path::Path) -> u64 {
     n
 }
 
-fn files_to_entries(files: &[FileObject]) -> Vec<crate::app::FileEntry> {    files
+fn files_to_entries(files: &[FileObject]) -> Vec<crate::app::FileEntry> {
+    files
         .iter()
         .map(|f| {
             let size_text = if f.is_dir {
@@ -1819,7 +1823,9 @@ fn entries_model(entries: Vec<crate::app::FileEntry>) -> slint::ModelRc<crate::a
     slint::ModelRc::new(slint::VecModel::from(entries))
 }
 
-fn transfers_model(entries: Vec<crate::app::TransferEntry>) -> slint::ModelRc<crate::app::TransferEntry> {
+fn transfers_model(
+    entries: Vec<crate::app::TransferEntry>,
+) -> slint::ModelRc<crate::app::TransferEntry> {
     slint::ModelRc::new(slint::VecModel::from(entries))
 }
 

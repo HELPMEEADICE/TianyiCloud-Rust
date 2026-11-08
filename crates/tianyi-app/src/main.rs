@@ -10,8 +10,8 @@ use app::MainWindow;
 use backend::Backend;
 use slint::{ComponentHandle, Timer, Weak};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// 拖拽进入状态（跨线程由 winit 事件回调与控制器共享）
 struct DragDropState {
@@ -41,10 +41,7 @@ fn center_window(ui: &Weak<MainWindow>) {
     Timer::single_shot(std::time::Duration::from_millis(100), move || {
         let Some(app) = ui.upgrade() else { return };
         app.window().with_winit_window(|win| {
-            let Some(monitor) = win
-                .current_monitor()
-                .or_else(|| win.primary_monitor())
-            else {
+            let Some(monitor) = win.current_monitor().or_else(|| win.primary_monitor()) else {
                 return;
             };
             let mon_pos = monitor.position();
@@ -74,7 +71,8 @@ fn install_drag_drop(ui: &Weak<MainWindow>, state: &'static DragDropState) {
                 let s = mods.state();
                 let armed = s.contains(ModifiersState::SHIFT) || s.contains(ModifiersState::ALT);
                 if let Some(app) = ui.upgrade() {
-                    app.global::<crate::app::DragOutApi>().set_mod_pressed(armed);
+                    app.global::<crate::app::DragOutApi>()
+                        .set_mod_pressed(armed);
                 }
             }
             winit::event::WindowEvent::HoveredFile(_) => {

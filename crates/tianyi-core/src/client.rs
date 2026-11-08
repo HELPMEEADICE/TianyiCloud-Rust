@@ -46,17 +46,9 @@ pub struct TianyiClient {
 }
 
 /// 会话缓存（刷新后更新）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct SessionCache {
     token: TokenInfo,
-}
-
-impl Default for SessionCache {
-    fn default() -> Self {
-        SessionCache {
-            token: TokenInfo::default(),
-        }
-    }
 }
 
 impl TianyiClient {
@@ -78,8 +70,9 @@ impl TianyiClient {
             .timeout(Duration::from_secs(120))
             .build()
             .expect("build http client");
-        let mut session = SessionCache::default();
-        session.token = account.token.clone();
+        let session = SessionCache {
+            token: account.token.clone(),
+        };
         TianyiClient {
             http,
             config,
@@ -190,7 +183,14 @@ impl TianyiClient {
         if let Ok(v) = HeaderValue::from_str(&xid) {
             headers.insert("X-Request-ID", v);
         }
-        let sig = crypto::signature(&session_secret, &session_key, method, url, &date, params_enc);
+        let sig = crypto::signature(
+            &session_secret,
+            &session_key,
+            method,
+            url,
+            &date,
+            params_enc,
+        );
         if let Ok(v) = HeaderValue::from_str(&sig) {
             headers.insert("Signature", v);
         }
@@ -221,10 +221,7 @@ impl TianyiClient {
             .http
             .get(format!("{}/getSessionForPC.action", consts::API_URL))
             .query(&query)
-            .header(
-                reqwest::header::ACCEPT,
-                "application/json;charset=UTF-8",
-            )
+            .header(reqwest::header::ACCEPT, "application/json;charset=UTF-8")
             .send()
             .await?;
         let status = resp.status();
@@ -277,10 +274,7 @@ impl TianyiClient {
         let resp = self
             .http
             .post(format!("{}/api/oauth2/refreshToken.do", consts::AUTH_URL))
-            .header(
-                reqwest::header::ACCEPT,
-                "application/json;charset=UTF-8",
-            )
+            .header(reqwest::header::ACCEPT, "application/json;charset=UTF-8")
             .form(&form)
             .send()
             .await?;
@@ -317,7 +311,12 @@ impl TianyiClient {
     /// 发起带签名的请求，返回 JSON 文本（自动处理会话失效）
     ///
     /// 参数以明文 query 形式发送，签名不含 params（与 OpenList 的文件操作一致）
-    async fn signed_get_json(&self, url: &str, params: HashMap<String, String>, is_family: bool) -> Result<String> {
+    async fn signed_get_json(
+        &self,
+        url: &str,
+        params: HashMap<String, String>,
+        is_family: bool,
+    ) -> Result<String> {
         let mut query: Vec<(String, String)> = crypto::client_suffix();
         query.extend(params.iter().map(|(k, v)| (k.clone(), v.clone())));
         let headers = self.signature_header(url, "GET", "", is_family);
@@ -325,11 +324,24 @@ impl TianyiClient {
             "signed GET {} is_family={} key={} secret_len={}",
             url,
             is_family,
-            headers.get("SessionKey").and_then(|v| v.to_str().ok()).unwrap_or(""),
-            headers.get("Signature").and_then(|v| v.to_str().ok()).map(|s| s.len()).unwrap_or(0),
+            headers
+                .get("SessionKey")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+            headers
+                .get("Signature")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.len())
+                .unwrap_or(0),
         );
 
-        let resp = self.http.get(url).query(&query).headers(headers).send().await?;
+        let resp = self
+            .http
+            .get(url)
+            .query(&query)
+            .headers(headers)
+            .send()
+            .await?;
         let status = resp.status();
         let body = resp.bytes().await?;
         let text = String::from_utf8_lossy(&body).to_string();
@@ -339,7 +351,10 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!("http {status}: {}", text.chars().take(500).collect::<String>())));
+            return Err(Error::Api(format!(
+                "http {status}: {}",
+                text.chars().take(500).collect::<String>()
+            )));
         }
 
         // 业务错误
@@ -378,7 +393,10 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!("http {status}: {}", text.chars().take(500).collect::<String>())));
+            return Err(Error::Api(format!(
+                "http {status}: {}",
+                text.chars().take(500).collect::<String>()
+            )));
         }
 
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
@@ -403,7 +421,13 @@ impl TianyiClient {
         }
         let headers = self.signature_header(url, "GET", &enc_params, is_family);
 
-        let resp = self.http.get(url).query(&query).headers(headers).send().await?;
+        let resp = self
+            .http
+            .get(url)
+            .query(&query)
+            .headers(headers)
+            .send()
+            .await?;
         let status = resp.status();
         let body = resp.bytes().await?;
         let text = String::from_utf8_lossy(&body).to_string();
@@ -413,7 +437,10 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!("http {status}: {}", text.chars().take(500).collect::<String>())));
+            return Err(Error::Api(format!(
+                "http {status}: {}",
+                text.chars().take(500).collect::<String>()
+            )));
         }
 
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
@@ -455,7 +482,8 @@ impl TianyiClient {
     }
 
     /// 无签名 GET（返回原始响应 body，用于验证码图片等）
-    pub async fn get_raw(&self, url: &str, query: HashMap<String, String>) -> Result<bytes::Bytes> {        let mut req = self.http.get(url);
+    pub async fn get_raw(&self, url: &str, query: HashMap<String, String>) -> Result<bytes::Bytes> {
+        let mut req = self.http.get(url);
         if !query.is_empty() {
             req = req.query(&query);
         }
@@ -497,7 +525,11 @@ impl TianyiClient {
             params.insert("orderBy".to_string(), self.account().order_by.clone());
             params.insert(
                 "descending".to_string(),
-                if self.account().order_direction == "desc" { "true".to_string() } else { "false".to_string() },
+                if self.account().order_direction == "desc" {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                },
             );
             if is_family {
                 params.insert("familyId".to_string(), self.account().family_id.clone());
@@ -514,7 +546,10 @@ impl TianyiClient {
 
             let text = match self.signed_get_json(&url, params, is_family).await {
                 Ok(t) => {
-                    log::info!("listFiles resp: {}", t.chars().take(400).collect::<String>());
+                    log::info!(
+                        "listFiles resp: {}",
+                        t.chars().take(400).collect::<String>()
+                    );
                     t
                 }
                 Err(Error::Session(_)) => {
@@ -525,8 +560,8 @@ impl TianyiClient {
                 Err(e) => return Err(e),
             };
 
-            let resp: Cloud189FilesResp = serde_json::from_str(&text)
-                .map_err(|e| Error::Api(format!("parse list: {e}")))?;
+            let resp: Cloud189FilesResp =
+                serde_json::from_str(&text).map_err(|e| Error::Api(format!("parse list: {e}")))?;
 
             let count = resp.file_list_ao.count;
             for f in &resp.file_list_ao.file_list {
@@ -556,7 +591,8 @@ impl TianyiClient {
                 });
             }
 
-            let page_count = resp.file_list_ao.folder_list.len() + resp.file_list_ao.file_list.len();
+            let page_count =
+                resp.file_list_ao.folder_list.len() + resp.file_list_ao.file_list.len();
             if count == 0 || page_count < page_size as usize {
                 break;
             }
@@ -633,10 +669,8 @@ impl TianyiClient {
     ) -> Result<String> {
         let is_family = self.is_family();
         let task_infos = serde_json::to_string(tasks)?;
-        let mut form: Vec<(&str, String)> = vec![
-            ("type", task_type.to_string()),
-            ("taskInfos", task_infos),
-        ];
+        let mut form: Vec<(&str, String)> =
+            vec![("type", task_type.to_string()), ("taskInfos", task_infos)];
         if !target_folder_id.is_empty() {
             form.push(("targetFolderId", target_folder_id.to_string()));
         }
@@ -747,8 +781,8 @@ impl TianyiClient {
     pub async fn get_capacity(&self) -> Result<CapacityResp> {
         let url = format!("{}/portal/getUserSizeInfo.action", consts::API_URL);
         let text = self.signed_get_json(&url, HashMap::new(), false).await?;
-        let resp: CapacityResp = serde_json::from_str(&text)
-            .map_err(|e| Error::Api(format!("parse capacity: {e}")))?;
+        let resp: CapacityResp =
+            serde_json::from_str(&text).map_err(|e| Error::Api(format!("parse capacity: {e}")))?;
         Ok(resp)
     }
 
@@ -839,7 +873,8 @@ impl TianyiClient {
                     thumb: String::new(),
                 });
             }
-            let page_count = resp.file_list_ao.folder_list.len() + resp.file_list_ao.file_list.len();
+            let page_count =
+                resp.file_list_ao.folder_list.len() + resp.file_list_ao.file_list.len();
             if count == 0 || page_count < page_size as usize {
                 break;
             }
