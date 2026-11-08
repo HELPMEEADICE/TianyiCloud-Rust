@@ -65,6 +65,29 @@ Compress-Archive -Path (Join-Path $StageDir '*') -DestinationPath $ZipPath -Comp
 Write-Host "[package] zip -> $ZipPath"
 
 # ---------------------------------------------------------------- msi 安装包
+function Install-WixTool {
+    param([string]$DotnetExe, [string]$ToolsDir)
+
+    $wixExe = Join-Path $ToolsDir 'wix.exe'
+    if (Test-Path $wixExe) { return $wixExe }
+
+    # 清掉可能残留的半截 tool store：CI 里 target/ 会被 rust-cache 缓存，
+    # 只恢复了一半的 .store 会让 dotnet 报 "Failed to read NuGet assets file"
+    Remove-Item -Recurse -Force $ToolsDir -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+
+    foreach ($ver in @('5.*', '')) {
+        $installArgs = @('tool', 'install', '--tool-path', $ToolsDir, 'wix')
+        if ($ver) { $installArgs += @('--version', $ver) }
+        Write-Host "[package] dotnet tool install wix $ver"
+        & $DotnetExe @installArgs | Out-Host
+        if ((Test-Path $wixExe) -and $LASTEXITCODE -eq 0) { return $wixExe }
+        Remove-Item -Recurse -Force $ToolsDir -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force -Path $ToolsDir | Out-Null
+    }
+    throw 'WiX 安装失败（需要 .NET SDK）'
+}
+
 function Resolve-WixCommand {
     $cmd = Get-Command wix -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -72,24 +95,13 @@ function Resolve-WixCommand {
     $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
     if (-not $dotnet) { throw '缺少 dotnet，无法安装 WiX（MSI 打包工具链）' }
 
-    # 装到仓库自己的 target 目录里，不污染全局工具目录，也不需要改 PATH
-    $toolsDir = Join-Path $Root 'target/dotnet-tools'
-    New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
-    Write-Host '[package] 安装 WiX Toolset 5（dotnet tool --tool-path）'
-    & $dotnet.Source tool install --tool-path $toolsDir wix --version '5.*' | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host '[package] 固定版本安装失败，改用最新版 wix'
-        & $dotnet.Source tool install --tool-path $toolsDir wix | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw 'WiX 安装失败（需要 .NET SDK）' }
+    # 装到 runner 的临时目录，不要放 target/（CI 里 target 被 rust-cache 缓存，容易留残渣）
+    $toolsDir = if ($env:RUNNER_TEMP) {
+        Join-Path $env:RUNNER_TEMP 'dotnet-tools'
+    } else {
+        Join-Path $Root 'target/dotnet-tools'
     }
-
-    $wixExe = Join-Path $toolsDir 'wix.exe'
-    if (-not (Test-Path $wixExe)) {
-        $cmd = Get-Command wix -ErrorAction SilentlyContinue
-        if ($cmd) { return $cmd.Source }
-        throw 'WiX 安装后仍找不到 wix 命令'
-    }
-    return $wixExe
+    return (Install-WixTool -DotnetExe $dotnet.Source -ToolsDir $toolsDir)
 }
 
 $Wix = Resolve-WixCommand
