@@ -29,6 +29,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Windows runner 上 Python 默认输出编码是 cp1252，脚本里的中文会报 UnicodeEncodeError
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: "utf-8"
 
 jobs:
   # ------------------------------------------------------------------ 版本号

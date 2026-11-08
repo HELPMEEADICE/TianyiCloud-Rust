@@ -22,6 +22,10 @@ import struct
 import sys
 import zlib
 
+# Windows 上 stdout 默认是 cp1252，直接打印非 ASCII 会 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 SIZE = 512
 CORNER = 96
 BG_TOP = (43, 99, 235)

@@ -17,6 +17,10 @@ from __future__ import annotations
 import pathlib
 import sys
 
+# Windows 上 stdout 默认是 cp1252，直接打印中文会 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 HEADER = "[profile.release]"
 
 PROFILE = """[profile.release]
