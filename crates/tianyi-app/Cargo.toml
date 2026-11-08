@@ -7,20 +7,6 @@ rust-version.workspace = true
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }
 slint = { version = "1.17", features = ["unstable-winit-030"] }
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = [
-    "implement",
-    "Win32_Foundation",
-    "Win32_System_Ole",
-    "Win32_System_Com",
-    "Win32_UI_Shell",
-    "Win32_System_Memory",
-    "Win32_System_SystemServices",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_Graphics_Gdi",
-    "Win32_UI_Input_KeyboardAndMouse",
-] }
-windows-core = "0.58"
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -36,6 +22,22 @@ dirs.workspace = true
 uuid.workspace = true
 rfd = "0.15"
 arboard.workspace = true
+
+# Windows 专有依赖：拖出下载（COM DoDragDrop）与系统 API
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Ole",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+windows-core = "0.58"
 
 [build-dependencies]
 slint-build = "1.17"

@@ -236,6 +236,7 @@ fn windows_player_command(name: &str) -> Option<(String, Vec<String>)> {
 }
 
 /// 按 CommandLineToArgvW 规则拆分 Windows 命令行字符串
+#[cfg(any(target_os = "windows", test))]
 fn split_command_line(command: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut cur = String::new();
@@ -330,20 +331,20 @@ pub fn open_with_system(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        return std::process::Command::new("open")
+        std::process::Command::new("open")
             .arg(path)
             .spawn()
             .map(|_| ())
-            .map_err(|e| format!("open file: {e}"));
+            .map_err(|e| format!("open file: {e}"))
     }
 
     #[cfg(target_os = "linux")]
     {
-        return std::process::Command::new("xdg-open")
+        std::process::Command::new("xdg-open")
             .arg(path)
             .spawn()
             .map(|_| ())
-            .map_err(|e| format!("open file: {e}"));
+            .map_err(|e| format!("open file: {e}"))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]

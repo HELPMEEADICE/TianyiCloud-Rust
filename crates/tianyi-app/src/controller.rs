@@ -107,7 +107,8 @@ pub struct Controller {
     tasks: Arc<TaskManager>,
     /// 拖拽状态（与 winit 事件钩子共享）
     drag_state: Mutex<Option<&'static crate::DragDropState>>,
-    /// 拖出下载进行中标记（防止重复触发）
+    /// 拖出下载进行中标记（防止重复触发，仅 Windows 实现使用）
+    #[cfg(windows)]
     drag_out_busy: AtomicBool,
     /// 本会话启动时间戳（秒），传输列表只显示本会话创建的任务
     session_start: i64,
@@ -134,6 +135,7 @@ impl Controller {
             status_notice: Mutex::new(None),
             tasks: Arc::new(tasks),
             drag_state: Mutex::new(None),
+            #[cfg(windows)]
             drag_out_busy: AtomicBool::new(false),
             session_start: chrono_used_now(),
         });
@@ -1462,6 +1464,7 @@ impl Controller {
     }
 
     /// 清除拖出下载的高亮状态
+    #[cfg(windows)]
     fn clear_drag_out_active(&self) {
         self.set_ui_state(|win| {
             let api = win.global::<DragOutApi>();

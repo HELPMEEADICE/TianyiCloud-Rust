@@ -137,7 +137,7 @@ jobs:
             libwayland-dev libgl1-mesa-dev libegl1-mesa-dev \
             libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            patchelf file curl
+            pkg-config patchelf file curl
 
       - uses: dtolnay/rust-toolchain@stable
         with:
