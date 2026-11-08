@@ -1,0 +1,59 @@
+// Fluent 搜索框：图标 + 输入 + 清除 + 回车立即搜索 + 输入去抖
+//
+// 去抖在 UI 侧完成（Timer），Rust 侧只负责请求乱序丢弃，避免双重延迟。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icons } from "../theme/icons.slint";
+import { FluentTextField } from "text-field.slint";
+
+export component FluentSearchBox inherits Rectangle {
+    in-out property <string> text <=> field.text;
+    in property <string> placeholder: "搜索";
+    in property <bool> enabled: true;
+    /// 输入停止多久后自动搜索
+    in property <duration> debounce: 260ms;
+    /// 每次文本变化（含清空）都会触发
+    callback search(string);
+    callback submitted(string);
+    callback cleared();
+
+    height: Theme.control-height;
+    background: transparent;
+
+    /// 让搜索框获取键盘焦点（Ctrl+F）
+    public function focus-input() {
+        field.focus-input();
+    }
+
+    timer := Timer {
+        interval: root.debounce;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.search(field.text);
+        }
+    }
+
+    field := FluentTextField {
+        width: parent.width;
+        height: parent.height;
+        placeholder: root.placeholder;
+        glyph: Icons.search;
+        clearable: true;
+        enabled: root.enabled;
+
+        edited => {
+            // 重新计时：赋值 false/true 会让 Timer 重新开始
+            timer.running = false;
+            timer.running = true;
+        }
+        accepted => {
+            timer.running = false;
+            root.submitted(field.text);
+        }
+        cleared => {
+            timer.running = false;
+            root.cleared();
+        }
+    }
+}

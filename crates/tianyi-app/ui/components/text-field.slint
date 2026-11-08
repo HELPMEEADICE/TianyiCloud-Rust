@@ -1,0 +1,137 @@
+// Fluent 文本输入框
+//
+// 结构：外框（描边 + 聚焦高亮 + 底部强调线）+ 前置图标 + 输入区 + 清除/显示密码按钮。
+// 占位文本放在输入区的绝对定位层里，避免与 TextInput 争抢布局单元。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentIconButton } from "icon-button.slint";
+
+export component FluentTextField inherits Rectangle {
+    in-out property <string> text <=> input.text;
+    in property <string> placeholder: "";
+    /// 密码输入（以圆点遮罩），配合内部的眼睛按钮可临时显示
+    in property <bool> password: false;
+    in property <bool> enabled: true;
+    /// 前置图标路径
+    in property <string> glyph: "";
+    /// 有内容时在尾部显示清除按钮
+    in property <bool> clearable: false;
+    in property <bool> invalid: false;
+    in property <length> font-size: Theme.font-body-large;
+
+    callback accepted();
+    callback edited();
+    callback cleared();
+
+    // 显示密码（仅 password 模式有效）
+    property <bool> revealed: false;
+
+    /// 让输入框获取键盘焦点
+    public function focus-input() {
+        input.focus();
+    }
+
+    height: Theme.control-height;
+    border-radius: Theme.radius-control;
+    background: root.enabled ? Theme.control-bg : Theme.control-bg-disabled;
+    border-width: 1px;
+    border-color: root.invalid ? Theme.danger : (input.has-focus ? Theme.focus-ring : Theme.stroke);
+
+    animate border-color {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    // 底部强调线（Fluent 聚焦指示）
+    Rectangle {
+        x: 1px;
+        y: root.height - 2px;
+        width: root.width - 2px;
+        height: 2px;
+        border-radius: 1px;
+        background: root.invalid ? Theme.danger : Theme.accent;
+        opacity: input.has-focus ? 1.0 : 0.0;
+
+        animate opacity {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 4px;
+        spacing: 6px;
+        vertical-stretch: 1;
+        cross-axis-alignment: center;
+
+        if root.glyph != "": Icon {
+            glyph: root.glyph;
+            size: 16px;
+            thickness: 1.6px;
+            icon-color: input.has-focus ? Theme.accent : Theme.text-tertiary;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: root.height - 4px;
+            background: transparent;
+
+            input := TextInput {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                enabled: root.enabled;
+                font-family: Theme.font-family;
+                font-size: root.font-size;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+                selection-background-color: Theme.accent;
+                selection-foreground-color: Theme.text-on-accent;
+                input-type: root.password && !root.revealed ? InputType.password : InputType.text;
+                accepted => {
+                    root.accepted();
+                }
+                edited => {
+                    root.edited();
+                }
+            }
+
+            if root.text == "" && root.placeholder != "": Text {
+                x: 1px;
+                y: (parent.height - self.height) / 2;
+                text: root.placeholder;
+                font-family: Theme.font-family;
+                font-size: root.font-size;
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        if root.password: FluentIconButton {
+            glyph: root.revealed ? Icons.eye-off : Icons.eye;
+            tooltip: root.revealed ? "隐藏密码" : "显示密码";
+            size: 28px;
+            icon-size: 15px;
+            enabled: root.enabled;
+            clicked => {
+                root.revealed = !root.revealed;
+            }
+        }
+
+        if root.clearable && root.text != "" && !root.password: FluentIconButton {
+            glyph: Icons.close;
+            tooltip: "清除";
+            size: 28px;
+            icon-size: 12px;
+            enabled: root.enabled;
+            clicked => {
+                input.text = "";
+                root.cleared();
+                input.focus();
+            }
+        }
+    }
+}

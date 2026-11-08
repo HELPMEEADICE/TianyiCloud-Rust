@@ -8,10 +8,16 @@ mod dragout;
 
 use app::MainWindow;
 use backend::Backend;
-use slint::{ComponentHandle, Timer, Weak};
+use slint::{ComponentHandle, Timer, TimerMode};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+/// 传输面板刷新间隔（毫秒）
+const TICK_MS: u64 = 200;
+/// 跟随系统主题时的轮询间隔（秒）
+const THEME_POLL_SECS: u64 = 3;
 
 /// 拖拽进入状态（跨线程由 winit 事件回调与控制器共享）
 struct DragDropState {
@@ -21,6 +27,8 @@ struct DragDropState {
     pending: Mutex<Vec<PathBuf>>,
     /// 当前悬停目标文件夹名（用于遮罩显示）
     hover_target: Mutex<String>,
+    /// 批次序号：只有最后一次调度的定时器负责消费本批路径，避免重复入队
+    batch: Mutex<u64>,
 }
 
 impl DragDropState {
@@ -29,16 +37,17 @@ impl DragDropState {
             hovering: AtomicBool::new(false),
             pending: Mutex::new(Vec::new()),
             hover_target: Mutex::new(String::new()),
+            batch: Mutex::new(0),
         }
     }
 }
 
 /// 将主窗口在屏幕上居中显示（窗口创建后由事件循环单次触发执行）
-fn center_window(ui: &Weak<MainWindow>) {
+fn center_window(ui: &slint::Weak<MainWindow>) {
     use slint::winit_030::{winit, WinitWindowAccessor};
 
     let ui = ui.clone();
-    Timer::single_shot(std::time::Duration::from_millis(100), move || {
+    Timer::single_shot(Duration::from_millis(100), move || {
         let Some(app) = ui.upgrade() else { return };
         app.window().with_winit_window(|win| {
             let Some(monitor) = win.current_monitor().or_else(|| win.primary_monitor()) else {
@@ -57,12 +66,12 @@ fn center_window(ui: &Weak<MainWindow>) {
 }
 
 /// 注册 winit 窗口事件钩子，处理系统拖拽文件进入（上传）
-fn install_drag_drop(ui: &Weak<MainWindow>, state: &'static DragDropState) {
+fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState) {
     use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
 
     let Some(app) = ui.upgrade() else { return };
     let window = app.window();
-    let ui: Weak<MainWindow> = ui.clone();
+    let ui: slint::Weak<MainWindow> = ui.clone();
     window.on_winit_window_event(move |_slint_window, event| {
         match event {
             winit::event::WindowEvent::ModifiersChanged(mods) => {
@@ -77,7 +86,6 @@ fn install_drag_drop(ui: &Weak<MainWindow>, state: &'static DragDropState) {
             }
             winit::event::WindowEvent::HoveredFile(_) => {
                 state.hovering.store(true, Ordering::SeqCst);
-                // 由控制器根据当前目录刷新遮罩
                 let ui = ui.clone();
                 let target = state.hover_target.lock().unwrap().clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -99,9 +107,19 @@ fn install_drag_drop(ui: &Weak<MainWindow>, state: &'static DragDropState) {
             winit::event::WindowEvent::DroppedFile(path) => {
                 state.hovering.store(false, Ordering::SeqCst);
                 state.pending.lock().unwrap().push(path.clone());
-                // 等同一批文件都到达后统一处理：用一次性 Timer 延迟触发
+                // 同一批文件会在几十毫秒内陆续到达：每次调度都带批次号，
+                // 只有批次号仍然匹配的定时器才消费路径，避免重复上传。
+                let batch_id = {
+                    let mut b = state.batch.lock().unwrap();
+                    *b += 1;
+                    *b
+                };
                 let ui = ui.clone();
-                slint::Timer::single_shot(std::time::Duration::from_millis(60), move || {
+                slint::Timer::single_shot(Duration::from_millis(80), move || {
+                    let current = *state.batch.lock().unwrap();
+                    if current != batch_id {
+                        return; // 已有更新的批次，交给它统一处理
+                    }
                     let paths: Vec<PathBuf> = state.pending.lock().unwrap().drain(..).collect();
                     if paths.is_empty() {
                         return;
@@ -138,8 +156,32 @@ fn main() -> anyhow::Result<()> {
     install_drag_drop(&ui_handle, drag_state);
     controller.set_drag_state(drag_state);
 
-    // 启动后台任务（keepalive 等）
+    // 后台任务（会话保活）
     controller.spawn_background();
+
+    // 传输进度节流刷新：后台只置脏标记，这里统一以 200ms 节奏推送到 UI
+    let ticker = Timer::default();
+    {
+        let c = Arc::clone(&controller);
+        ticker.start(
+            TimerMode::Repeated,
+            Duration::from_millis(TICK_MS),
+            move || {
+                c.tick();
+            },
+        );
+    }
+
+    // 跟随系统主题时定期检查系统深色偏好的变化
+    let theme_timer = Timer::default();
+    {
+        let c = Arc::clone(&controller);
+        theme_timer.start(
+            TimerMode::Repeated,
+            Duration::from_secs(THEME_POLL_SECS),
+            move || c.poll_system_theme(),
+        );
+    }
 
     // 尝试用上次使用的账号恢复登录态
     controller.auto_login();
@@ -148,5 +190,8 @@ fn main() -> anyhow::Result<()> {
     center_window(&ui_handle);
 
     ui.run()?;
+    // 定时器需要在 UI 事件循环存活期间保持存在
+    drop(ticker);
+    drop(theme_timer);
     Ok(())
 }

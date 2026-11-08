@@ -27,6 +27,14 @@ pub enum Error {
     #[error("transfer error: {0}")]
     Transfer(String),
 
+    /// 传输被用户暂停
+    #[error("传输已暂停")]
+    Paused,
+
+    /// 传输被用户取消
+    #[error("传输已取消")]
+    Canceled,
+
     /// IO 错误
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -52,6 +60,14 @@ impl Error {
                 .to_string()
                 .to_lowercase()
                 .contains("invalid_session_key")
+    }
+
+    /// 判断是否是用户主动暂停/取消导致的中断
+    ///
+    /// 这类错误不是真正的失败：调用方应把它映射成“已暂停/已取消”状态，
+    /// 而不是记成任务失败。
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self, Error::Paused | Error::Canceled)
     }
 }
 

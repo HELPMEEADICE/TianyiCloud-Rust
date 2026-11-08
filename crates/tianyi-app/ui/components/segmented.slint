@@ -1,0 +1,56 @@
+// Fluent 分段控件（Segmented Control）
+//
+// 用于登录方式切换（密码 / 二维码）与传输任务筛选（全部 / 进行中 / 已完成 / 失败）。
+// Win11 样式：浅色沟槽 + 选中段浮起的浅色药丸。
+
+import { Theme } from "../theme/tokens.slint";
+
+export component FluentSegmented inherits Rectangle {
+    in property <[string]> items: [];
+    in-out property <int> current: 0;
+    in property <bool> enabled: true;
+    callback changed(int);
+
+    height: 34px;
+    border-radius: Theme.radius-control;
+    background: Theme.dark ? #2A2A2A : #F0F0F0;
+    opacity: root.enabled ? 1.0 : 0.5;
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for item[idx] in root.items : Rectangle {
+            horizontal-stretch: 1;
+            border-radius: Theme.radius-control - 1px;
+            background: root.current == idx ? (root.enabled ? Theme.card-bg : transparent) : transparent;
+
+            animate background {
+                duration: Theme.motion-fast;
+                easing: ease-out;
+            }
+
+            Text {
+                text: item;
+                font-family: Theme.font-family;
+                font-size: Theme.font-body;
+                font-weight: root.current == idx ? 600 : 400;
+                color: root.current == idx ? Theme.text-primary : Theme.text-secondary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                clicked => {
+                    if (root.current != idx) {
+                        root.current = idx;
+                        root.changed(idx);
+                    }
+                }
+            }
+        }
+    }
+}

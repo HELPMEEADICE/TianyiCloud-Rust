@@ -1,0 +1,184 @@
+// 传输任务行：方向 + 名称 + 状态 + 进度 + 速度/剩余 + 操作按钮
+//
+// 操作按钮按状态切换：进行中 → 暂停/取消；已暂停 → 继续/取消；失败/已取消 → 重试/移除；
+// 已完成 → 移除。按钮均有 Tooltip。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentProgressBar } from "progress-bar.slint";
+import { FluentIconButton } from "icon-button.slint";
+import { TransferEntry } from "../types.slint";
+
+export component TransferRow inherits Rectangle {
+    in property <TransferEntry> entry;
+    callback pause-clicked();
+    callback resume-clicked();
+    callback cancel-clicked();
+    callback retry-clicked();
+    callback remove-clicked();
+    callback reveal-clicked();
+
+    property <bool> uploading: entry.direction == "upload";
+    property <bool> running: entry.status == "running" || entry.status == "pending";
+    property <bool> paused: entry.status == "paused";
+    property <bool> failed: entry.status == "failed" || entry.status == "canceled";
+    property <bool> done: entry.status == "completed";
+
+    property <color> status-color: root.running ? Theme.accent
+        : root.paused ? Theme.warning
+        : root.failed ? Theme.danger
+        : root.done ? Theme.success
+        : Theme.text-tertiary;
+
+    height: 60px;
+    border-radius: Theme.radius-card;
+    background: ta.has-hover ? Theme.control-bg-hover : Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.divider;
+
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+
+        // 方向图标
+        Rectangle {
+            width: 32px;
+            height: 32px;
+            border-radius: Theme.radius-card;
+            background: root.uploading ? Theme.success-soft : Theme.accent-soft;
+
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                glyph: root.uploading ? Icons.upload : Icons.download;
+                size: 16px;
+                thickness: 1.7px;
+                icon-color: root.uploading ? Theme.success : Theme.accent;
+            }
+        }
+
+        // 名称 / 进度 / 明细
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: root.entry.name;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-body;
+                    font-weight: 600;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.entry.status_text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-caption;
+                    font-weight: 600;
+                    color: root.status-color;
+                    vertical-alignment: center;
+                }
+
+                if root.entry.speed != "" && root.running: Text {
+                    text: root.entry.speed;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-caption;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+
+            FluentProgressBar {
+                value: root.entry.progress;
+                indeterminate: root.entry.status == "pending" || (root.running && root.entry.progress <= 0.0);
+                bar-color: root.failed ? Theme.danger : root.paused ? Theme.warning : root.done ? Theme.success : Theme.accent;
+            }
+
+            Text {
+                text: root.entry.error != "" ? root.entry.error : root.entry.detail;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: root.failed ? Theme.danger : Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        // 操作区
+        HorizontalLayout {
+            spacing: 2px;
+            alignment: end;
+            cross-axis-alignment: center;
+
+            if root.running: FluentIconButton {
+                glyph: Icons.pause;
+                tooltip: "暂停任务";
+                clicked => {
+                    root.pause-clicked();
+                }
+            }
+
+            if root.paused: FluentIconButton {
+                glyph: Icons.play;
+                filled: true;
+                accent: true;
+                tooltip: "继续任务";
+                clicked => {
+                    root.resume-clicked();
+                }
+            }
+
+            if root.failed: FluentIconButton {
+                glyph: Icons.refresh;
+                tooltip: "重试任务";
+                clicked => {
+                    root.retry-clicked();
+                }
+            }
+
+            if root.done: FluentIconButton {
+                glyph: Icons.folder;
+                tooltip: "打开所在文件夹";
+                clicked => {
+                    root.reveal-clicked();
+                }
+            }
+
+            if root.running || root.paused: FluentIconButton {
+                glyph: Icons.cancel;
+                danger: true;
+                tooltip: "取消任务";
+                clicked => {
+                    root.cancel-clicked();
+                }
+            }
+
+            if root.failed || root.done: FluentIconButton {
+                glyph: Icons.trash;
+                tooltip: "从列表中移除";
+                clicked => {
+                    root.remove-clicked();
+                }
+            }
+        }
+    }
+
+    }
+}

@@ -10,6 +10,7 @@ pub mod error;
 pub mod file;
 pub mod models;
 pub mod task;
+pub mod theme;
 pub mod torrent;
 pub mod transfer;
 

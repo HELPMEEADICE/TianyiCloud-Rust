@@ -1,0 +1,74 @@
+// Fluent 按钮：标准 / 强调 / 次要（无边框）/ 危险 四种外观
+//
+// 尺寸与 Win11 一致：高 32px、圆角 4px、左右内边距 12px、正文 14px。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon } from "../theme/icons.slint";
+
+export component FluentButton inherits Rectangle {
+    in property <string> text: "";
+    /// 强调按钮（主操作，蓝底白字）
+    in property <bool> accent: false;
+    /// 危险操作（删除等）
+    in property <bool> danger: false;
+    /// 无边框、无底色，仅悬停时出现底色
+    in property <bool> subtle: false;
+    in property <bool> enabled: true;
+    /// 处理中：显示额外文案并禁用点击
+    in property <bool> busy: false;
+    /// 前置图标路径（可选）
+    in property <string> glyph: "";
+    in property <length> min-w: 0px;
+    callback clicked();
+
+    height: Theme.control-height;
+    min-width: root.min-w;
+    border-radius: Theme.radius-control;
+    border-width: root.subtle || root.accent || root.danger ? 0px : 1px;
+    border-color: root.enabled ? Theme.stroke : Theme.control-bg-disabled;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    background: !root.enabled ? Theme.control-bg-disabled
+        : root.accent ? (touch.pressed ? Theme.accent-pressed : touch.has-hover ? Theme.accent-hover : Theme.accent)
+        : root.danger ? (touch.pressed ? Theme.danger-pressed : touch.has-hover ? Theme.danger-hover : Theme.danger-soft)
+        : root.subtle ? (touch.pressed ? Theme.control-bg-pressed : touch.has-hover ? Theme.control-bg-hover : transparent)
+        : (touch.pressed ? Theme.control-bg-pressed : touch.has-hover ? Theme.control-bg-hover : Theme.control-bg);
+
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 8px;
+        alignment: center;
+        cross-axis-alignment: center;
+
+        if root.glyph != "": Icon {
+            glyph: root.glyph;
+            size: 16px;
+            thickness: 1.7px;
+            icon-color: root.accent ? Theme.text-on-accent : (root.danger ? Theme.danger : Theme.text-primary);
+        }
+
+        Text {
+            text: root.text;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body-large;
+            font-weight: 400;
+            color: root.accent ? Theme.text-on-accent : (root.danger ? Theme.danger : (root.enabled ? Theme.text-primary : Theme.text-disabled));
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled && !root.busy;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

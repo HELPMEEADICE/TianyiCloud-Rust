@@ -1,1928 +1,982 @@
-// 天翼云盘客户端 UI
-
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
-import "./fonts/MaterialIcons-Regular.ttf";
-
-export struct FileEntry {
-    id: string,
-    name: string,
-    size: int,
-    size_text: string,
-    is_dir: bool,
-    thumb: string,
-    modified: string,
-}
-
-export struct TransferEntry {
-    id: int,
-    name: string,
-    direction: string,
-    size_text: string,
-    progress: float,
-    status: string,
-    speed: string,
-}
-
-export global DragOutApi {
-    in property <bool> mod-pressed: false;
-    in property <bool> active: false;
-    in property <string> active-id: "";
-    callback drag_out(string, string);
-}
-
-// ===== 基础图标组件 =====
-// 使用 Material Icons 字体，所有图标在 fonts/MaterialIcons-Regular.ttf
-component Icon inherits Text {
-    in property <string> glyph: "\u{e2bd}";
-    in property <brush> icon-color: #1f2937;
-    font-family: "Material Icons";
-    text: glyph;
-    color: icon-color;
-    font-size: 20px;
-    horizontal-alignment: center;
-    vertical-alignment: center;
-}
-
-// ===== 带图标的文字按钮 =====
-component TextIconButton inherits Rectangle {
-    in property <string> text;
-    in property <string> icon;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    height: 34px;
-    border-radius: 8px;
-    background: #ffffff;
-    border-width: 1px;
-    border-color: #e2e8f0;
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 12px;
-        spacing: 6px;
-        cross-axis-alignment: center;
-        alignment: center;
-
-        Icon {
-            glyph: root.icon;
-            icon-color: root.enabled ? #1e3a8a : #cbd5e1;
-            font-size: 16px;
-        }
-
-        Text {
-            text: root.text;
-            color: root.enabled ? #1e3a8a : #cbd5e1;
-            font-size: 13px;
-            font-weight: 500;
-        }
-    }
-
-    TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-}
-
-// ===== 侧边栏导航按钮 =====
-component NavItem inherits Rectangle {
-    in property <string> icon;
-    in property <string> label;
-    in property <bool> active: false;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    height: 44px;
-    border-radius: 8px;
-    background: active ? #ffffff : #1e3a8a;
-
-    HorizontalLayout {
-        padding-left: 12px;
-        spacing: 10px;
-        alignment: start;
-        cross-axis-alignment: center;
-
-        Icon {
-            glyph: root.icon;
-            icon-color: root.active ? #2563eb : #ffffff;
-            font-size: 20px;
-        }
-
-        Text {
-            text: root.label;
-            color: root.active ? #1e3a8a : #e2e8f0;
-            font-size: 13px;
-            font-weight: root.active ? 700 : 500;
-        }
-    }
-
-    TouchArea {
-        enabled: root.enabled;
-        clicked => {
-            root.clicked();
-        }
-    }
-}
-
-// ===== 文件列表项 =====
-component FileItem inherits Rectangle {
-    in property <FileEntry> entry;
-    in property <bool> selected: false;
-    in property <bool> renaming: false;
-    in property <data-transfer> drag-data;
-    in property <bool> is-drop-target: false;
-    callback item_clicked();
-    callback item_double_clicked();
-    callback item_context_requested(string, string, bool, length, length);
-    callback rename_submitted(string);
-    callback drop_can_accept(DropEvent, string) -> DragAction;
-    callback drop_requested(DropEvent, string) -> DragAction;
-
-    property <bool> drag-pressed: false;
-    property <bool> drag-armed: false;
-    property <bool> drag-out-fired: false;
-
-    height: 52px;
-    border-radius: 8px;
-    background: selected ? #e0f2fe : (da.has-drag ? #eff6ff : transparent);
-    opacity: DragOutApi.active && DragOutApi.active-id == entry.id ? 0.45 : 1.0;
-    border-width: 1px;
-    border-color: da.has-drag ? #93c5fd : transparent;
-
-    DragArea {
-        enabled: !root.renaming && !(DragOutApi.mod-pressed && !entry.is_dir);
-        data: root.drag-data;
-        allow-move: true;
-
-        HorizontalLayout {
-            padding-left: 12px;
-            padding-right: 12px;
-            spacing: 12px;
-            cross-axis-alignment: center;
-
-            Rectangle {
-                width: 34px;
-                height: 34px;
-                border-radius: 8px;
-                background: entry.is_dir ? #fef3c7 : #e0f2fe;
-                Icon {
-                    glyph: entry.is_dir ? "\u{e2c7}" : "\u{e24d}";
-                    icon-color: entry.is_dir ? #d97706 : #2563eb;
-                    font-size: 20px;
-                }
-            }
-
-            if !root.renaming: Text {
-                text: entry.name;
-                color: #111827;
-                font-size: 14px;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-
-            rename-input := LineEdit {
-                visible: root.renaming;
-                text: entry.name;
-                font-size: 14px;
-                horizontal-stretch: 1;
-                accepted => {
-                    root.rename_submitted(rename-input.text);
-                }
-            }
-
-            Text {
-                text: entry.size_text;
-                color: #9ca3af;
-                font-size: 12px;
-                width: 80px;
-            }
-
-            Text {
-                text: entry.modified;
-                color: #9ca3af;
-                font-size: 12px;
-                width: 130px;
-            }
-        }
-
-        ta := TouchArea {
-            enabled: !root.renaming;
-            clicked => {
-                root.item_clicked();
-            }
-            double-clicked => {
-                root.item_double_clicked();
-            }
-            pointer-event(event) => {
-                if (event.button == PointerEventButton.left) {
-                    if (event.kind == PointerEventKind.down) {
-                        root.drag-pressed = true;
-                        root.drag-armed = DragOutApi.mod-pressed && !entry.is_dir;
-                        if (!root.drag-armed) {
-                            root.drag-out-fired = false;
-                        }
-                    } else if (event.kind == PointerEventKind.up) {
-                        root.drag-pressed = false;
-                        root.drag-armed = false;
-                        root.drag-out-fired = false;
-                    }
-                }
-                if (event.kind == PointerEventKind.move) {
-                    if (root.drag-armed && !root.drag-out-fired && DragOutApi.mod-pressed && !root.renaming) {
-                        let dx = self.mouse-x - self.pressed-x;
-                        let dy = self.mouse-y - self.pressed-y;
-                        if (dx > 5px || dx < -5px || dy > 5px || dy < -5px) {
-                            root.drag-out-fired = true;
-                            DragOutApi.drag_out(entry.id, entry.name);
-                        }
-                    }
-                }
-                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
-                    root.item_context_requested(
-                        entry.id,
-                        entry.name,
-                        entry.is_dir,
-                        self.absolute-position.x + self.mouse-x,
-                        self.absolute-position.y + self.mouse-y
-                    );
-                }
-            }
-        }
-    }
-
-    da := DropArea {
-        enabled: root.is-drop-target;
-        can-drop(event) => { root.drop_can_accept(event, entry.id); }
-        dropped(event) => { root.drop_requested(event, entry.id); }
-    }
-
-    changed renaming => {
-        if (renaming) {
-            rename-input.text = entry.name;
-            rename-input.focus();
-            rename-input.select-all();
-        }
-    }
-}
-
-// ===== 右键菜单项 =====
-component ContextMenuItem inherits Rectangle {
-    in property <string> icon;
-    in property <string> label;
-    in property <bool> danger: false;
-    callback triggered();
-
-    height: 34px;
-    border-radius: 7px;
-    background: touch-area.has-hover ? (root.danger ? #fee2e2 : #eff6ff) : transparent;
-    animate background { duration: 110ms; easing: ease-out; }
-
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        spacing: 10px;
-        cross-axis-alignment: center;
-
-        Icon {
-            glyph: root.icon;
-            icon-color: root.danger ? #dc2626 : #475569;
-            font-size: 18px;
-        }
-
-        Text {
-            text: root.label;
-            color: root.danger ? #dc2626 : #1f2937;
-            font-size: 13px;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-        }
-    }
-
-    touch-area := TouchArea {
-        clicked => { root.triggered(); }
-    }
-}
-
-// ===== 登录面板 =====
-component LoginPanel inherits Rectangle {
-    in property <string> error_text;
-    in property <bool> show_captcha;
-    in property <image> captcha_image;
-    in property <image> qr_image;
-    in property <string> qr_status_text;
-    in property <bool> login_loading;
-    in property <bool> qr_mode;
-    in property <[string]> saved_accounts: [];
-
-    callback do_login(string, string, string);
-    callback do_switch_mode(bool);
-    callback do_qr_refresh();
-    callback do_quick_login(string);
-
-    background: #ffffff;
-    border-radius: 16px;
-    border-width: 1px;
-    border-color: #e2e8f0;
-
-    VerticalLayout {
-        padding-left: 48px;
-        padding-right: 48px;
-        padding-top: 40px;
-        padding-bottom: 40px;
-        spacing: 14px;
-        alignment: center;
-
-        Rectangle {
-            width: 72px;
-            height: 72px;
-            border-radius: 18px;
-            background: #2563eb;
-            Icon {
-                glyph: "\u{e2bd}";
-                icon-color: #ffffff;
-                font-size: 40px;
-            }
-        }
-
-        Text {
-            text: "天翼云盘";
-            font-size: 28px;
-            font-weight: 700;
-            color: #1e3a8a;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            text: "登录以同步您的云端文件";
-            font-size: 13px;
-            color: #6b7280;
-            horizontal-alignment: center;
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-            alignment: center;
-            Button {
-                text: "密码登录";
-                enabled: !login_loading;
-                clicked => { root.do_switch_mode(false); }
-            }
-            Button {
-                text: "扫码登录";
-                enabled: !login_loading;
-                clicked => { root.do_switch_mode(true); }
-            }
-        }
-
-        VerticalLayout {
-            visible: !qr_mode && saved_accounts.length > 0;
-            spacing: 8px;
-
-            Text {
-                text: "已保存的账号";
-                color: #6b7280;
-                font-size: 12px;
-                horizontal-alignment: center;
-            }
-
-            for account in saved_accounts : Button {
-                text: account;
-                enabled: !login_loading;
-                width: 280px;
-                clicked => { root.do_quick_login(account); }
-            }
-        }
-
-        VerticalLayout {
-            visible: !qr_mode;
-            spacing: 12px;
-
-            username-input := LineEdit {
-                placeholder-text: "手机号 / 邮箱";
-                width: 300px;
-            }
-            password-input := LineEdit {
-                placeholder-text: "密码";
-                width: 300px;
-            }
-
-            VerticalLayout {
-                visible: show_captcha;
-                spacing: 6px;
-                Image {
-                    source: captcha_image;
-                    height: 52px;
-                    width: 180px;
-                }
-                captcha-input := LineEdit {
-                    placeholder-text: "验证码";
-                    width: 180px;
-                }
-            }
-
-            Button {
-                text: login_loading ? "登录中..." : "登 录";
-                enabled: !login_loading;
-                width: 200px;
-                clicked => {
-                    root.do_login(username-input.text, password-input.text, captcha-input.text);
-                }
-            }
-        }
-
-        VerticalLayout {
-            visible: qr_mode;
-            spacing: 12px;
-            alignment: center;
-
-            Rectangle {
-                width: 220px;
-                height: 220px;
-                background: #f8fafc;
-                border-radius: 12px;
-                border-width: 1px;
-                border-color: #e2e8f0;
-
-                Image {
-                    source: qr_image;
-                    width: 190px;
-                    height: 190px;
-                }
-            }
-
-            Text {
-                text: qr_status_text;
-                color: #6b7280;
-                font-size: 13px;
-                horizontal-alignment: center;
-                wrap: word-wrap;
-            }
-
-            Button {
-                text: "刷新二维码";
-                enabled: !login_loading;
-                clicked => {
-                    root.do_qr_refresh();
-                }
-            }
-        }
-
-        Text {
-            visible: error_text != "";
-            text: error_text;
-            color: #dc2626;
-            font-size: 13px;
-            wrap: word-wrap;
-            horizontal-alignment: center;
-        }
-    }
-}
-
-// ===== 工具栏图标按钮 =====
-component ToolButton inherits Rectangle {
-    in property <string> icon;
-    in property <string> label;
-    in property <bool> enabled: true;
-    callback clicked();
-
-    height: 36px;
-    width: 46px;
-    border-radius: 8px;
-    background: #ffffff;
-    border-width: 1px;
-    border-color: #e2e8f0;
-
-    Icon {
-        glyph: root.icon;
-        icon-color: root.enabled ? #1e3a8a : #cbd5e1;
-        font-size: 20px;
-    }
-
-    TouchArea {
-        enabled: root.enabled;
-        clicked => { root.clicked(); }
-    }
-}
-
-// ===== 页面标题与容量摘要 =====
-component PageHeader inherits Rectangle {
-    in property <string> title;
-    in property <string> subtitle;
-    in property <string> used_space: "0 B";
-    in property <string> total_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-
-    height: 70px;
-    background: #ffffff;
-    border-radius: 14px;
-    border-width: 1px;
-    border-color: #e5e7eb;
-
-    HorizontalLayout {
-        padding-left: 18px;
-        padding-right: 18px;
-        spacing: 12px;
-        cross-axis-alignment: center;
-
-        Rectangle {
-            width: 40px;
-            height: 40px;
-            border-radius: 12px;
-            background: #dbeafe;
-            Icon {
-                glyph: "\u{e2bd}";
-                icon-color: #2563eb;
-                font-size: 22px;
-            }
-        }
-
-        VerticalLayout {
-            spacing: 2px;
-            Text {
-                text: root.title;
-                color: #111827;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            Text {
-                text: root.subtitle;
-                color: #94a3b8;
-                font-size: 12px;
-            }
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-        }
-
-        Rectangle {
-            width: 230px;
-            height: 46px;
-            border-radius: 10px;
-            background: #eff6ff;
-
-            VerticalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                padding-top: 7px;
-                padding-bottom: 7px;
-                spacing: 5px;
-
-                HorizontalLayout {
-                    Text {
-                        text: "存储空间";
-                        color: #1d4ed8;
-                        font-size: 11px;
-                        font-weight: 600;
-                    }
-                    Rectangle {
-                        horizontal-stretch: 1;
-                    }
-                    Text {
-                        text: root.used_space + " / " + root.total_space;
-                        color: #1e3a8a;
-                        font-size: 12px;
-                        font-weight: 700;
-                    }
-                }
-
-                Rectangle {
-                    height: 5px;
-                    border-radius: 3px;
-                    background: #bfdbfe;
-                    progress-fill := Rectangle {
-                        x: 0px;
-                        width: parent.width * Math.min(1.0, Math.max(0.0, root.capacity_ratio));
-                        height: 5px;
-                        border-radius: 3px;
-                        background: #2563eb;
-                    }
-                }
-            }
-        }
-    }
-}
-
-component CapacityCard inherits Rectangle {
-    in property <string> used_space: "0 B";
-    in property <string> total_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-
-    height: 126px;
-    border-radius: 12px;
-    background: #2563eb;
-
-    VerticalLayout {
-        padding: 14px;
-        spacing: 6px;
-
-        HorizontalLayout {
-            spacing: 8px;
-            Icon {
-                glyph: "\u{e2be}";
-                icon-color: #ffffff;
-                font-size: 22px;
-            }
-            Text {
-                text: "云存储容量";
-                color: #dbeafe;
-                font-size: 12px;
-                font-weight: 600;
-                vertical-alignment: center;
-            }
-        }
-
-        Text {
-            text: root.used_space;
-            color: #ffffff;
-            font-size: 20px;
-            font-weight: 800;
-        }
-
-        Text {
-            text: "已使用 / 总容量  ·  " + root.total_space;
-            color: #bfdbfe;
-            font-size: 11px;
-        }
-
-        Rectangle {
-            height: 6px;
-            border-radius: 3px;
-            background: #60a5fa;
-            progress-fill := Rectangle {
-                x: 0px;
-                width: parent.width * Math.min(1.0, Math.max(0.0, root.capacity_ratio));
-                height: 6px;
-                border-radius: 3px;
-                background: #ffffff;
-            }
-        }
-
-        HorizontalLayout {
-            Text {
-                text: "0%";
-                color: #dbeafe;
-                font-size: 10px;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: Math.round(Math.min(1.0, Math.max(0.0, root.capacity_ratio)) * 100.0) + "% 已用";
-                color: #ffffff;
-                font-size: 10px;
-                font-weight: 700;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: "100%";
-                color: #dbeafe;
-                font-size: 10px;
-            }
-        }
-    }
-}
-
-// ===== 文件管理面板 =====
-component FileListPanel inherits VerticalLayout {
-    in property <[FileEntry]> files;
-    in property <string> current_path;
-    in property <string> status_text;
-    in property <string> account_name;
-    in property <string> total-space: "0 B";
-    in property <string> used-space: "0 B";
-    in property <string> selected_id: "";
-    in property <string> renaming_id: "";
-
-    callback item_open(string, string, bool);
-    callback item_select(string);
-    callback item_context_requested(string, string, bool, length, length);
-    callback do_refresh();
-    callback do_navigate_up();
-    callback do_upload();
-    callback do_create_folder();
-    callback do_search(string);
-    callback do_logout();
-    callback do_switch_space(string);
-    callback do_download(string, string);
-    callback do_delete(string, string);
-    callback do_rename(string, string);
-    callback do_get_link(string, string);
-    callback do_move(string, string);
-    callback do_copy(string, string);
-    pure callback make_drag_data(string, string, bool) -> data-transfer;
-    callback drop_can_accept(DropEvent, string) -> DragAction;
-    callback drop_requested(DropEvent, string) -> DragAction;
-
-    horizontal-stretch: 1;
-    vertical-stretch: 1;
-
-    padding: 16px;
-    spacing: 12px;
-
-        HorizontalLayout {
-            spacing: 8px;
-
-            Rectangle {
-                height: 36px;
-                border-radius: 18px;
-                background: #e0f2fe;
-                HorizontalLayout {
-                    padding-left: 14px;
-                    padding-right: 14px;
-                    spacing: 8px;
-                    Icon {
-                        glyph: "\u{e853}";
-                        icon-color: #2563eb;
-                        font-size: 18px;
-                    }
-                    Text {
-                        text: account_name == "" ? "未登录" : account_name;
-                        color: #1e3a8a;
-                        font-weight: 600;
-                        font-size: 13px;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            ToolButton {
-                icon: "\u{e2c4}";
-                label: "下载";
-                enabled: root.selected_id != "";
-                clicked => { root.do_download(root.selected_id, ""); }
-            }
-            ToolButton {
-                icon: "\u{e872}";
-                label: "删除";
-                enabled: root.selected_id != "";
-                clicked => { root.do_delete(root.selected_id, ""); }
-            }
-            ToolButton {
-                icon: "\u{e3c9}";
-                label: "重命名";
-                enabled: root.selected_id != "";
-                clicked => { root.do_rename(root.selected_id, ""); }
-            }
-            ToolButton {
-                icon: "\u{e14d}";
-                label: "复制";
-                enabled: root.selected_id != "";
-                clicked => { root.do_copy(root.selected_id, ""); }
-            }
-            ToolButton {
-                icon: "\u{e157}";
-                label: "提取链接";
-                enabled: root.selected_id != "";
-                clicked => { root.do_get_link(root.selected_id, ""); }
-            }
-            ToolButton {
-                icon: "\u{e9ba}";
-                label: "退出登录";
-                clicked => { root.do_logout(); }
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 12px;
-
-            Button {
-                text: "上传";
-                clicked => { root.do_upload(); }
-            }
-            Button {
-                text: "新建文件夹";
-                clicked => { root.do_create_folder(); }
-            }
-            Button {
-                text: "刷新";
-                clicked => { root.do_refresh(); }
-            }
-
-            Rectangle {
-                width: 1px;
-                height: 24px;
-                background: #e2e8f0;
-            }
-
-            TextIconButton {
-                text: "个人云";
-                icon: "\u{e853}";
-                clicked => { root.do_switch_space("personal"); }
-            }
-            TextIconButton {
-                text: "家庭云";
-                icon: "\u{e7ef}";
-                clicked => { root.do_switch_space("family"); }
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-
-            search-input := LineEdit {
-                placeholder-text: "搜索文件...";
-                width: 200px;
-                edited => {
-                    if (search-input.text != "") {
-                        root.do_search(search-input.text);
-                    }
-                }
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 6px;
-            TextIconButton {
-                text: "上级";
-                icon: "\u{e5c4}";
-                enabled: current_path != "";
-                clicked => { root.do_navigate_up(); }
-            }
-            Text {
-                text: current_path == "" ? "根目录" : current_path;
-                color: #374151;
-                font-size: 14px;
-                vertical-alignment: center;
-            }
-        }
-
-        Rectangle {
-            background: #ffffff;
-            border-radius: 10px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                ScrollView {
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: 2px;
-                        padding: 6px;
-
-                        for entry in files : FileItem {
-                            entry: entry;
-                            selected: entry.id == root.selected_id;
-                            renaming: entry.id == root.renaming_id;
-                            drag-data: root.make_drag_data(entry.id, entry.name, entry.is_dir);
-                            is-drop-target: entry.is_dir;
-                            item_clicked() => {
-                                root.item_select(entry.id);
-                            }
-                            item_double_clicked() => {
-                                root.item_open(entry.id, entry.name, entry.is_dir);
-                            }
-                            item_context_requested(id, name, is_dir, x, y) => {
-                                root.item_context_requested(id, name, is_dir, x, y);
-                            }
-                            rename_submitted(name) => {
-                                root.do_rename(entry.id, name);
-                            }
-                            drop_can_accept(event, folder_id) => {
-                                root.drop_can_accept(event, folder_id);
-                            }
-                            drop_requested(event, folder_id) => {
-                                root.drop_requested(event, folder_id);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        HorizontalLayout {
-            spacing: 16px;
-            Text {
-                text: status_text;
-                color: #6b7280;
-                font-size: 12px;
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: "容量 " + used-space + " / " + total-space;
-                color: #9ca3af;
-                font-size: 12px;
-            }
-        }
-}
-
-// ===== 传输任务项 =====
-component TransferItem inherits Rectangle {
-    in property <TransferEntry> entry;
-    callback do_cancel();
-    callback do_pause();
-
-    height: 56px;
-    border-radius: 8px;
-    background: #ffffff;
-
-    HorizontalLayout {
-        padding-left: 10px;
-        padding-right: 10px;
-        padding-top: 6px;
-        padding-bottom: 6px;
-        spacing: 12px;
-        cross-axis-alignment: center;
-
-        Rectangle {
-            width: 34px;
-            height: 34px;
-            border-radius: 8px;
-            background: entry.direction == "upload" ? #dcfce7 : #dbeafe;
-            Icon {
-                glyph: entry.direction == "upload" ? "\u{e2c6}" : "\u{e2c4}";
-                icon-color: entry.direction == "upload" ? #16a34a : #2563eb;
-                font-size: 18px;
-            }
-        }
-
-        VerticalLayout {
-            spacing: 4px;
-            horizontal-stretch: 1;
-
-            Text {
-                text: entry.name;
-                color: #1f2937;
-                font-size: 13px;
-                overflow: elide;
-            }
-
-            HorizontalLayout {
-                spacing: 6px;
-
-                Text {
-                    text: Math.round(entry.progress) + "%";
-                    color: #94a3b8;
-                    font-size: 10px;
-                    width: 24px;
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: 6px;
-                    border-radius: 3px;
-                    background: #e5e7eb;
-                    progress-fill := Rectangle {
-                        x: 0px;
-                        width: parent.width * Math.min(1.0, Math.max(0.0, entry.progress / 100.0));
-                        height: 6px;
-                        border-radius: 3px;
-                        background: entry.direction == "upload" ? #16a34a : #2563eb;
-                    }
-                }
-
-                Text {
-                    text: "100%";
-                    color: #94a3b8;
-                    font-size: 10px;
-                    width: 32px;
-                }
-            }
-        }
-
-        Text {
-            text: entry.status;
-            color: #6b7280;
-            font-size: 12px;
-            width: 70px;
-        }
-
-        Text {
-            text: entry.speed;
-            color: #16a34a;
-            font-size: 12px;
-            width: 80px;
-        }
-
-        Text {
-            text: Math.round(entry.progress) + "%";
-            color: #374151;
-            font-size: 12px;
-            width: 40px;
-        }
-
-        ToolButton {
-            icon: "\u{e034}";
-            label: "暂停";
-            clicked => { root.do_pause(); }
-        }
-        ToolButton {
-            icon: "\u{e5cd}";
-            label: "取消";
-            clicked => { root.do_cancel(); }
-        }
-    }
-}
-
-// ===== 传输面板 =====
-component TransferPanel inherits Rectangle {
-    in property <[TransferEntry]> transfers;
-    callback cancel_task(int);
-    callback pause_task(int);
-
-    background: #ffffff;
-    horizontal-stretch: 1;
-    vertical-stretch: 1;
-
-    VerticalLayout {
-        horizontal-stretch: 1;
-        vertical-stretch: 1;
-        padding: 14px;
-        spacing: 10px;
-
-        HorizontalLayout {
-            spacing: 8px;
-            Icon {
-                glyph: "\u{e8b6}";
-                icon-color: #2563eb;
-                font-size: 18px;
-            }
-            Text {
-                text: "传输任务 (" + transfers.length + ")";
-                font-size: 14px;
-                font-weight: 600;
-                color: #374151;
-            }
-            Rectangle {
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: "实时进度";
-                color: #9ca3af;
-                font-size: 12px;
-            }
-        }
-
-        Rectangle {
-            background: #f8fafc;
-            border-radius: 8px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                ScrollView {
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-                    VerticalLayout {
-                        spacing: 4px;
-                        padding: 6px;
-                        for t in transfers : TransferItem {
-                            entry: t;
-                            do_cancel() => { root.cancel_task(t.id); }
-                            do_pause() => { root.pause_task(t.id); }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ===== 拖拽上传悬浮遮罩 =====
-component DropOverlay inherits Rectangle {
-    in property <string> target_name: "";
-    in property <bool> active: false;
-
-    background: #2563eb22;
-    border-radius: 12px;
-    border-width: 2px;
-    border-color: #2563eb;
-    opacity: root.active ? 1.0 : 0.0;
-    animate opacity { duration: 150ms; easing: ease-out; }
-
-    Rectangle {
-        border-radius: 10px;
-        border-width: 2px;
-        border-color: #2563eb;
-        x: 4px;
-        y: 4px;
-        width: parent.width - 8px;
-        height: parent.height - 8px;
-    }
-
-    HorizontalLayout {
-        alignment: center;
-        cross-axis-alignment: center;
-        VerticalLayout {
-            spacing: 8px;
-            alignment: center;
-            Rectangle {
-                width: 56px;
-                height: 56px;
-                border-radius: 16px;
-                background: #1e3a8a;
-                Icon {
-                    glyph: "\u{e2c6}";
-                    icon-color: #ffffff;
-                    font-size: 28px;
-                }
-            }
-            Text {
-                text: "松开上传到 " + (root.target_name == "" ? "当前目录" : root.target_name);
-                color: #1e3a8a;
-                font-size: 16px;
-                font-weight: 700;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "支持文件与文件夹（文件夹将自动创建同名云端目录）";
-                color: #3b5b9a;
-                font-size: 12px;
-                horizontal-alignment: center;
-            }
-        }
-    }
-}
-
-// ===== 云盘工作区 =====
-component CloudPage inherits Rectangle {
-    in property <string> page_title;
-    in property <string> page_subtitle;
-    in property <[FileEntry]> files;
-    in property <string> current_path;
-    in property <string> status_text;
-    in property <string> account_name;
-    in property <string> total_space: "0 B";
-    in property <string> used_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-    in property <string> selected_id: "";
-    in property <string> renaming_id: "";
-    in property <[TransferEntry]> transfers: [];
-    in property <bool> searching: false;
-    in property <bool> search_loading: false;
-    in property <string> search_keyword: "";
-    in property <[FileEntry]> search_results: [];
-    in property <bool> drop-active: false;
-    in property <string> drop-target-name: "";
-
-    callback open_item(string, string, bool);
-    callback select_item(string);
-    callback item_context_requested(string, string, bool, length, length);
-    callback refresh_files();
-    callback navigate_up();
-    callback upload_files();
-    callback create_folder();
-    callback search_files(string);
-    callback clear_search();
-    callback logout();
-    callback switch_space(string);
-    callback download_file(string);
-    callback delete_file(string);
-    callback rename_file(string, string);
-    callback copy_file(string);
-    callback get_link(string);
-    callback cancel_task(int);
-    pure callback make_drag_data(string, string, bool) -> data-transfer;
-    callback drop_can_accept(DropEvent, string) -> DragAction;
-    callback drop_requested(DropEvent, string) -> DragAction;
-
-    background: #f1f5f9;
-
-    VerticalLayout {
-        spacing: 10px;
-
-        PageHeader {
-            title: root.page_title;
-            subtitle: root.page_subtitle;
-            used_space: root.used_space;
-            total_space: root.total_space;
-            capacity_ratio: root.capacity_ratio;
-        }
-
-        if (root.searching): Rectangle {
-            background: #ffffff;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                padding: 12px;
-                spacing: 8px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    TextIconButton {
-                        text: "返回";
-                        icon: "\u{e5c4}";
-                        clicked => { root.clear_search(); }
-                    }
-                    query-input := LineEdit {
-                        text: root.search_keyword;
-                        placeholder-text: "搜索文件...";
-                        horizontal-stretch: 1;
-                        edited => { root.search_files(query-input.text); }
-                    }
-                }
-
-                if (root.search_loading): Rectangle {
-                    background: #f8fafc;
-                    border-radius: 8px;
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-                    Text {
-                        text: "正在搜索…";
-                        color: #64748b;
-                        font-size: 14px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
-
-                if (!root.search_loading && root.search_results.length == 0): Rectangle {
-                    background: #f8fafc;
-                    border-radius: 8px;
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-                    Text {
-                        text: root.status_text;
-                        color: #64748b;
-                        font-size: 14px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                    }
-                }
-
-                if (!root.search_loading && root.search_results.length > 0): Rectangle {
-                    background: #f8fafc;
-                    border-radius: 8px;
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
-
-                    ScrollView {
-                        horizontal-stretch: 1;
-                        vertical-stretch: 1;
-                        VerticalLayout {
-                            spacing: 2px;
-                            padding: 6px;
-                            for result in root.search_results : FileItem {
-                                entry: result;
-                                selected: result.id == root.selected_id;
-                                item_clicked() => {
-                                    root.open_item(result.id, result.name, result.is_dir);
-                                }
-                                item_double_clicked() => {
-                                    root.open_item(result.id, result.name, result.is_dir);
-                                }
-                                item_context_requested(id, name, is_dir, x, y) => {
-                                    root.item_context_requested(id, name, is_dir, x, y);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!root.searching): Rectangle {
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-            clip: true;
-
-            FileListPanel {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                files: root.files;
-                current_path: root.current_path;
-                status_text: root.status_text;
-                account_name: root.account_name;
-                total-space: root.total_space;
-                used-space: root.used_space;
-                selected_id: root.selected_id;
-                renaming_id: root.renaming_id;
-
-                item_open(id, name, is_dir) => {
-                    root.open_item(id, name, is_dir);
-                }
-                item_select(id) => {
-                    root.select_item(id);
-                }
-                item_context_requested(id, name, is_dir, x, y) => {
-                    root.item_context_requested(id, name, is_dir, x, y);
-                }
-                do_refresh() => { root.refresh_files(); }
-                do_navigate_up() => { root.navigate_up(); }
-                do_upload() => { root.upload_files(); }
-                do_create_folder() => { root.create_folder(); }
-                do_download(id, name) => { root.download_file(id); }
-                do_delete(id, name) => { root.delete_file(id); }
-                do_rename(id, name) => { root.rename_file(id, name); }
-                do_copy(id, name) => { root.copy_file(id); }
-                do_get_link(id, name) => { root.get_link(id); }
-                do_search(keyword) => { root.search_files(keyword); }
-                do_logout() => { root.logout(); }
-                do_switch_space(space) => { root.switch_space(space); }
-                make_drag_data(id, name, is_dir) => { root.make_drag_data(id, name, is_dir); }
-                drop_can_accept(event, folder_id) => { root.drop_can_accept(event, folder_id); }
-                drop_requested(event, folder_id) => { root.drop_requested(event, folder_id); }
-            }
-
-            DropOverlay {
-                width: parent.width;
-                height: parent.height;
-                target_name: root.drop-target-name;
-                active: root.drop-active;
-            }
-        }
-
-        Rectangle {
-            height: 174px;
-            background: #ffffff;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-
-            TransferPanel {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                transfers: root.transfers;
-                cancel_task(id) => { root.cancel_task(id); }
-                pause_task(id) => { root.cancel_task(id); }
-            }
-        }
-    }
-}
-
-// ===== 独立传输任务页 =====
-component TransferPage inherits Rectangle {
-    in property <string> used_space: "0 B";
-    in property <string> total_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-    in property <[TransferEntry]> transfers: [];
-    callback cancel_task(int);
-
-    background: #f1f5f9;
-
-    VerticalLayout {
-        spacing: 10px;
-
-        PageHeader {
-            title: "传输任务";
-            subtitle: "集中查看上传与下载进度";
-            used_space: root.used_space;
-            total_space: root.total_space;
-            capacity_ratio: root.capacity_ratio;
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-            background: #ffffff;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-
-            TransferPanel {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                transfers: root.transfers;
-                cancel_task(id) => { root.cancel_task(id); }
-                pause_task(id) => { root.cancel_task(id); }
-            }
-        }
-    }
-}
-
-// ===== 独立分享链接页 =====
-component SharePage inherits Rectangle {
-    in property <string> used_space: "0 B";
-    in property <string> total_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-    callback go_personal();
-
-    background: #f1f5f9;
-
-    VerticalLayout {
-        spacing: 10px;
-
-        PageHeader {
-            title: "分享链接";
-            subtitle: "管理已创建的文件分享链接";
-            used_space: root.used_space;
-            total_space: root.total_space;
-            capacity_ratio: root.capacity_ratio;
-        }
-
-        Rectangle {
-            horizontal-stretch: 1;
-            vertical-stretch: 1;
-            background: #ffffff;
-            border-radius: 12px;
-            border-width: 1px;
-            border-color: #e5e7eb;
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                alignment: center;
-                spacing: 12px;
-
-                Rectangle {
-                    width: 64px;
-                    height: 64px;
-                    border-radius: 20px;
-                    background: #dbeafe;
-                    Icon {
-                        glyph: "\u{e157}";
-                        icon-color: #2563eb;
-                        font-size: 32px;
-                    }
-                }
-
-                Text {
-                    text: "暂无分享链接";
-                    color: #1f2937;
-                    font-size: 18px;
-                    font-weight: 700;
-                    horizontal-alignment: center;
-                }
-
-                Text {
-                    text: "在个人云或家庭云中选择文件，使用工具栏的“提取链接”即可创建分享。";
-                    color: #94a3b8;
-                    font-size: 13px;
-                    horizontal-alignment: center;
-                }
-
-                TextIconButton {
-                    text: "返回个人云";
-                    icon: "\u{e88a}";
-                    clicked => { root.go_personal(); }
-                }
-            }
-        }
-    }
-}
+// 天翼云盘客户端主窗口
+//
+// 结构：
+//   未登录 → LoginPage（整窗认证界面）
+//   已登录 → NavigationView（可折叠）+ 内容区（个人云/家庭云/传输/直链/设置）
+//            + 可展开的传输抽屉 + 上下文菜单 + 账号菜单 + 全局提示条
+//
+// 保留系统原生标题栏：不自绘标题栏，确保窗口拖动、贴边、双击最大化、DPI 缩放
+// 与系统快捷键完全由操作系统负责，避免自绘窗控带来的不可靠行为。
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "theme/tokens.slint";
+import { Icon, Icons } from "theme/icons.slint";
+import { FileEntry, TransferEntry, CrumbEntry, TooltipState } from "types.slint";
+import { FluentButton } from "components/button.slint";
+import { FluentIconButton } from "components/icon-button.slint";
+import { FluentNavItem } from "components/nav-item.slint";
+import { FluentProgressBar } from "components/progress-bar.slint";
+import { FluentInfoBar } from "components/info-bar.slint";
+import { FluentMenuItem, FluentMenuDivider } from "components/menu.slint";
+import { TransferRow } from "components/transfer-row.slint";
+import { LoginPage } from "pages/login.slint";
+import { CloudPage } from "pages/cloud.slint";
+import { TransfersPage } from "pages/transfers.slint";
+import { LinksPage, DirectLink } from "pages/links.slint";
+import { SettingsPage } from "pages/settings.slint";
+
+// 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
+export { Theme } from "theme/tokens.slint";
+export { DragOutApi } from "types.slint";
 
 export component MainWindow inherits Window {
-    title: "天翼云盘客户端";
-    preferred-width: 1100px;
-    preferred-height: 720px;
+    title: "天翼云盘";
+    preferred-width: 1180px;
+    preferred-height: 760px;
     min-width: 900px;
     min-height: 620px;
-    background: #f1f5f9;
+    background: Theme.window-bg;
 
-    in property <bool> logged_in: false;
-    in property <[FileEntry]> file_list: [];
-    in property <string> current_path: "";
-    in property <string> status_text: "就绪";
-    in property <string> account_name: "";
-    in property <[TransferEntry]> transfer_list: [];
+    // ==================== 会话 ====================
+    in property <bool> logged-in: false;
+    in property <string> account-name: "";
+    in property <string> account-initial: "?";
+    in property <string> status-text: "";
+    in-out property <int> current-page: 0;
+    in property <string> version-text: "";
+
+    // ==================== 登录 ====================
+    in property <string> login-error: "";
+    in property <bool> show-captcha: false;
+    in property <image> captcha-image;
+    in property <image> qr-image;
+    in property <string> qr-status: "";
+    /// loading / waiting / scanned / confirmed / expired / error / success
+    in property <string> qr-state: "loading";
+    in property <bool> login-loading: false;
+    in property <bool> qr-mode: false;
+    in property <[string]> saved-accounts: [];
+
+    // ==================== 文件浏览 ====================
+    in property <[FileEntry]> file-list: [];
+    in property <[CrumbEntry]> crumbs: [];
     in property <bool> searching: false;
-    in property <bool> search_loading: false;
-    in property <string> search_keyword: "";
-    in property <[FileEntry]> search_results: [];
-    in property <string> selected_id: "";
-    in property <string> renaming_id: "";
-    in property <bool> qr_mode: false;
+    in property <bool> search-loading: false;
+    in-out property <string> search-keyword: "";
+    in property <string> selected-id: "";
+    in-out property <bool> select-all: false;
+    in property <string> renaming-id: "";
+    in property <bool> file-loading: false;
+    in property <string> file-error: "";
 
-    in property <string> login_error: "";
-    in property <bool> show_captcha: false;
-    in property <image> captcha_image;
-    in property <image> qr_image;
-    in property <string> qr_status: "请使用天翼云盘App扫码";
-    in property <bool> login_loading: false;
-    in property <[string]> saved_accounts: [];
+    // ==================== 容量 ====================
+    in property <string> total-space: "";
+    in property <string> used-space: "";
+    in property <float> capacity-ratio: 0.0;
 
-    in property <string> total_space: "0 B";
-    in property <string> used_space: "0 B";
-    in property <float> capacity_ratio: 0.0;
-    in-out property <int> current_page: 0;
-    property <bool> context-menu-visible: false;
-    property <length> context-menu-x: 0px;
-    property <length> context-menu-y: 0px;
-    property <string> context-item-id: "";
-    property <string> context-item-name: "";
-    property <bool> context-item-is-dir: false;
-    property <length> context-menu-height: context-item-is-dir ? 196px : 270px;
+    // ==================== 传输 ====================
+    in property <[TransferEntry]> transfer-list: [];
+    in property <[TransferEntry]> active-transfer-list: [];
+    in property <int> active-transfers: 0;
+    in property <int> finished-transfers: 0;
+    in-out property <int> transfer-filter: 0;
+    in-out property <bool> transfer-panel-open: false;
 
+    // ==================== 直链 ====================
+    in property <[DirectLink]> links: [];
+
+    // ==================== 设置 ====================
+    in-out property <int> theme-index: 0;
+    in property <bool> reduce-motion: false;
+    in property <string> download-dir: "";
+    in property <string> upload-thread: "";
+    in property <string> download-thread: "";
+    in property <string> config-dir: "";
+
+    // ==================== 提示与拖拽 ====================
+    in property <string> notice-text: "";
+    in property <string> notice-kind: "info";
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
 
-    callback login_request(string, string, string);
+    // ==================== 登录回调 ====================
+    callback login_request(string, string, string, bool);
     callback qr_refresh();
     callback switch_mode(bool);
     callback quick_login(string);
+
+    // ==================== 文件回调 ====================
     callback open_item(string, string, bool);
-    callback item_context_requested(string, string, bool, length, length);
     callback select_item(string);
+    callback context_requested(string, string, bool, length, length);
     callback refresh_files();
     callback navigate_up();
+    callback navigate_crumb(int);
+    callback switch_space(string);
     callback upload_files();
     callback create_folder();
-    callback download_file(string);
-    callback delete_file(string);
-    callback rename_file(string, string);
-    callback copy_file(string);
-    callback get_link(string);
-    callback search_files(string);
+    callback download_selected();
+    callback rename_selected();
+    callback rename_submitted(string, string);
+    callback copy_selected();
+    callback move_selected_up();
+    callback delete_selected();
+    callback link_selected();
+    callback search_changed(string);
+    callback search_submitted(string);
     callback clear_search();
+    callback notice_closed();
+    callback transfer_filter_changed(int);
+
+    // ==================== 传输回调 ====================
+    callback pause_task(int);
+    callback resume_task(int);
     callback cancel_task(int);
+    callback retry_task(int);
+    callback remove_task(int);
+    callback reveal_task(int);
+    callback clear_finished_tasks();
+    callback toggle_transfer_panel();
+    callback open_download_dir();
+
+    // ==================== 其它 ====================
+    callback copy_link(string);
+    callback clear_links();
+    callback theme_changed(int);
+    callback reduce_motion_changed(bool);
+    callback choose_download_dir();
+    callback open_config_dir();
     callback logout();
-    callback switch_space(string);
     callback files_dropped(string);
     pure callback make_drag_data(string, string, bool) -> data-transfer;
     callback drop_can_accept(DropEvent, string) -> DragAction;
     callback drop_requested(DropEvent, string) -> DragAction;
 
-    // ===== 共享云盘工作区与独立功能页 =====
-    HorizontalLayout {
-        Rectangle {
-            width: 216px;
-            background: #1e3a8a;
+    // ==================== 布局状态 ====================
+    property <bool> nav-compact: root.width < 1040px;
+    property <bool> list-compact: root.width < 1000px;
+    property <bool> account-menu-open: false;
+    // 右键菜单状态（由控制器写入，菜单面板按此定位）
+    in-out property <bool> context-open: false;
+    in-out property <length> context-x: 0px;
+    in-out property <length> context-y: 0px;
+    in-out property <string> context-item-id: "";
+    in-out property <string> context-item-name: "";
+    in-out property <bool> context-is-dir: false;
+    property <int> context-item-count: root.context-is-dir ? 5 : 7;
+    property <string> capacity-text: root.total-space == "" ? "" : ("容量 " + root.used-space + " / " + root.total-space);
+
+    // ==================== 未登录 ====================
+    if !root.logged-in: LoginPage {
+        login-error: root.login-error;
+        login-loading: root.login-loading;
+        qr-mode: root.qr-mode;
+        captcha-image: root.captcha-image;
+        show-captcha: root.show-captcha;
+        qr-image: root.qr-image;
+        qr-status: root.qr-status;
+        qr-state: root.qr-state;
+        status-hint: root.status-text;
+        saved-accounts: root.saved-accounts;
+
+        do-login(user, pass, captcha, save) => {
+            root.login_request(user, pass, captcha, save);
+        }
+        do-switch-mode(qr) => {
+            root.switch_mode(qr);
+        }
+        do-qr-refresh => {
+            root.qr_refresh();
+        }
+        do-quick-login(name) => {
+            root.quick_login(name);
+        }
+    }
+
+    // ==================== 已登录 ====================
+    if root.logged-in: HorizontalLayout {
+        // ---------------- 导航栏 ----------------
+        nav := Rectangle {
+            width: root.nav-compact ? Theme.nav-width-compact : Theme.nav-width;
+            background: Theme.layer-bg;
+            border-width: 1px;
+            border-color: Theme.divider;
+
+            animate width {
+                duration: Theme.motion-normal;
+                easing: ease-in-out;
+            }
 
             VerticalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                padding: 16px;
-                spacing: 6px;
+                padding-left: root.nav-compact ? 8px : 10px;
+                padding-right: root.nav-compact ? 8px : 10px;
+                padding-top: 12px;
+                padding-bottom: 10px;
+                spacing: 4px;
 
+                // 品牌
                 HorizontalLayout {
+                    height: 40px;
                     spacing: 10px;
+                    cross-axis-alignment: center;
+
                     Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: 10px;
-                        background: #2563eb;
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 9px;
+                        background: Theme.accent;
+
                         Icon {
-                            glyph: "\u{e2bd}";
-                            icon-color: #ffffff;
-                            font-size: 22px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
+                            glyph: Icons.cloud;
+                            size: 17px;
+                            thickness: 1.7px;
+                            icon-color: Theme.text-on-accent;
                         }
                     }
-                    Text {
+
+                    if !root.nav-compact: Text {
                         text: "天翼云盘";
-                        color: #ffffff;
-                        font-size: 17px;
-                        font-weight: 700;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-subtitle;
+                        font-weight: 600;
+                        color: Theme.text-primary;
                         vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
                     }
                 }
 
                 Rectangle {
-                    height: 18px;
+                    height: 8px;
                 }
 
-                NavItem {
-                    icon: "\u{e88a}";
-                    label: "首页";
-                    active: root.current_page == 0;
-                    enabled: root.logged_in;
+                FluentNavItem {
+                    glyph: Icons.home;
+                    label: "个人云";
+                    compact: root.nav-compact;
+                    selected: root.current-page == 0;
                     clicked => {
-                        root.current_page = 0;
+                        root.current-page = 0;
                         root.switch_space("personal");
                     }
                 }
-                NavItem {
-                    icon: "\u{e7ef}";
+
+                FluentNavItem {
+                    glyph: Icons.people;
                     label: "家庭云";
-                    active: root.current_page == 1;
-                    enabled: root.logged_in;
+                    compact: root.nav-compact;
+                    selected: root.current-page == 1;
                     clicked => {
-                        root.current_page = 1;
+                        root.current-page = 1;
                         root.switch_space("family");
                     }
                 }
-                NavItem {
-                    icon: "\u{e2c4}";
+
+                FluentNavItem {
+                    glyph: Icons.transfer;
                     label: "传输任务";
-                    active: root.current_page == 2;
-                    enabled: root.logged_in;
+                    compact: root.nav-compact;
+                    selected: root.current-page == 2;
+                    badge: root.active-transfers;
                     clicked => {
-                        root.current_page = 2;
+                        root.current-page = 2;
                     }
                 }
-                NavItem {
-                    icon: "\u{e157}";
-                    label: "分享链接";
-                    active: root.current_page == 3;
-                    enabled: root.logged_in;
+
+                FluentNavItem {
+                    glyph: Icons.link;
+                    label: "下载直链";
+                    compact: root.nav-compact;
+                    selected: root.current-page == 3;
+                    badge: root.links.length;
                     clicked => {
-                        root.current_page = 3;
+                        root.current-page = 3;
+                    }
+                }
+
+                FluentNavItem {
+                    glyph: Icons.settings;
+                    label: "设置";
+                    compact: root.nav-compact;
+                    selected: root.current-page == 4;
+                    clicked => {
+                        root.current-page = 4;
                     }
                 }
 
                 Rectangle {
-                    height: 16px;
+                    vertical-stretch: 1;
                 }
 
-                CapacityCard {
-                    used_space: root.used_space;
-                    total_space: root.total_space;
-                    capacity_ratio: root.capacity_ratio;
+                // 存储卡片
+                if !root.nav-compact: Rectangle {
+                    border-radius: Theme.radius-card;
+                    background: Theme.card-bg;
+                    border-width: 1px;
+                    border-color: Theme.stroke;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        spacing: 6px;
+
+                        HorizontalLayout {
+                            spacing: 6px;
+                            cross-axis-alignment: center;
+
+                            Icon {
+                                glyph: Icons.storage;
+                                size: 14px;
+                                thickness: 1.6px;
+                                icon-color: Theme.text-secondary;
+                            }
+
+                            Text {
+                                text: "存储空间";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            Text {
+                                text: root.total-space == "" ? "—" : Math.round(Math.min(1.0, Math.max(0.0, root.capacity-ratio)) * 100.0) + "%";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                font-weight: 600;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        FluentProgressBar {
+                            value: root.capacity-ratio * 100.0;
+                            bar-height: 4px;
+                            bar-color: root.capacity-ratio > 0.9 ? Theme.danger : Theme.accent;
+                        }
+
+                        Text {
+                            text: root.total-space == "" ? "未获取到容量信息" : (root.used-space + " / " + root.total-space);
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            color: Theme.text-tertiary;
+                            overflow: elide;
+                        }
+                    }
                 }
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
+                // 账号行
+                account-row := Rectangle {
+                    height: 44px;
+                    border-radius: Theme.radius-control;
+                    background: account-ta.has-hover || root.account-menu-open ? Theme.hover-bg : transparent;
 
-                NavItem {
-                    icon: "\u{e9ba}";
-                    label: "退出登录";
-                    enabled: root.logged_in;
-                    clicked => { root.logout(); }
+                    HorizontalLayout {
+                        padding-left: root.nav-compact ? 0px : 6px;
+                        spacing: 10px;
+
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: 28px;
+                            height: 28px;
+                            border-radius: 14px;
+                            background: Theme.accent-soft;
+
+                            Text {
+                                text: root.account-initial;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-body;
+                                font-weight: 600;
+                                color: Theme.accent;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if !root.nav-compact: Text {
+                            text: root.account-name;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-body;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+
+                        if !root.nav-compact: Icon {
+                            glyph: Icons.more;
+                            filled: true;
+                            size: 14px;
+                            icon-color: Theme.text-tertiary;
+                        }
+                    }
+
+                    account-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.account-menu-open = !root.account-menu-open;
+                        }
+                    }
                 }
             }
         }
 
+        // ---------------- 内容区 ----------------
         VerticalLayout {
             horizontal-stretch: 1;
-            vertical-stretch: 1;
             spacing: 0px;
-            padding: 14px;
 
-            if (!root.logged_in): HorizontalLayout {
-                horizontal-stretch: 1;
-                vertical-stretch: 1;
-                alignment: center;
-                LoginPanel {
-                    width: 420px;
-                    height: 520px;
-                    error_text: root.login_error;
-                    show_captcha: root.show_captcha;
-                    captcha_image: root.captcha_image;
-                    qr_image: root.qr_image;
-                    qr_status_text: root.qr_status;
-                    login_loading: root.login_loading;
-                    qr_mode: root.qr_mode;
-                    saved_accounts: root.saved_accounts;
+            // 全局提示条
+            if root.notice-text != "": Rectangle {
+                background: Theme.window-bg;
 
-                    do_login(username, password, captcha) => {
-                        root.login_request(username, password, captcha);
-                    }
-                    do_switch_mode(qr) => {
-                        root.switch_mode(qr);
-                    }
-                    do_qr_refresh() => {
-                        root.qr_refresh();
-                    }
-                    do_quick_login(username) => {
-                        root.quick_login(username);
+                VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 10px;
+
+                    FluentInfoBar {
+                        message: root.notice-text;
+                        kind: root.notice-kind;
+                        closed => {
+                            root.notice_closed();
+                        }
                     }
                 }
             }
 
-            if (root.logged_in): Rectangle {
-                horizontal-stretch: 1;
+            // 传输抽屉
+            if root.transfer-panel-open: Rectangle {
+                height: 260px;
+                background: Theme.layer-bg;
+                border-width: 1px;
+                border-color: Theme.divider;
+
+                VerticalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        height: 28px;
+                        spacing: 8px;
+                        cross-axis-alignment: center;
+
+                        Icon {
+                            glyph: Icons.transfer;
+                            size: 15px;
+                            thickness: 1.7px;
+                            icon-color: Theme.accent;
+                        }
+
+                        Text {
+                            text: "传输任务 " + root.active-transfers;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-body;
+                            font-weight: 600;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                        }
+
+                        FluentButton {
+                            text: "全部任务";
+                            subtle: true;
+                            clicked => {
+                                root.current-page = 2;
+                                root.transfer-panel-open = false;
+                            }
+                        }
+
+                        FluentIconButton {
+                            glyph: Icons.chevron-down;
+                            tooltip: "收起传输面板";
+                            clicked => {
+                                root.transfer-panel-open = false;
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: transparent;
+
+                        if root.active-transfer-list.length > 0: ListView {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+
+                            for task in root.active-transfer-list : TransferRow {
+                                entry: task;
+                                pause-clicked => {
+                                    root.pause_task(task.id);
+                                }
+                                resume-clicked => {
+                                    root.resume_task(task.id);
+                                }
+                                cancel-clicked => {
+                                    root.cancel_task(task.id);
+                                }
+                                retry-clicked => {
+                                    root.retry_task(task.id);
+                                }
+                                remove-clicked => {
+                                    root.remove_task(task.id);
+                                }
+                                reveal-clicked => {
+                                    root.reveal_task(task.id);
+                                }
+                            }
+                        }
+
+                        if root.active-transfer-list.length == 0: Text {
+                            x: 0;
+                            y: (parent.height - self.height) / 2;
+                            width: parent.width;
+                            text: "当前没有进行中的传输任务";
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-small;
+                            color: Theme.text-tertiary;
+                            horizontal-alignment: center;
+                        }
+                    }
+                }
+            }
+
+            // 页面容器：所有页面常驻，按 current-page 显示，避免切换时丢失滚动位置与输入状态
+            Rectangle {
                 vertical-stretch: 1;
-                background: transparent;
-                clip: true;
+                background: Theme.window-bg;
 
-                Rectangle {
+                CloudPage {
+                    x: 0;
+                    y: 0;
                     width: parent.width;
                     height: parent.height;
-                    x: root.current_page < 2 ? 0px : (root.current_page == 2 ? 28px : -28px);
-                    opacity: root.current_page < 2 ? 1.0 : 0.0;
-                    animate x { duration: 220ms; easing: ease-in-out; }
-                    animate opacity { duration: 180ms; easing: ease-in-out; }
+                    visible: root.current-page < 2;
+                    space-label: root.current-page == 1 ? "家庭云" : "个人云";
+                    crumbs: root.crumbs;
+                    rows: root.file-list;
+                    selected-id: root.selected-id;
+                    select-all: root.select-all;
+                    renaming-id: root.renaming-id;
+                    searching: root.searching;
+                    loading: root.file-loading;
+                    compact: root.list-compact;
+                    status-text: root.status-text;
+                    capacity-text: root.capacity-text;
+                    active-transfers: root.active-transfers;
+                    error-text: root.file-error;
+                    drop-active: root.drop-active;
+                    drop-target-name: root.drop-target-name;
+                    search-text <=> root.search-keyword;
 
-                    CloudPage {
-                        width: parent.width;
-                        height: parent.height;
-                        visible: root.current_page < 2;
-                        page_title: root.current_page == 1 ? "家庭云" : "个人云";
-                        page_subtitle: root.current_page == 1 ? "与家人共享和管理文件" : "管理和同步您的个人文件";
-                        files: root.file_list;
-                        current_path: root.current_path;
-                        status_text: root.status_text;
-                        account_name: root.account_name;
-                        total_space: root.total_space;
-                        used_space: root.used_space;
-                        capacity_ratio: root.capacity_ratio;
-                        selected_id: root.selected_id;
-                        renaming_id: root.renaming_id;
-                        transfers: root.transfer_list;
-                        searching: root.searching;
-                        search_loading: root.search_loading;
-                        search_keyword: root.search_keyword;
-                        search_results: root.search_results;
-                        drop-active: root.drop-active;
-                        drop-target-name: root.drop-target-name;
-
-                        open_item(id, name, is_dir) => { root.open_item(id, name, is_dir); }
-                        item_context_requested(id, name, is_dir, x, y) => {
-                            root.context-item-id = id;
-                            root.context-item-name = name;
-                            root.context-item-is-dir = is_dir;
-                            root.context-menu-x = clamp(x, 12px, root.width - 250px);
-                            root.context-menu-y = clamp(y, 12px, root.height - root.context-menu-height - 12px);
-                            root.context-menu-visible = true;
-                            root.select_item(id);
-                        }
-                        select_item(id) => { root.select_item(id); }
-                        refresh_files() => { root.refresh_files(); }
-                        navigate_up() => { root.navigate_up(); }
-                        upload_files() => { root.upload_files(); }
-                        create_folder() => { root.create_folder(); }
-                        search_files(keyword) => { root.search_files(keyword); }
-                        clear_search() => { root.clear_search(); }
-                        logout() => { root.logout(); }
-                        switch_space(space) => {
-                            root.switch_space(space);
-                            root.current_page = space == "family" ? 1 : 0;
-                        }
-                        download_file(id) => { root.download_file(id); }
-                        delete_file(id) => { root.delete_file(id); }
-                        rename_file(id, name) => { root.rename_file(id, name); }
-                        copy_file(id) => { root.copy_file(id); }
-                        get_link(id) => { root.get_link(id); }
-                        cancel_task(id) => { root.cancel_task(id); }
-                        make_drag_data(id, name, is_dir) => {
-                            root.make_drag_data(id, name, is_dir);
-                        }
-                        drop_can_accept(event, folder_id) => {
-                            root.drop_can_accept(event, folder_id);
-                        }
-                        drop_requested(event, folder_id) => {
-                            root.drop_requested(event, folder_id);
-                        }
+                    select-item(id) => {
+                        root.select_item(id);
+                    }
+                    open-item(id, name, is-dir) => {
+                        root.open_item(id, name, is-dir);
+                    }
+                    context-requested(id, name, is-dir, x, y) => {
+                        root.context_requested(id, name, is-dir, x, y);
+                    }
+                    navigate-crumb(idx) => {
+                        root.navigate_crumb(idx);
+                    }
+                    navigate-up => {
+                        root.navigate_up();
+                    }
+                    refresh => {
+                        root.refresh_files();
+                    }
+                    upload => {
+                        root.upload_files();
+                    }
+                    create-folder => {
+                        root.create_folder();
+                    }
+                    search-changed(kw) => {
+                        root.search_changed(kw);
+                    }
+                    search-submitted(kw) => {
+                        root.search_submitted(kw);
+                    }
+                    search-cleared => {
+                        root.clear_search();
+                    }
+                    download-selected => {
+                        root.download_selected();
+                    }
+                    rename-selected => {
+                        root.rename_selected();
+                    }
+                    rename-submitted(id, name) => {
+                        root.rename_submitted(id, name);
+                    }
+                    copy-selected => {
+                        root.copy_selected();
+                    }
+                    move-selected-up => {
+                        root.move_selected_up();
+                    }
+                    delete-selected => {
+                        root.delete_selected();
+                    }
+                    link-selected => {
+                        root.link_selected();
+                    }
+                    toggle-transfers => {
+                        root.toggle_transfer_panel();
+                    }
+                    make-drag-data(id, name, is-dir) => {
+                        root.make_drag_data(id, name, is-dir);
+                    }
+                    drop-can-accept(event, folder-id) => {
+                        root.drop_can_accept(event, folder-id);
+                    }
+                    drop-requested(event, folder-id) => {
+                        root.drop_requested(event, folder-id);
                     }
                 }
 
-                Rectangle {
+                TransfersPage {
+                    x: 0;
+                    y: 0;
                     width: parent.width;
                     height: parent.height;
-                    x: root.current_page == 2 ? 0px : (root.current_page > 2 ? -28px : 28px);
-                    opacity: root.current_page == 2 ? 1.0 : 0.0;
-                    animate x { duration: 220ms; easing: ease-in-out; }
-                    animate opacity { duration: 180ms; easing: ease-in-out; }
+                    visible: root.current-page == 2;
+                    rows: root.transfer-list;
+                    filter <=> root.transfer-filter;
+                    active-count: root.active-transfers;
+                    finished-count: root.finished-transfers;
 
-                    TransferPage {
-                        width: parent.width;
-                        height: parent.height;
-                        visible: root.current_page == 2;
-                        used_space: root.used_space;
-                        total_space: root.total_space;
-                        capacity_ratio: root.capacity_ratio;
-                        transfers: root.transfer_list;
-                        cancel_task(id) => { root.cancel_task(id); }
+                    filter-changed(idx) => {
+                        root.transfer_filter_changed(idx);
+                    }
+                    pause-task(id) => {
+                        root.pause_task(id);
+                    }
+                    resume-task(id) => {
+                        root.resume_task(id);
+                    }
+                    cancel-task(id) => {
+                        root.cancel_task(id);
+                    }
+                    retry-task(id) => {
+                        root.retry_task(id);
+                    }
+                    remove-task(id) => {
+                        root.remove_task(id);
+                    }
+                    reveal-task(id) => {
+                        root.reveal_task(id);
+                    }
+                    clear-finished => {
+                        root.clear_finished_tasks();
+                    }
+                    open-download-dir => {
+                        root.open_download_dir();
                     }
                 }
 
-                Rectangle {
+                LinksPage {
+                    x: 0;
+                    y: 0;
                     width: parent.width;
                     height: parent.height;
-                    x: root.current_page == 3 ? 0px : 28px;
-                    opacity: root.current_page == 3 ? 1.0 : 0.0;
-                    animate x { duration: 220ms; easing: ease-in-out; }
-                    animate opacity { duration: 180ms; easing: ease-in-out; }
+                    visible: root.current-page == 3;
+                    links: root.links;
+                    status-text: root.status-text;
 
-                    SharePage {
-                        width: parent.width;
-                        height: parent.height;
-                        visible: root.current_page == 3;
-                        used_space: root.used_space;
-                        total_space: root.total_space;
-                        capacity_ratio: root.capacity_ratio;
-                        go_personal() => {
-                            root.current_page = 0;
-                            root.switch_space("personal");
-                        }
+                    copy-link(url) => {
+                        root.copy_link(url);
+                    }
+                    go-personal => {
+                        root.current-page = 0;
+                        root.switch_space("personal");
+                    }
+                    clear-links => {
+                        root.clear_links();
+                    }
+                }
+
+                SettingsPage {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    visible: root.current-page == 4;
+                    account-name: root.account-name;
+                    theme-index: root.theme-index;
+                    reduce-motion: root.reduce-motion;
+                    download-dir: root.download-dir;
+                    upload-thread: root.upload-thread;
+                    download-thread: root.download-thread;
+                    version-text: root.version-text;
+                    config-dir: root.config-dir;
+
+                    theme-changed(idx) => {
+                        root.theme_changed(idx);
+                    }
+                    reduce-motion-changed(on) => {
+                        root.reduce_motion_changed(on);
+                    }
+                    choose-download-dir => {
+                        root.choose_download_dir();
+                    }
+                    open-config-dir => {
+                        root.open_config_dir();
+                    }
+                    logout => {
+                        root.logout();
                     }
                 }
             }
         }
     }
 
-    Rectangle {
-        visible: root.context-menu-visible;
-        x: 0px;
-        y: 0px;
+    // ==================== 遮罩层：账号菜单 ====================
+    if root.account-menu-open: Rectangle {
+        x: 0;
+        y: 0;
         width: root.width;
         height: root.height;
-        background: #00000000;
+        background: transparent;
 
         TouchArea {
-            clicked => { root.context-menu-visible = false; }
+            clicked => {
+                root.account-menu-open = false;
+            }
         }
     }
 
-    Rectangle {
-        visible: root.context-menu-visible;
-        x: root.context-menu-x + 3px;
-        y: root.context-menu-y + 5px;
-        width: 238px;
-        height: root.context-menu-height;
-        border-radius: 12px;
-        background: #0f172a;
-        opacity: root.context-menu-visible ? 0.16 : 0.0;
-        animate opacity { duration: 150ms; easing: ease-out; }
-    }
-
-    Rectangle {
-        visible: root.context-menu-visible;
-        x: root.context-menu-x;
-        y: root.context-menu-visible ? root.context-menu-y : root.context-menu-y - 8px;
-        width: 238px;
-        height: root.context-menu-height;
-        border-radius: 12px;
-        background: #ffffff;
+    if root.account-menu-open: menu := Rectangle {
+        x: root.nav-compact ? Theme.nav-width-compact + 4px : 12px;
+        y: root.height - menu.height - 12px;
+        width: 232px;
+        height: menu-layout.preferred-height;
+        border-radius: Theme.radius-flyout;
+        background: Theme.card-bg;
         border-width: 1px;
-        border-color: #dbe3ef;
-        opacity: root.context-menu-visible ? 1.0 : 0.0;
-        animate y { duration: 170ms; easing: ease-out; }
-        animate opacity { duration: 150ms; easing: ease-out; }
+        border-color: Theme.stroke;
 
-        VerticalLayout {
-            padding: 8px;
-            spacing: 3px;
-
-            Text {
-                text: root.context-item-name;
-                color: #94a3b8;
-                font-size: 11px;
-                height: 20px;
-                vertical-alignment: center;
-                overflow: elide;
-            }
+        menu-layout := VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
 
             Rectangle {
-                height: 1px;
-                background: #eef2f7;
-            }
+                height: 30px;
+                background: transparent;
 
-            ContextMenuItem {
-                icon: "\u{e89e}";
-                label: root.context-item-is-dir ? "打开文件夹" : "预览 / 打开";
-                triggered => {
-                    root.context-menu-visible = false;
-                    root.open_item(root.context-item-id, root.context-item-name, root.context-item-is-dir);
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 8px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: root.account-name;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-body;
+                        font-weight: 600;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
                 }
             }
 
-            if !root.context-item-is-dir : ContextMenuItem {
-                icon: "\u{e2c4}";
-                label: "下载到本地";
+            FluentMenuDivider {
+            }
+
+            FluentMenuItem {
+                glyph: Icons.settings;
+                label: "设置";
                 triggered => {
-                    root.context-menu-visible = false;
-                    root.download_file(root.context-item-id);
+                    root.account-menu-open = false;
+                    root.current-page = 4;
                 }
             }
 
-            Rectangle {
-                visible: !root.context-item-is-dir;
-                height: 1px;
-                background: #eef2f7;
-            }
-
-            ContextMenuItem {
-                icon: "\u{e3c9}";
-                label: "重命名";
+            FluentMenuItem {
+                glyph: Icons.folder;
+                label: "下载目录";
                 triggered => {
-                    root.context-menu-visible = false;
-                    root.rename_file(root.context-item-id, "");
+                    root.account-menu-open = false;
+                    root.open_download_dir();
                 }
             }
 
-            ContextMenuItem {
-                icon: "\u{e14d}";
-                label: "复制到当前目录";
-                triggered => {
-                    root.context-menu-visible = false;
-                    root.copy_file(root.context-item-id);
-                }
+            FluentMenuDivider {
             }
 
-            if !root.context-item-is-dir : ContextMenuItem {
-                icon: "\u{e157}";
-                label: "提取下载链接";
-                triggered => {
-                    root.context-menu-visible = false;
-                    root.get_link(root.context-item-id);
-                }
-            }
-
-            Rectangle {
-                height: 1px;
-                background: #eef2f7;
-            }
-
-            ContextMenuItem {
-                icon: "\u{e872}";
-                label: "删除";
+            FluentMenuItem {
+                glyph: Icons.logout;
+                label: "退出登录";
                 danger: true;
                 triggered => {
-                    root.context-menu-visible = false;
-                    root.delete_file(root.context-item-id);
+                    root.account-menu-open = false;
+                    root.logout();
                 }
+            }
+        }
+    }
+
+    // ==================== 遮罩层：文件右键菜单 ====================
+    if root.context-open: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        background: transparent;
+
+        TouchArea {
+            clicked => {
+                root.context-open = false;
+            }
+        }
+    }
+
+    if root.context-open: ctx := Rectangle {
+        x: Math.max(8px, Math.min(root.context-x, root.width - self.width - 8px));
+        y: Math.max(8px, Math.min(root.context-y, root.height - self.height - 8px));
+        width: 236px;
+        height: ctx-layout.preferred-height;
+        border-radius: Theme.radius-flyout;
+        background: Theme.card-bg;
+        border-width: 1px;
+        border-color: Theme.stroke;
+
+        ctx-layout := VerticalLayout {
+            padding: 6px;
+            spacing: 2px;
+
+            Rectangle {
+                height: 24px;
+                background: transparent;
+
+                Text {
+                    x: 8px;
+                    y: 0;
+                    width: parent.width - 16px;
+                    text: root.context-item-name;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-caption;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            FluentMenuDivider {
+            }
+
+            FluentMenuItem {
+                glyph: Icons.file;
+                label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
+                triggered => {
+                    root.context-open = false;
+                    root.open_item(root.context-item-id, root.context-item-name, root.context-is-dir);
+                }
+            }
+
+            if !root.context-is-dir: FluentMenuItem {
+                glyph: Icons.download;
+                label: "下载到本地";
+                triggered => {
+                    root.context-open = false;
+                    root.download_selected();
+                }
+            }
+
+            if !root.context-is-dir: FluentMenuDivider {
+            }
+
+            FluentMenuItem {
+                glyph: Icons.pencil;
+                label: "重命名";
+                shortcut: "F2";
+                triggered => {
+                    root.context-open = false;
+                    root.rename_selected();
+                }
+            }
+
+            FluentMenuItem {
+                glyph: Icons.copy;
+                label: "复制到当前目录";
+                triggered => {
+                    root.context-open = false;
+                    root.copy_selected();
+                }
+            }
+
+            FluentMenuItem {
+                glyph: Icons.folder;
+                label: "移动到上级目录";
+                enabled: root.crumbs.length > 1;
+                triggered => {
+                    root.context-open = false;
+                    root.move_selected_up();
+                }
+            }
+
+            if !root.context-is-dir: FluentMenuItem {
+                glyph: Icons.link;
+                label: "提取直链";
+                triggered => {
+                    root.context-open = false;
+                    root.link_selected();
+                }
+            }
+
+            FluentMenuDivider {
+            }
+
+            FluentMenuItem {
+                glyph: Icons.trash;
+                label: "删除";
+                shortcut: "Del";
+                danger: true;
+                triggered => {
+                    root.context-open = false;
+                    root.delete_selected();
+                }
+            }
+        }
+    }
+    // ==================== 顶层：轻量 Tooltip 浮层 ====================
+    if TooltipState.visible && TooltipState.text != "": tooltip := Rectangle {
+        width: Math.min(tip-layout.preferred-width, 320px);
+        height: tip-layout.preferred-height;
+        x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
+        y: Math.min(TooltipState.y, root.height - self.height - 4px);
+        border-radius: Theme.radius-control;
+        background: Theme.dark ? #2F2F2F : #2B2B2B;
+        border-width: 1px;
+        border-color: Theme.dark ? #4A4A4A : #1F1F1F;
+
+        tip-layout := HorizontalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+
+            Text {
+                text: TooltipState.text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: #FFFFFF;
+                vertical-alignment: center;
             }
         }
     }

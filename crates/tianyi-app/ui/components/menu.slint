@@ -1,0 +1,70 @@
+// Fluent 上下文菜单项与分隔线
+//
+// 菜单面板本身由调用方（MainWindow）负责定位、圆角与阴影，
+// 这里只提供可复用的行与分隔线。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon } from "../theme/icons.slint";
+
+export component FluentMenuItem inherits Rectangle {
+    in property <string> glyph: "";
+    in property <string> label: "";
+    in property <string> shortcut: "";
+    in property <bool> danger: false;
+    in property <bool> enabled: true;
+    callback triggered();
+
+    height: 32px;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    background: !root.enabled ? transparent
+        : ta.pressed ? Theme.control-bg-pressed
+        : ta.has-hover ? (root.danger ? Theme.danger-soft : Theme.control-bg-hover)
+        : transparent;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        if root.glyph != "": Icon {
+            glyph: root.glyph;
+            size: 15px;
+            thickness: 1.6px;
+            icon-color: root.danger ? Theme.danger : Theme.text-secondary;
+        }
+
+        Text {
+            text: root.label;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body;
+            color: root.danger ? Theme.danger : (root.enabled ? Theme.text-primary : Theme.text-disabled);
+            horizontal-stretch: 1;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.shortcut != "": Text {
+            text: root.shortcut;
+            font-family: Theme.font-family;
+            font-size: Theme.font-caption;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.triggered();
+        }
+    }
+}
+
+export component FluentMenuDivider inherits Rectangle {
+    height: 1px;
+    background: Theme.divider;
+}

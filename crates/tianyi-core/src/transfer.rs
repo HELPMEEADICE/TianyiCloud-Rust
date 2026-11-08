@@ -2,21 +2,36 @@
 //!
 //! 上传：initMultiUpload → getMultiUploadUrls → 分片 PUT → commitMultiUploadFile
 //! 下载：getDownloadUrl → 并发 Range 分片下载 → 断点续传
+//!
+//! 两条链路都接受一个 [`TransferControl`]，在关键边界做协作式检查点：
+//! 暂停会在检查点挂起（future 保活，恢复后从原处继续，不重新初始化会话），
+//! 取消则在检查点退出。暂停永远不能变成“失败”，取消也永远不能留下半个文件。
 
 use crate::client::TianyiClient;
 use crate::crypto;
 use crate::error::{Error, Result};
 use crate::models::*;
+use crate::task::{ControlState, TransferControl};
 use futures::stream::{FuturesUnordered, StreamExt};
 use log::{info, warn};
 use std::io::SeekFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 /// 进度回调类型：接收已传输字节数
 pub type ProgressCallback = Arc<dyn Fn(u64) + Send + Sync>;
+
+/// 默认下载分片大小：4 MiB
+pub const DEFAULT_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
+
+/// 暂停挂起超过该时长后重新获取下载直链（直链带签名，可能已过期）
+const URL_REFRESH_AFTER: Duration = Duration::from_secs(30);
+
+/// 单个下载分片的最大尝试次数
+const CHUNK_MAX_ATTEMPTS: u32 = 3;
 
 /// 上传选项
 #[derive(Debug, Clone)]
@@ -47,6 +62,9 @@ impl Default for UploadOptions {
 pub struct DownloadOptions {
     pub thread_count: u32,
     pub resume: bool,
+    /// 分片大小（字节）。每个分片整体读入内存后再按序写入 `.part`，
+    /// 决定暂停的响应粒度（默认 [`DEFAULT_CHUNK_SIZE`]，即 4 MiB）
+    pub chunk_size: u64,
 }
 
 impl Default for DownloadOptions {
@@ -54,18 +72,88 @@ impl Default for DownloadOptions {
         DownloadOptions {
             thread_count: 4,
             resume: true,
+            chunk_size: DEFAULT_CHUNK_SIZE,
         }
     }
 }
 
+/// 下载结果
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadOutcome {
+    /// 全部字节已写入并已重命名为最终文件
+    Completed,
+    /// 用户暂停：`.part` 保留为合法前缀，重新调用即可从该点续传
+    Paused,
+    /// 用户取消：`.part` 已删除
+    Canceled,
+}
+
+/// 上传结果
+#[derive(Debug)]
+pub enum UploadOutcome {
+    /// 已完成（服务端已提交）
+    Completed(CommitFile),
+    /// 用户暂停（未提交任何内容，`upload_file_id` 会话保留在活着的 future 里）
+    Paused,
+    /// 用户取消（未提交，已上传的分片由服务端自行回收）
+    Canceled,
+}
+
+/// 把中断错误翻译成上传结果；非中断错误原样返回
+fn into_upload_result(e: Error) -> Result<UploadOutcome> {
+    match e {
+        Error::Paused => Ok(UploadOutcome::Paused),
+        Error::Canceled => Ok(UploadOutcome::Canceled),
+        other => Err(other),
+    }
+}
+
+/// 规划下载分片：返回覆盖 `[start, file_size)` 的 `(offset, len)` 列表
+///
+/// 保证：严格升序、不重叠、无空洞、恰好覆盖一次。
+/// 边界：`start >= file_size` 返回空；`chunk_size == 0` 按 4 MiB 处理；
+/// `file_size == 0` 返回空。
+pub fn plan_chunks(file_size: u64, start: u64, chunk_size: u64) -> Vec<(u64, u64)> {
+    let chunk_size = if chunk_size == 0 {
+        DEFAULT_CHUNK_SIZE
+    } else {
+        chunk_size
+    };
+    let mut chunks = Vec::new();
+    let mut offset = start;
+    while offset < file_size {
+        let len = chunk_size.min(file_size - offset);
+        chunks.push((offset, len));
+        match offset.checked_add(len) {
+            Some(next) => offset = next,
+            // 只有 offset + len 溢出 u64 才可能走到这里（正常不会发生）
+            None => break,
+        }
+    }
+    chunks
+}
+
 /// 上传入口
+///
+/// 暂停语义：入口处若已经是暂停态，立即返回 [`UploadOutcome::Paused`]
+/// （不打开文件、不联网、不算 MD5）；传输过程中暂停则在检查点挂起，
+/// 整个 future 保活——`upload_file_id` 会话与已算好的 MD5 都还在，
+/// 恢复后直接从下一个分片继续，不会重新初始化也不会重新计算哈希。
 pub async fn upload(
     client: &TianyiClient,
     parent_folder_id: &str,
     local_path: &Path,
     opts: &UploadOptions,
     progress: ProgressCallback,
-) -> Result<CommitFile> {
+    control: &TransferControl,
+) -> Result<UploadOutcome> {
+    // 入口非阻塞观察：暂停态直接让出，不产生任何副作用
+    match control.state() {
+        ControlState::Canceled => return Ok(UploadOutcome::Canceled),
+        ControlState::Paused => return Ok(UploadOutcome::Paused),
+        ControlState::Running => {}
+    }
+
     let local_path = local_path.to_path_buf();
     let file = tokio::fs::File::open(&local_path).await?;
     let meta = file.metadata().await?;
@@ -84,7 +172,12 @@ pub async fn upload(
     };
 
     // 计算整文件 MD5 + 分片 MD5 + SHA-1 piece hashes（一次性读取计算）
-    let (file_md5, slice_md5s, piece_sha1s) = compute_md5s(&local_path, part_size).await?;
+    // 计算期间在每个分片边界响应暂停：哈希上下文保留，恢复后接着算
+    let (file_md5, slice_md5s, piece_sha1s) =
+        match compute_md5s(&local_path, part_size, control).await {
+            Ok(v) => v,
+            Err(e) => return into_upload_result(e),
+        };
     info!(
         "upload start: name={} size={} parts={} part_size={}",
         file_name,
@@ -95,6 +188,9 @@ pub async fn upload(
 
     // 秒传尝试
     if opts.rapid_upload {
+        if let Err(e) = control.checkpoint().await {
+            return into_upload_result(e);
+        }
         match try_rapid_upload(
             client,
             parent_folder_id,
@@ -104,15 +200,21 @@ pub async fn upload(
             &slice_md5s,
             part_size,
             opts.overwrite,
+            control,
         )
         .await
         {
             Ok(Some(f)) => {
+                // 秒传已提交：返回前仍然响应暂停/取消（暂停在此挂起）
+                if let Err(e) = control.checkpoint().await {
+                    return into_upload_result(e);
+                }
                 info!("rapid upload success: {}", f.file_name);
                 progress(file_size);
-                return Ok(f);
+                return Ok(UploadOutcome::Completed(f));
             }
             Ok(None) => {}
+            Err(e) if e.is_interrupted() => return into_upload_result(e),
             Err(e) => {
                 warn!("rapid upload failed: {e}, fallback to multipart");
             }
@@ -120,6 +222,9 @@ pub async fn upload(
     }
 
     // 初始化多分片上传
+    if let Err(e) = control.checkpoint().await {
+        return into_upload_result(e);
+    }
     let init = init_multipart_upload(
         client,
         parent_folder_id,
@@ -136,19 +241,22 @@ pub async fn upload(
     );
 
     if init.file_data_exists == 1 {
-        // 服务端已有，直接提交
+        // 服务端已有，直接提交（提交前仍要响应取消，避免“取消后仍创建文件”）
+        if let Err(e) = control.checkpoint().await {
+            return into_upload_result(e);
+        }
         let commit = commit_multipart_upload(client, &init.upload_file_id, opts.overwrite).await?;
         progress(file_size);
-        return Ok(commit);
+        return Ok(UploadOutcome::Completed(commit));
     }
 
     // 计算分片数
-    let part_size = part_size as u64;
-    let count = file_size.div_ceil(part_size).max(1) as usize;
-    let last_size = if file_size % part_size == 0 {
-        part_size
+    let part_size_u = part_size as u64;
+    let count = file_size.div_ceil(part_size_u).max(1) as usize;
+    let last_size = if file_size % part_size_u == 0 {
+        part_size_u
     } else {
-        file_size % part_size
+        file_size % part_size_u
     };
 
     // 需要计算每个分片的 partInfo（MD5 base64）
@@ -166,8 +274,6 @@ pub async fn upload(
     // 断点续传恢复：查询已有进度（如果服务端支持）
     // 这里简化处理：每次都重新上传所有分片；服务端对已上传分片会跳过或覆盖
     let uploaded = Arc::new(AtomicU64::new(0));
-    let part_size_u = part_size;
-    let file_size_u = file_size;
 
     // 并发上传分片
     let upload_file_id = init.upload_file_id.clone();
@@ -183,18 +289,27 @@ pub async fn upload(
         let uploaded = uploaded.clone();
         let progress = progress.clone();
         let local_path = local_path.clone();
+        // 每个分片任务各持一份控制器副本（watch 句柄很轻）
+        let control = control.clone();
 
         handles.push(tokio::spawn(async move {
-            let _permit = sem.acquire().await.map_err(|_| Error::Transfer("sem".into()))?;
-            // 获取分片上传 URL
+            let _permit = sem
+                .acquire()
+                .await
+                .map_err(|_| Error::Transfer("sem".into()))?;
             let part_no = part_info.split('-').next().unwrap_or("?").to_string();
+            // 请求分片上传 URL 前的检查点：暂停时不发起新请求
+            control.checkpoint().await?;
             let urls = get_multi_upload_urls(&client, &upload_file_id, &[part_info]).await?;
-            let url_info = &urls[0];
+            let url_info = urls
+                .first()
+                .ok_or_else(|| Error::Transfer(format!("part {part_no}: empty upload url list")))?;
             let part_number = url_info.0;
             let req_url = url_info.1.request_url.clone();
             let headers = parse_http_headers(&url_info.1.request_header);
 
-            // 读取该分片数据
+            // 读取分片数据前再检查一次：暂停时不留大缓冲
+            control.checkpoint().await?;
             let offset = (part_number as u64 - 1) * part_size_u;
             let len = if part_number as usize == count {
                 last_size
@@ -215,18 +330,20 @@ pub async fn upload(
                     Err(e) => {
                         attempt += 1;
                         if attempt >= 3 {
-                            warn!("part {part_no} put failed after {attempt} tries: {e} (url={req_url})");
+                            // 日志里不带签名 URL
+                            warn!("part {part_no} put failed after {attempt} tries: {e}");
                             return Err(e);
                         }
                         warn!("part {part_no} put failed (try {attempt}): {e}, retrying");
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        // 重试前响应取消，避免取消后还继续重试
+                        control.checkpoint().await?;
                     }
                 }
             }
             info!("part {part_no} uploaded, {} bytes", len);
-            uploaded.fetch_add(len, Ordering::SeqCst);
-            progress(uploaded.load(Ordering::SeqCst));
-            let _ = file_size_u;
+            let done = uploaded.fetch_add(len, Ordering::SeqCst) + len;
+            progress(done);
             Ok::<(), Error>(())
         }));
     }
@@ -236,10 +353,18 @@ pub async fn upload(
         futs.push(h);
     }
     while let Some(res) = futs.next().await {
-        res.map_err(|e| Error::Transfer(format!("task join: {e}")))??;
+        let joined = res.map_err(|e| Error::Transfer(format!("task join: {e}")))?;
+        if let Err(e) = joined {
+            // 中断（暂停/取消）不上报为失败；分片任务会各自在检查点退出
+            return into_upload_result(e);
+        }
     }
 
-    // 提交
+    // 只有全部分片都成功后才提交：暂停/取消永远不会走到这里，
+    // 因此不可能产生“提交了一半”的文件，也不可能重复提交。
+    if let Err(e) = control.checkpoint().await {
+        return into_upload_result(e);
+    }
     info!("all {} parts uploaded, committing", count);
     let commit = commit_multipart_upload(client, &init.upload_file_id, opts.overwrite).await?;
     info!(
@@ -255,7 +380,7 @@ pub async fn upload(
             file_size as i64,
             &file_md5,
             &slice_md5s,
-            part_size as i64,
+            part_size_u as i64,
             &piece_sha1s,
         ) {
             Ok(torrent_data) => {
@@ -274,11 +399,18 @@ pub async fn upload(
     }
 
     progress(file_size);
-    Ok(commit)
+    Ok(UploadOutcome::Completed(commit))
 }
 
 /// 计算整文件 MD5、各分片 MD5、各分片 SHA-1 piece hash
-async fn compute_md5s(path: &Path, part_size: i64) -> Result<(String, Vec<String>, Vec<u8>)> {
+///
+/// 每读完一个完整分片做一次检查点：暂停在这里挂起，哈希上下文（`Md5`/`Sha1`
+/// 的中间状态）不会被丢弃，恢复后从下一个分片接着算。
+async fn compute_md5s(
+    path: &Path,
+    part_size: i64,
+    control: &TransferControl,
+) -> Result<(String, Vec<String>, Vec<u8>)> {
     use md5::Digest;
     use md5::Md5;
     use sha1::Sha1;
@@ -313,6 +445,8 @@ async fn compute_md5s(path: &Path, part_size: i64) -> Result<(String, Vec<String
         if part_buf.len() as u64 >= part_size {
             flush_part(&part_buf, &mut whole, &mut parts, &mut part_sha1s);
             part_buf.clear();
+            // 分片边界：响应暂停/取消
+            control.checkpoint().await?;
         }
     }
     if !part_buf.is_empty() {
@@ -339,6 +473,7 @@ async fn try_rapid_upload(
     slice_md5s: &[String],
     slice_size: i64,
     overwrite: bool,
+    control: &TransferControl,
 ) -> Result<Option<CommitFile>> {
     let init = init_multipart_upload(
         client, parent_id, file_name, file_size, file_md5, slice_md5s, slice_size,
@@ -346,6 +481,8 @@ async fn try_rapid_upload(
     .await?;
 
     if init.file_data_exists == 1 {
+        // 提交前响应取消：取消后不应再创建文件
+        control.checkpoint().await?;
         let commit = commit_multipart_upload(client, &init.upload_file_id, overwrite).await?;
         return Ok(Some(commit));
     }
@@ -574,44 +711,64 @@ fn urlencoding(s: &str) -> String {
 /// 在 `parent_folder_id` 下创建与 `local_dir` 同名的子文件夹，然后递归上传其中的
 /// 所有文件（子目录逐层建文件夹）。进度回调累计整个文件夹的字节数。
 /// 返回上传的文件总数。
+///
+/// 暂停/取消会以 `Err(Error::Paused)` / `Err(Error::Canceled)` 向上传播
+/// （`Error::is_interrupted()` 可判别）。因为每个文件都由服务端在 commit 时
+/// 原子创建，中断不会留下半个已提交的文件。
 pub async fn upload_folder_recursive(
     client: &TianyiClient,
     parent_folder_id: &str,
     local_dir: &Path,
     opts: &UploadOptions,
     progress: ProgressCallback,
+    control: &TransferControl,
 ) -> Result<usize> {
+    control.checkpoint().await?;
     let dir_name = local_dir
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("folder")
         .to_string();
     let folder = client.create_folder(parent_folder_id, &dir_name).await?;
-    upload_folder_contents_recursive(client, &folder.id, local_dir, opts, progress).await
+    upload_folder_contents_recursive(client, &folder.id, local_dir, opts, progress, control).await
 }
 
 /// 上传文件夹下的全部内容（不新建顶层文件夹），返回文件总数。
+///
+/// 中断语义同 [`upload_folder_recursive`]。
 pub async fn upload_folder_contents_recursive(
     client: &TianyiClient,
     folder_id: &str,
     local_dir: &Path,
     opts: &UploadOptions,
     progress: ProgressCallback,
+    control: &TransferControl,
 ) -> Result<usize> {
     let mut count = 0usize;
     let mut entries = tokio::fs::read_dir(local_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
+        // 每个条目开始前响应暂停/取消
+        control.checkpoint().await?;
         let path = entry.path();
         let ft = entry.file_type().await?;
         if ft.is_dir() {
             let name = entry.file_name().to_str().unwrap_or("folder").to_string();
             let child = client.create_folder(folder_id, &name).await?;
-            let sub =
-                upload_folder_contents_recursive(client, &child.id, &path, opts, progress.clone());
+            let sub = upload_folder_contents_recursive(
+                client,
+                &child.id,
+                &path,
+                opts,
+                progress.clone(),
+                control,
+            );
             count += Box::pin(sub).await?;
         } else {
-            upload(client, folder_id, &path, opts, progress.clone()).await?;
-            count += 1;
+            match upload(client, folder_id, &path, opts, progress.clone(), control).await? {
+                UploadOutcome::Completed(_) => count += 1,
+                UploadOutcome::Paused => return Err(Error::Paused),
+                UploadOutcome::Canceled => return Err(Error::Canceled),
+            }
         }
     }
     Ok(count)
@@ -635,109 +792,279 @@ pub fn collect_local_files(root: &Path, out: &mut Vec<std::path::PathBuf>) {
 // 下载
 // ---------------------------------------------------------------------------
 
-/// 下载文件（支持断点续传）
+/// `.part` 临时文件路径：`<目标文件名>.download.part`
+///
+/// 与旧版本保持一致，保证升级后仍能接着续传已有临时文件。
+fn part_path_of(dest_path: &Path) -> PathBuf {
+    dest_path.with_extension("download.part")
+}
+
+/// 单轮分片下载的结束原因
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoundEnd {
+    /// 本轮所有分片都写完了
+    Drained,
+    /// 暂停挂起时间较长，直链可能已过期：需要重取直链后从已写位置继续
+    UrlStale,
+    /// 用户暂停
+    Paused,
+    /// 用户取消
+    Canceled,
+}
+
+/// 下载文件（支持暂停 / 恢复 / 取消 / 断点续传）
+///
+/// 暂停语义：入口处若已经是暂停态，立即返回 [`DownloadOutcome::Paused`]
+/// （不创建任何文件、不联网）；传输过程中暂停则在分片边界挂起，
+/// future 与文件句柄都保活，恢复后从同一个偏移继续写。
+///
+/// `.part` 文件名由 [`part_path_of`] 决定，任何时刻它的内容都是目标文件的
+/// 合法前缀（见 [`download_round`] 的前缀不变量），因此它的长度可以直接
+/// 作为续传点使用。
 pub async fn download(
     client: &TianyiClient,
     file: &FileObject,
     dest_path: &Path,
     opts: &DownloadOptions,
     progress: ProgressCallback,
-) -> Result<()> {
-    let file_id = file.id.clone();
-    let file_size = file.size.max(0) as u64;
+    control: &TransferControl,
+) -> Result<DownloadOutcome> {
+    download_impl(
+        client,
+        &file.id,
+        file.size.max(0) as u64,
+        dest_path,
+        opts,
+        progress,
+        control,
+        None,
+    )
+    .await
+}
 
-    // 获取下载链接
-    let dl_url = client.get_download_url(&file_id).await?;
+/// 下载实现主体
+///
+/// `forced_url` 用于测试注入直链（生产路径恒为 `None`，此时走
+/// `getDownloadUrl` 协商）。
+#[allow(clippy::too_many_arguments)]
+async fn download_impl(
+    client: &TianyiClient,
+    file_id: &str,
+    file_size: u64,
+    dest_path: &Path,
+    opts: &DownloadOptions,
+    progress: ProgressCallback,
+    control: &TransferControl,
+    forced_url: Option<&str>,
+) -> Result<DownloadOutcome> {
+    // 入口非阻塞观察：暂停态直接让出，不产生任何副作用
+    match control.state() {
+        ControlState::Canceled => return Ok(DownloadOutcome::Canceled),
+        ControlState::Paused => return Ok(DownloadOutcome::Paused),
+        ControlState::Running => {}
+    }
 
-    // 检查续传：.part 文件是否存在且大小正确
-    let part_path = dest_path.with_extension(format!("{}.part", "download"));
-    let resume = opts.resume && part_path.exists();
-    let start_byte = if resume {
-        std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0)
+    let part_path = part_path_of(dest_path);
+    if let Some(parent) = dest_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+    }
+
+    // 续传点 = `.part` 当前长度。前缀不变量保证这个长度就是已落盘的前缀长度。
+    // `.part` 比目标文件还大说明它是脏数据（换过文件/曾被外部改写），只能从头开始。
+    let part_len = match tokio::fs::metadata(&part_path).await {
+        Ok(meta) => meta.len(),
+        Err(_) => 0,
+    };
+    let start = if opts.resume && part_len <= file_size {
+        part_len
     } else {
         0
     };
 
-    if start_byte >= file_size {
-        // 已完成
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::rename(&part_path, dest_path)?;
-        progress(file_size);
-        return Ok(());
-    }
-
-    let mut part_file = if resume {
+    let mut part_file = if start > 0 {
         tokio::fs::OpenOptions::new()
-            .write(true)
             .read(true)
+            .write(true)
             .open(&part_path)
             .await?
     } else {
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         tokio::fs::OpenOptions::new()
             .create(true)
             .truncate(true)
-            .write(true)
             .read(true)
+            .write(true)
             .open(&part_path)
             .await?
     };
 
-    let thread_count = opts.thread_count.max(1) as usize;
-    let chunk_size = ((file_size - start_byte) / thread_count as u64).max(1);
-    let mut handles = Vec::new();
+    if start == file_size {
+        // 已经完整（同样覆盖 0 字节文件）
+        part_file.flush().await?;
+        drop(part_file);
+        tokio::fs::rename(&part_path, dest_path).await?;
+        progress(file_size);
+        return Ok(DownloadOutcome::Completed);
+    }
 
-    for i in 0..thread_count {
-        let start = start_byte + i as u64 * chunk_size;
-        if start >= file_size {
-            break;
-        }
-        let end = if i == thread_count - 1 {
-            file_size
-        } else {
-            start + chunk_size
+    let chunk_size = if opts.chunk_size == 0 {
+        DEFAULT_CHUNK_SIZE
+    } else {
+        opts.chunk_size
+    };
+    let concurrency = opts.thread_count.max(1) as usize;
+    let mut written = start;
+
+    let (outcome, written) = loop {
+        // 每轮都取一次直链：长时间暂停后旧直链可能已过期
+        let dl_url = match forced_url {
+            Some(url) => url.to_string(),
+            None => client.get_download_url(file_id).await?,
         };
-        let dl_url = dl_url.clone();
-        let client = client.clone_for_transfer();
-        let part_path = part_path.clone();
-        let progress = progress.clone();
-
-        handles.push(tokio::spawn(async move {
-            download_chunk(client, &dl_url, start, end, &part_path).await?;
-            progress(end);
-            Ok::<(), Error>(())
-        }));
-    }
-
-    let mut futs = FuturesUnordered::new();
-    for h in handles {
-        futs.push(h);
-    }
-    while let Some(res) = futs.next().await {
-        let inner = res.map_err(|e| Error::Transfer(format!("task join: {e}")))?;
-        inner?;
-    }
+        let (end, done) = download_round(
+            client,
+            &dl_url,
+            &mut part_file,
+            file_size,
+            written,
+            chunk_size,
+            concurrency,
+            &progress,
+            control,
+        )
+        .await?;
+        match end {
+            RoundEnd::Drained => break (DownloadOutcome::Completed, done),
+            RoundEnd::Paused => break (DownloadOutcome::Paused, done),
+            RoundEnd::Canceled => break (DownloadOutcome::Canceled, done),
+            RoundEnd::UrlStale => written = done,
+        }
+    };
 
     part_file.flush().await?;
     drop(part_file);
-    std::fs::rename(&part_path, dest_path)?;
-    progress(file_size);
-    Ok(())
+    match outcome {
+        DownloadOutcome::Completed => {
+            tokio::fs::rename(&part_path, dest_path).await?;
+            progress(file_size);
+            info!("download completed: {} bytes", file_size);
+        }
+        DownloadOutcome::Paused => {
+            // 暂停：保留 `.part`（它就是合法前缀），下次调用从这里续传
+            info!("download paused: {written} / {file_size} bytes kept in .part");
+        }
+        DownloadOutcome::Canceled => {
+            // 取消：临时文件没有保留价值，删掉避免留下垃圾
+            if let Err(e) = tokio::fs::remove_file(&part_path).await {
+                warn!("remove .part after cancel failed: {e}");
+            }
+            info!("download canceled: {written} / {file_size} bytes discarded");
+        }
+    }
+    Ok(outcome)
 }
 
-/// 下载一个字节区间，写入 .part 文件对应位置
-async fn download_chunk(
-    client: TianyiClient,
+/// 一轮分片下载：从 `start` 起把 `[start, file_size)` 追加进 `.part`
+///
+/// **前缀不变量（下载不损坏文件的根本保证）**：分片先整体读进内存，然后由本
+/// 函数按 [`plan_chunks`] 给出的**升序**逐块 `write_all` + `flush`，绝不并行写
+/// 同一个文件、绝不乱序、绝不跳块。因此 `.part` 在任何时刻、任何一次崩溃之后
+/// 都是目标文件的一个合法前缀，`.part` 的长度即安全的续传点。
+///
+/// 并发只用来“取数据”，不改变“落盘顺序”：`futures::stream::buffered(n)`
+/// 保证输出顺序与输入顺序一致（注意不能用 `buffer_unordered`）。
+///
+/// 暂停/取消都在分片边界生效：已发出的分片最多再完成一个 `chunk_size`
+/// 的数据量，但只有被按序取走并写盘的分片才会出现在 `.part` 里。
+#[allow(clippy::too_many_arguments)]
+async fn download_round(
+    client: &TianyiClient,
     dl_url: &str,
+    part_file: &mut tokio::fs::File,
+    file_size: u64,
     start: u64,
-    end: u64,
-    part_path: &Path,
-) -> Result<()> {
-    let range = format!("bytes={}-{}", start, end.saturating_sub(1));
+    chunk_size: u64,
+    concurrency: usize,
+    progress: &ProgressCallback,
+    control: &TransferControl,
+) -> Result<(RoundEnd, u64)> {
+    part_file.seek(SeekFrom::Start(start)).await?;
+    let mut written = start;
+    let chunks = plan_chunks(file_size, start, chunk_size);
+    let mut stream = Box::pin(
+        futures::stream::iter(chunks)
+            .map(|(offset, len)| {
+                let client = client.clone_for_transfer();
+                let url = dl_url.to_string();
+                async move { fetch_chunk(&client, &url, offset, len).await }
+            })
+            .buffered(concurrency),
+    );
+
+    while let Some(chunk) = stream.next().await {
+        let buf = chunk?;
+        part_file.write_all(&buf).await?;
+        written += buf.len() as u64;
+        // 每片都 flush：把已确认的字节真正交给内核，`.part` 才随时都是合法前缀
+        part_file.flush().await?;
+        // 进度上报“已写入的绝对字节数”，调用方可以直接对时间差求速度
+        progress(written);
+
+        let parked_at = Instant::now();
+        match control.checkpoint().await {
+            Ok(()) => {
+                if parked_at.elapsed() >= URL_REFRESH_AFTER && written < file_size {
+                    return Ok((RoundEnd::UrlStale, written));
+                }
+            }
+            Err(Error::Canceled) => return Ok((RoundEnd::Canceled, written)),
+            Err(Error::Paused) => return Ok((RoundEnd::Paused, written)),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok((RoundEnd::Drained, written))
+}
+
+/// 取一个分片（失败自动重试，最多 [`CHUNK_MAX_ATTEMPTS`] 次）
+///
+/// 暂停期间在途请求可能因为连接超时而失败，重试可以把它重新拉起来；
+/// 日志只记录偏移/长度，绝不打印带签名的直链。
+async fn fetch_chunk(
+    client: &TianyiClient,
+    dl_url: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
+        match fetch_chunk_once(client, dl_url, offset, len).await {
+            Ok(buf) => return Ok(buf),
+            Err(e) if attempt >= CHUNK_MAX_ATTEMPTS => {
+                warn!("download chunk offset={offset} len={len} failed after {attempt} tries: {e}");
+                return Err(e);
+            }
+            Err(e) => {
+                warn!("download chunk offset={offset} len={len} failed (try {attempt}): {e}");
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+/// 发起一次 Range 请求并取出该分片的字节
+///
+/// 服务端忽略 `Range` 直接返回整个文件时（200），按窗口截取，绝不把
+/// 多余字节写进 `.part`。
+async fn fetch_chunk_once(
+    client: &TianyiClient,
+    dl_url: &str,
+    offset: u64,
+    len: u64,
+) -> Result<Vec<u8>> {
+    let end = offset.saturating_add(len); // 不含
+    let range = format!("bytes={}-{}", offset, end.saturating_sub(1));
     let resp = client
         .http_client()
         .get(dl_url)
@@ -746,27 +1073,37 @@ async fn download_chunk(
         .await?;
     let status = resp.status();
     if status != reqwest::StatusCode::PARTIAL_CONTENT && status != reqwest::StatusCode::OK {
+        let body = resp.bytes().await.unwrap_or_default();
         return Err(Error::Api(format!(
             "download chunk http {status}: {}",
-            String::from_utf8_lossy(resp.bytes().await.unwrap_or_default().as_ref())
+            String::from_utf8_lossy(&body)
                 .chars()
                 .take(200)
                 .collect::<String>()
         )));
     }
 
-    let mut file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .open(part_path)
-        .await?;
-    file.seek(SeekFrom::Start(start)).await?;
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        file.write_all(&chunk).await?;
+    let body = resp.bytes().await?;
+    if status == reqwest::StatusCode::PARTIAL_CONTENT {
+        if body.len() as u64 != len {
+            return Err(Error::Transfer(format!(
+                "分片长度不符：期望 {len}，实收 {}",
+                body.len()
+            )));
+        }
+        return Ok(body.to_vec());
     }
-    file.flush().await?;
-    Ok(())
+
+    let begin =
+        usize::try_from(offset).map_err(|_| Error::Transfer(format!("分片偏移越界: {offset}")))?;
+    let stop = usize::try_from(end).map_err(|_| Error::Transfer(format!("分片结束越界: {end}")))?;
+    if body.len() < stop {
+        return Err(Error::Transfer(format!(
+            "分片数据不足：需要到 {stop}，实收 {}",
+            body.len()
+        )));
+    }
+    Ok(body[begin..stop].to_vec())
 }
 
 #[cfg(test)]
@@ -788,7 +1125,9 @@ mod tests {
         f.write_all(&data).unwrap();
         drop(f);
 
-        let (whole_hex, parts, _) = compute_md5s(&path, 10 * 1024 * 1024).await.unwrap();
+        let (whole_hex, parts, _) = compute_md5s(&path, 10 * 1024 * 1024, &TransferControl::new())
+            .await
+            .unwrap();
 
         // 两个分片：满 10MiB + 123 字节
         assert_eq!(parts.len(), 2);
@@ -999,9 +1338,20 @@ mod tests {
             done_cb.store(n, Ordering::SeqCst);
         });
 
-        let commit = upload(&client, "FOLDER", &file_path, &opts, progress)
-            .await
-            .expect("upload should complete without hang");
+        let commit = match upload(
+            &client,
+            "FOLDER",
+            &file_path,
+            &opts,
+            progress,
+            &TransferControl::new(),
+        )
+        .await
+        .expect("upload should complete without hang")
+        {
+            UploadOutcome::Completed(commit) => commit,
+            other => panic!("expected completed upload, got {other:?}"),
+        };
 
         assert_eq!(commit.user_file_id, "F1");
         assert_eq!(done.load(Ordering::SeqCst), data.len() as u64);
@@ -1017,5 +1367,504 @@ mod tests {
 
         let _ = std::fs::remove_file(&file_path);
         server.abort();
+    }
+
+    // -----------------------------------------------------------------
+    // 分片规划 / 下载前缀安全 / 暂停恢复取消
+    // -----------------------------------------------------------------
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn test_plan_chunks_coverage() {
+        // 检查：升序、无重叠、无空洞、恰好覆盖 [start, file_size)
+        fn check(file_size: u64, start: u64, chunk: u64) {
+            let chunks = plan_chunks(file_size, start, chunk);
+            let limit = if chunk == 0 {
+                DEFAULT_CHUNK_SIZE
+            } else {
+                chunk
+            };
+            let mut next_offset = start;
+            for (offset, len) in chunks.iter().copied() {
+                assert_eq!(offset, next_offset, "分片必须严格升序且连续");
+                assert!(len > 0, "分片长度必须 > 0");
+                assert!(len <= limit, "分片长度不能超过 chunk_size");
+                next_offset += len;
+            }
+            assert_eq!(
+                next_offset,
+                file_size.max(start),
+                "必须恰好覆盖到文件末尾，不能有空洞或越界"
+            );
+        }
+
+        check(10 * MIB + 1, 0, 4 * MIB);
+        check(10 * MIB + 1, 4 * MIB, 4 * MIB);
+        check(10 * MIB + 1, 10 * MIB, 4 * MIB);
+        check(10 * MIB + 1, 10 * MIB + 1, 4 * MIB);
+        check(1, 0, 4 * MIB);
+        check(4 * MIB, 0, 4 * MIB);
+        check(4 * MIB, 0, 0);
+
+        // 具体分割结果
+        assert_eq!(
+            plan_chunks(10 * MIB + 1, 0, 4 * MIB),
+            vec![(0, 4 * MIB), (4 * MIB, 4 * MIB), (8 * MIB, 2 * MIB + 1)]
+        );
+        assert_eq!(
+            plan_chunks(10 * MIB + 1, 4 * MIB, 4 * MIB),
+            vec![(4 * MIB, 4 * MIB), (8 * MIB, 2 * MIB + 1)]
+        );
+
+        // 边界：空文件 / 起点越界 / chunk_size == 0（按 4 MiB）
+        assert!(plan_chunks(0, 0, 4 * MIB).is_empty());
+        assert!(plan_chunks(0, 0, 0).is_empty());
+        assert!(plan_chunks(100, 100, 4 * MIB).is_empty());
+        assert!(plan_chunks(100, 200, 4 * MIB).is_empty());
+        assert_eq!(
+            plan_chunks(4 * MIB + 1, 0, 0),
+            vec![(0, 4 * MIB), (4 * MIB, 1)]
+        );
+        assert_eq!(plan_chunks(10, 0, 4 * MIB), vec![(0, 10)]);
+    }
+
+    /// 测试用客户端（只用到 HTTP 层，不访问真实 API）
+    fn test_client() -> TianyiClient {
+        use crate::config::AppConfig;
+        use crate::models::{AccountConfig, TokenInfo};
+        let account = AccountConfig {
+            token: TokenInfo {
+                session_key: "SK".to_string(),
+                session_secret: "0123456789abcdef".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        TianyiClient::new(AppConfig::default(), account)
+    }
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("tianyi-dl-test-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn parse_range_header(req: &str) -> Option<(u64, u64)> {
+        for line in req.lines() {
+            let lower = line.to_ascii_lowercase();
+            if let Some(rest) = lower.strip_prefix("range:") {
+                let spec = rest.trim().strip_prefix("bytes=")?;
+                let (a, b) = spec.split_once('-')?;
+                return Some((a.trim().parse().ok()?, b.trim().parse().ok()?));
+            }
+        }
+        None
+    }
+
+    /// 极简 HTTP 服务：支持 Range；`ignore_range` 为真时永远返回 200 整包
+    async fn spawn_range_server(
+        data: Vec<u8>,
+        ignore_range: bool,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock server");
+        let addr = listener.local_addr().expect("local addr");
+        let data = Arc::new(data);
+        let handle = tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                let data = data.clone();
+                tokio::spawn(async move {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    for _ in 0..65536 {
+                        match sock.read(&mut byte).await {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                head.push(byte[0]);
+                                if head.ends_with(b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let req = String::from_utf8_lossy(&head).to_string();
+                    let (status, body) = match parse_range_header(&req) {
+                        Some((s, e)) if !ignore_range => {
+                            let s = (s as usize).min(data.len());
+                            let e = ((e as usize) + 1).min(data.len());
+                            ("206 Partial Content", data[s..e].to_vec())
+                        }
+                        _ => ("200 OK", data.as_ref().clone()),
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(&body).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn collect_progress() -> (ProgressCallback, Arc<std::sync::Mutex<Vec<u64>>>) {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+        let seen_cb = seen.clone();
+        let cb: ProgressCallback = Arc::new(move |n| {
+            seen_cb.lock().unwrap_or_else(|e| e.into_inner()).push(n);
+        });
+        (cb, seen)
+    }
+
+    /// 完整下载：分片按序落盘，进度单调递增，结束后 `.part` 被重命名为目标文件
+    #[tokio::test]
+    async fn test_download_completes_and_reports_monotonic_progress() {
+        let size = 10 * MIB + 123;
+        let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), false).await;
+        let dir = tmp_dir("complete");
+        let dest = dir.join("out.bin");
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 4,
+            resume: true,
+            chunk_size: MIB,
+        };
+        let control = TransferControl::new();
+        let (progress, seen) = collect_progress();
+
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &dest,
+            &opts,
+            progress,
+            &control,
+            Some(&format!("{base}/dl")),
+        )
+        .await
+        .expect("download ok");
+
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), data);
+        assert!(!part_path_of(&dest).exists(), ".part 应已重命名");
+
+        let seen = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert!(
+            seen.windows(2).all(|w| w[0] <= w[1]),
+            "进度必须单调不减: {seen:?}"
+        );
+        assert_eq!(*seen.last().expect("至少上报一次进度"), size);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 暂停：同一个 future 挂起（不失败），`.part` 仍是合法前缀；恢复后继续跑完
+    #[tokio::test]
+    async fn test_download_pause_parks_then_resumes() {
+        let size = 6 * MIB;
+        let data: Vec<u8> = (0..size).map(|i| (i % 253) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), false).await;
+        let dir = tmp_dir("pause");
+        let dest = dir.join("out.bin");
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 2,
+            resume: true,
+            chunk_size: MIB,
+        };
+        let control = TransferControl::new();
+        let pauser = control.clone();
+        // 只暂停一次：否则恢复后的下一次进度回调会把它再次按下
+        let paused_once = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let progress: ProgressCallback = Arc::new(move |n| {
+            if n >= MIB && !paused_once.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                pauser.pause();
+            }
+        });
+
+        let url = format!("{base}/dl");
+        let task_client = client.clone_for_transfer();
+        let task_dest = dest.clone();
+        let task_control = control.clone();
+        let mut task = tokio::spawn(async move {
+            download_impl(
+                &task_client,
+                "file-id",
+                size,
+                &task_dest,
+                &opts,
+                progress,
+                &task_control,
+                Some(&url),
+            )
+            .await
+        });
+
+        // 等进度回调请求暂停，并确认 future 停在检查点上
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(control.state(), ControlState::Paused, "应已请求暂停");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut task)
+                .await
+                .is_err(),
+            "暂停期间下载 future 必须保持 pending，而不是失败或返回"
+        );
+
+        // 暂停期间：没有最终文件，`.part` 必须是目标文件的合法前缀
+        assert!(!dest.exists(), "暂停不应生成最终文件");
+        let part = part_path_of(&dest);
+        let prefix = std::fs::read(&part).expect("暂停时应保留 .part");
+        assert!(!prefix.is_empty());
+        assert_eq!(
+            prefix,
+            data[..prefix.len()].to_vec(),
+            ".part 在任何时刻都必须是目标文件的合法前缀"
+        );
+
+        // 恢复：同一个 future 接着跑完
+        assert!(control.resume());
+        let outcome = tokio::time::timeout(Duration::from_secs(60), task)
+            .await
+            .expect("恢复后应能完成")
+            .expect("join ok")
+            .expect("download ok");
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), data);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 取消：返回 Canceled、删除 `.part`、绝不留下最终文件
+    #[tokio::test]
+    async fn test_download_cancel_discards_part_file() {
+        let size = 4 * MIB;
+        let data: Vec<u8> = (0..size).map(|i| (i % 249) as u8).collect();
+        let (base, server) = spawn_range_server(data, false).await;
+        let dir = tmp_dir("cancel");
+        let dest = dir.join("out.bin");
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 2,
+            resume: true,
+            chunk_size: MIB,
+        };
+        let control = TransferControl::new();
+        let canceler = control.clone();
+        let progress: ProgressCallback = Arc::new(move |n| {
+            if n >= MIB {
+                canceler.cancel();
+            }
+        });
+
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &dest,
+            &opts,
+            progress,
+            &control,
+            Some(&format!("{base}/dl")),
+        )
+        .await
+        .expect("取消不是错误");
+        assert_eq!(outcome, DownloadOutcome::Canceled);
+        assert!(!dest.exists(), "取消不应产生最终文件");
+        assert!(!part_path_of(&dest).exists(), "取消必须删除 .part");
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 断点续传：从 `.part` 现有长度继续（长度不必与分片边界对齐）
+    #[tokio::test]
+    async fn test_download_resumes_from_existing_part_prefix() {
+        let size = 4 * MIB + 7;
+        let data: Vec<u8> = (0..size).map(|i| (i % 247) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), false).await;
+        let dir = tmp_dir("resume");
+        let dest = dir.join("out.bin");
+        // 预置 3_000_000 字节的合法前缀（不是 chunk_size 的整数倍）
+        let resume_from = 3_000_000u64;
+        std::fs::write(part_path_of(&dest), &data[..resume_from as usize]).expect("写 .part");
+
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 3,
+            resume: true,
+            chunk_size: MIB,
+        };
+        let control = TransferControl::new();
+        let (progress, seen) = collect_progress();
+
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &dest,
+            &opts,
+            progress,
+            &control,
+            Some(&format!("{base}/dl")),
+        )
+        .await
+        .expect("download ok");
+
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), data);
+        let first = seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .first()
+            .copied()
+            .expect("至少一次进度");
+        assert!(
+            first > resume_from,
+            "必须从续传点继续（首次进度 {first} 应大于 {resume_from}）"
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `resume: false`：丢弃脏 `.part`，从头下载
+    #[tokio::test]
+    async fn test_download_without_resume_truncates_part() {
+        let size = 2 * MIB + 5;
+        let data: Vec<u8> = (0..size).map(|i| (i % 241) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), false).await;
+        let dir = tmp_dir("noresume");
+        let dest = dir.join("out.bin");
+        // 脏临时文件：长度合法但内容是垃圾
+        std::fs::write(part_path_of(&dest), vec![0xFFu8; MIB as usize]).expect("写脏 .part");
+
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 2,
+            resume: false,
+            chunk_size: MIB,
+        };
+        let progression = TransferControl::new();
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &dest,
+            &opts,
+            Arc::new(|_| {}),
+            &progression,
+            Some(&format!("{base}/dl")),
+        )
+        .await
+        .expect("download ok");
+
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), data);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 服务端忽略 Range 直接返回整包（200）时，按窗口截取，不能破坏前缀不变量
+    #[tokio::test]
+    async fn test_download_tolerates_server_ignoring_range() {
+        let size = 3 * MIB + 11;
+        let data: Vec<u8> = (0..size).map(|i| (i % 239) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), true).await;
+        let dir = tmp_dir("norange");
+        let dest = dir.join("out.bin");
+        let client = test_client();
+        let opts = DownloadOptions {
+            thread_count: 2,
+            resume: true,
+            chunk_size: MIB,
+        };
+
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &dest,
+            &opts,
+            Arc::new(|_| {}),
+            &TransferControl::new(),
+            Some(&format!("{base}/dl")),
+        )
+        .await
+        .expect("download ok");
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), data);
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 入口就是暂停态：立即让出，不联网、不创建任何文件
+    #[tokio::test]
+    async fn test_download_yields_immediately_when_paused_at_entry() {
+        let dir = tmp_dir("paused-entry");
+        let dest = dir.join("out.bin");
+        let client = test_client();
+        let control = TransferControl::new();
+        assert!(control.pause());
+
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            1024,
+            &dest,
+            &DownloadOptions::default(),
+            Arc::new(|_| {}),
+            &control,
+            // 故意给一个连不上的地址：入口暂停时根本不会发起请求
+            Some("http://127.0.0.1:1/never"),
+        )
+        .await
+        .expect("暂停不是错误");
+        assert_eq!(outcome, DownloadOutcome::Paused);
+        assert!(!dest.exists());
+        assert!(!part_path_of(&dest).exists());
+
+        // 入口就是取消态：同样立即返回，且不留下任何文件
+        let canceled = TransferControl::new();
+        assert!(canceled.cancel());
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(500),
+            download_impl(
+                &client,
+                "file-id",
+                1024,
+                &dest,
+                &DownloadOptions::default(),
+                Arc::new(|_| {}),
+                &canceled,
+                Some("http://127.0.0.1:1/never"),
+            ),
+        )
+        .await
+        .expect("取消态不应阻塞")
+        .expect("取消不是错误");
+        assert_eq!(outcome, DownloadOutcome::Canceled);
+        assert!(!dest.exists());
+        assert!(!part_path_of(&dest).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

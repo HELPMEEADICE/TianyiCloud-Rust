@@ -1,0 +1,184 @@
+// 传输任务中心：筛选 + 虚拟化列表 + 暂停/继续/取消/重试/移除
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "../components/button.slint";
+import { FluentIconButton } from "../components/icon-button.slint";
+import { FluentSegmented } from "../components/segmented.slint";
+import { TransferRow } from "../components/transfer-row.slint";
+import { FluentEmptyState } from "../components/empty-state.slint";
+import { TransferEntry } from "../types.slint";
+
+export component TransfersPage inherits Rectangle {
+    in property <[TransferEntry]> rows: [];
+    in-out property <int> filter: 0;
+    in property <string> status-text: "";
+    in property <int> active-count: 0;
+    in property <int> finished-count: 0;
+
+    callback filter-changed(int);
+    callback pause-task(int);
+    callback resume-task(int);
+    callback cancel-task(int);
+    callback retry-task(int);
+    callback remove-task(int);
+    callback reveal-task(int);
+    callback clear-finished();
+    callback open-download-dir();
+
+    background: Theme.window-bg;
+
+    VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 8px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            height: Theme.header-height;
+            spacing: 10px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "传输任务";
+                font-family: Theme.font-family;
+                font-size: Theme.font-subtitle;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: 240px;
+            }
+
+            FluentSegmented {
+                width: 320px;
+                items: ["全部", "进行中", "已完成", "失败/取消"];
+                current: root.filter;
+                changed(idx) => {
+                    root.filter = idx;
+                    root.filter-changed(idx);
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            FluentButton {
+                text: "打开下载目录";
+                glyph: Icons.folder;
+                subtle: true;
+                min-w: 132px;
+                clicked => {
+                    root.open-download-dir();
+                }
+            }
+
+            FluentButton {
+                text: "清理已完成";
+                glyph: Icons.trash;
+                subtle: true;
+                min-w: 124px;
+                enabled: root.finished-count > 0;
+                clicked => {
+                    root.clear-finished();
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: Theme.radius-card;
+            background: Theme.layer-bg;
+            border-width: 1px;
+            border-color: Theme.stroke;
+
+            VerticalLayout {
+                padding: 8px;
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: transparent;
+
+                    ListView {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+
+                        for task in root.rows : TransferRow {
+                            entry: task;
+                            pause-clicked => {
+                                root.pause-task(task.id);
+                            }
+                            resume-clicked => {
+                                root.resume-task(task.id);
+                            }
+                            cancel-clicked => {
+                                root.cancel-task(task.id);
+                            }
+                            retry-clicked => {
+                                root.retry-task(task.id);
+                            }
+                            remove-clicked => {
+                                root.remove-task(task.id);
+                            }
+                            reveal-clicked => {
+                                root.reveal-task(task.id);
+                            }
+                        }
+                    }
+
+                    if root.rows.length == 0: Rectangle {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        background: Theme.layer-bg;
+
+                        FluentEmptyState {
+                            glyph: Icons.transfer;
+                            title: root.filter == 0 ? "还没有传输任务" : "该分类下没有任务";
+                            description: root.filter == 0
+                                ? "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
+                                : "切换到“全部”查看其他任务";
+                            action-text: root.filter == 0 ? "" : "查看全部";
+                            action => {
+                                root.filter = 0;
+                                root.filter-changed(0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            height: 24px;
+            spacing: 12px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: root.status-text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            Text {
+                text: "进行中 " + root.active-count + " · 已结束 " + root.finished-count;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

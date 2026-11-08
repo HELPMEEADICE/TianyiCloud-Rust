@@ -1,0 +1,52 @@
+// Fluent 进度条：可确定（0-100）或不确定（滑块循环）
+//
+// 不确定态用 Timer 驱动一个 1.4s 周期的位移，仅在显式 indeterminate 时运行，
+// 不影响其他界面的重绘。
+
+import { Theme } from "../theme/tokens.slint";
+
+export component FluentProgressBar inherits Rectangle {
+    in property <float> value: 0.0;
+    in property <bool> indeterminate: false;
+    in property <color> bar-color: Theme.accent;
+    in property <length> bar-height: 4px;
+
+    height: root.bar-height;
+    border-radius: root.bar-height / 2;
+    background: Theme.dark ? #3A3A3A : #E6E6E6;
+    clip: true;
+
+    property <float> phase: 0.0;
+    property <length> knob: max(24px, root.width * 0.3);
+
+    Timer {
+        interval: 16ms;
+        running: root.indeterminate;
+        triggered => {
+            root.phase = root.phase < 0.02 ? 1.0 : root.phase - 0.02;
+        }
+    }
+
+    if !root.indeterminate: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width * max(0.0, min(1.0, root.value / 100.0));
+        height: root.height;
+        border-radius: root.height / 2;
+        background: root.bar-color;
+
+        animate width {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+    }
+
+    if root.indeterminate: Rectangle {
+        y: 0;
+        x: (root.width + root.knob) * root.phase - root.knob;
+        width: root.knob;
+        height: root.height;
+        border-radius: root.height / 2;
+        background: root.bar-color;
+    }
+}

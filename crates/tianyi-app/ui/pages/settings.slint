@@ -1,0 +1,319 @@
+// 设置页：外观 / 传输 / 账号 / 关于
+//
+// 只放真正生效的开关：主题、减少动画、下载目录、清理任务、退出登录。
+// 每一项都直接调用控制器，不存在“点了没反应”的控件。
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "../components/button.slint";
+import { FluentSegmented } from "../components/segmented.slint";
+import { FluentCheckBox } from "../components/check-box.slint";
+
+// 设置分组卡片
+component SettingsSection inherits Rectangle {
+    in property <string> title: "";
+    in property <string> description: "";
+    in property <length> content-height: 0px;
+
+    border-radius: Theme.radius-card;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.stroke;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+
+        VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: root.title;
+                font-family: Theme.font-family;
+                font-size: Theme.font-body-large;
+                font-weight: 600;
+                color: Theme.text-primary;
+            }
+
+            if root.description != "": Text {
+                text: root.description;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                wrap: word-wrap;
+            }
+        }
+
+        @children
+    }
+}
+
+// 左标签 / 右控件
+component SettingsRow inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <string> description: "";
+
+    spacing: 12px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    cross-axis-alignment: center;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        spacing: 2px;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            font-family: Theme.font-family;
+            font-size: Theme.font-caption;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    @children
+}
+
+
+export component SettingsPage inherits Rectangle {
+    in property <string> account-name: "";
+    /// 0 = 跟随系统，1 = 浅色，2 = 深色
+    in-out property <int> theme-index: 0;
+    in property <bool> reduce-motion: false;
+    in property <string> download-dir: "";
+    in property <string> upload-thread: "";
+    in property <string> download-thread: "";
+    in property <string> version-text: "";
+    in property <string> config-dir: "";
+
+    callback theme-changed(int);
+    callback reduce-motion-changed(bool);
+    callback choose-download-dir();
+    callback open-config-dir();
+    callback logout();
+
+    background: Theme.window-bg;
+
+    VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 8px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            height: Theme.header-height;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "设置";
+                font-family: Theme.font-family;
+                font-size: Theme.font-subtitle;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 12px;
+                padding-bottom: 16px;
+
+                // ---------------- 外观 ----------------
+                SettingsSection {
+                    title: "外观";
+                    description: "主题跟随系统时会读取操作系统的浅色/深色偏好";
+
+                    VerticalLayout {
+                        spacing: 12px;
+
+                        SettingsRow {
+                            label: "主题";
+
+                            FluentSegmented {
+                                width: 260px;
+                                items: ["跟随系统", "浅色", "深色"];
+                                current: root.theme-index;
+                                changed(idx) => {
+                                    root.theme-index = idx;
+                                    root.theme-changed(idx);
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.divider;
+                        }
+
+                        SettingsRow {
+                            label: "减少动画";
+                            description: "关闭界面过渡与进度动画，适合远程桌面或低性能设备";
+
+                            FluentCheckBox {
+                                text: "";
+                                checked: root.reduce-motion;
+                                toggled => {
+                                    root.reduce-motion-changed(!root.reduce-motion);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---------------- 传输 ----------------
+                SettingsSection {
+                    title: "传输";
+                    description: "下载目录与并发设置来源于本地配置";
+
+                    VerticalLayout {
+                        spacing: 12px;
+
+                        SettingsRow {
+                            label: "默认下载目录";
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: root.download-dir;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-small;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                    width: 260px;
+                                    overflow: elide;
+                                    horizontal-alignment: right;
+                                }
+
+                                FluentButton {
+                                    text: "更改";
+                                    clicked => {
+                                        root.choose-download-dir();
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.divider;
+                        }
+
+                        SettingsRow {
+                            label: "并发分片数";
+
+                            Text {
+                                text: "下载 " + root.download-thread + " 线程 · 上传 " + root.upload-thread + " 线程";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-small;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+
+                // ---------------- 账号 ----------------
+                SettingsSection {
+                    title: "账号";
+
+                    SettingsRow {
+                        label: "当前账号";
+
+                        HorizontalLayout {
+                            spacing: 12px;
+                            cross-axis-alignment: center;
+
+                            Text {
+                                text: root.account-name == "" ? "未登录" : root.account-name;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-small;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+
+                            FluentButton {
+                                text: "退出登录";
+                                glyph: Icons.logout;
+                                danger: true;
+                                subtle: true;
+                                min-w: 128px;
+                                enabled: root.account-name != "";
+                                clicked => {
+                                    root.logout();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ---------------- 关于 ----------------
+                SettingsSection {
+                    title: "关于";
+
+                    VerticalLayout {
+                        spacing: 8px;
+
+                        SettingsRow {
+                            label: "版本";
+
+                            Text {
+                                text: root.version-text;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-small;
+                                color: Theme.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.divider;
+                        }
+
+                        SettingsRow {
+                            label: "配置目录";
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: root.config-dir;
+                                    font-family: Theme.mono-font-family;
+                                    font-size: Theme.font-caption;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                    width: 260px;
+                                    overflow: elide;
+                                }
+
+                                FluentButton {
+                                    text: "打开";
+                                    clicked => {
+                                        root.open-config-dir();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

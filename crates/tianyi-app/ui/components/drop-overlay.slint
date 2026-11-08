@@ -1,0 +1,58 @@
+// 拖入上传遮罩：文件悬停在窗口上时显示目标目录与说明
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+
+export component DropOverlay inherits Rectangle {
+    in property <string> target-name: "";
+    in property <bool> active: false;
+
+    background: Theme.dark ? #332E6E9E : #220F6CBD;
+    border-radius: Theme.radius-card;
+    border-width: 2px;
+    border-color: Theme.accent;
+    opacity: root.active ? 1.0 : 0.0;
+
+    animate opacity {
+        duration: Theme.motion-normal;
+        easing: ease-out;
+    }
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 8px;
+
+        Rectangle {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            background: Theme.accent;
+
+            Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                glyph: Icons.upload;
+                size: 26px;
+                thickness: 1.8px;
+                icon-color: Theme.text-on-accent;
+            }
+        }
+
+        Text {
+            text: "松开上传到 " + (root.target-name == "" ? "当前目录" : root.target-name);
+            font-family: Theme.font-family;
+            font-size: Theme.font-subtitle;
+            font-weight: 600;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+        }
+
+        Text {
+            text: "支持文件与文件夹，文件夹会自动创建同名云端目录";
+            font-family: Theme.font-family;
+            font-size: Theme.font-small;
+            color: Theme.text-secondary;
+            horizontal-alignment: center;
+        }
+    }
+}

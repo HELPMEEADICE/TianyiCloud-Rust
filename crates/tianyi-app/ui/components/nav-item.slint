@@ -1,0 +1,121 @@
+// Fluent 导航项（NavigationView item）
+//
+// 展开态：图标 + 文本 + 可选徽章；折叠态：仅图标（Tooltip 补充说明）。
+// 选中态：柔和强调底 + 左侧 3px 强调指示条 + 强调色文字。
+//
+// 布局说明：所有子元素都显式定位（不混用布局与自由子元素），
+// 触摸层放在最后以保证位于最上层，指针事件稳定命中。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon } from "../theme/icons.slint";
+import { TooltipState } from "../types.slint";
+
+export component FluentNavItem inherits Rectangle {
+    in property <string> glyph: "";
+    in property <string> label: "";
+    in property <bool> selected: false;
+    in property <bool> compact: false;
+    in property <bool> enabled: true;
+    /// 徽章数字（0 表示不显示）
+    in property <int> badge: 0;
+    callback clicked();
+
+    height: Theme.nav-item-height;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    background: touch.pressed ? Theme.control-bg-pressed
+        : touch.has-hover && root.enabled ? Theme.hover-bg
+        : root.selected ? Theme.accent-soft
+        : transparent;
+
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    // 左侧选中指示条
+    Rectangle {
+        x: 0;
+        y: (root.height - 16px) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+        opacity: root.selected ? 1.0 : 0.0;
+
+        animate opacity {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+    }
+
+    // 图标
+    Icon {
+        x: root.compact ? (root.width - self.width) / 2 : 12px;
+        y: (root.height - self.height) / 2;
+        glyph: root.glyph;
+        size: 17px;
+        thickness: 1.6px;
+        icon-color: root.selected ? Theme.accent : Theme.text-primary;
+    }
+
+    // 文本
+    if !root.compact: Text {
+        x: 41px;
+        y: 0;
+        width: root.width - 41px - (root.badge > 0 ? 36px : 12px);
+        height: root.height;
+        text: root.label;
+        font-family: Theme.font-family;
+        font-size: Theme.font-body-large;
+        font-weight: root.selected ? 600 : 400;
+        color: root.selected ? Theme.accent : Theme.text-primary;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // 徽章
+    if !root.compact && root.badge > 0: Rectangle {
+        x: root.width - 34px;
+        y: (root.height - 18px) / 2;
+        min-width: 18px;
+        height: 18px;
+        border-radius: 9px;
+        background: root.selected ? Theme.accent : Theme.control-bg-pressed;
+
+        Text {
+            text: root.badge > 99 ? "99+" : root.badge;
+            font-family: Theme.font-family;
+            font-size: Theme.font-caption;
+            font-weight: 600;
+            color: root.selected ? Theme.text-on-accent : Theme.text-secondary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+
+    // 折叠态的“有任务”小圆点
+    if root.compact && root.badge > 0: Rectangle {
+        x: root.width - 14px;
+        y: 5px;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: Theme.accent;
+    }
+
+    touch := TouchArea {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+
+
+    }
+}

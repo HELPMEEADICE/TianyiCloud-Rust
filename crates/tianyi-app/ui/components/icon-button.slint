@@ -1,0 +1,68 @@
+// Fluent 图标按钮：32x32 点击区 + 悬停底色 + 工具提示
+//
+// 图标按钮不承载文字，因此 tooltip 必须给出可读名称（传空字符串不会显示气泡）。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon } from "../theme/icons.slint";
+import { TooltipState } from "../types.slint";
+
+export component FluentIconButton inherits Rectangle {
+    in property <string> glyph: "";
+    in property <string> tooltip: "";
+    in property <bool> enabled: true;
+    /// 选中态（如“传输面板已展开”）
+    in property <bool> checked: false;
+    in property <bool> accent: false;
+    in property <bool> danger: false;
+    in property <bool> filled: false;
+    in property <length> icon-size: 16px;
+    in property <length> size: 32px;
+    callback clicked();
+
+    width: root.size;
+    height: root.size;
+    border-radius: Theme.radius-control;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    background: !root.enabled ? transparent
+        : touch.pressed ? Theme.control-bg-pressed
+        : touch.has-hover ? Theme.control-bg-hover
+        : root.checked ? Theme.accent-soft : transparent;
+
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    Icon {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        glyph: root.glyph;
+        size: root.icon-size;
+        filled: root.filled;
+        thickness: 1.7px;
+        icon-color: !root.enabled ? Theme.text-disabled
+            : root.accent ? Theme.accent
+            : root.danger ? Theme.danger
+            : root.checked ? Theme.accent : Theme.text-primary;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.text = root.tooltip;
+                TooltipState.x = self.absolute-position.x;
+                TooltipState.y = self.absolute-position.y + self.height + 4px;
+                TooltipState.visible = true;
+            } else {
+                TooltipState.visible = false;
+            }
+        }
+    }
+}

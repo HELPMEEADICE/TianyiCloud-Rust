@@ -1,0 +1,244 @@
+// 文件列表行（Details View 行）
+//
+// 列宽由 FileColumns 统一提供，表头与数据行共用，保证列对齐。
+// 交互：单击选中、双击打开、右键上下文菜单、拖拽（网盘内移动 / 修饰键拖出下载）、
+// 作为文件夹时可接收拖入、原地重命名。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { DragOutApi, FileEntry } from "../types.slint";
+
+/// 文件列表列宽（表头与行共享）
+export global FileColumns {
+    out property <length> icon: 20px;
+    out property <length> size: 96px;
+    out property <length> time: 168px;
+    out property <length> kind: 92px;
+    out property <length> gap: 12px;
+    out property <length> pad-left: 10px;
+    out property <length> pad-right: 12px;
+}
+
+export component FileRow inherits Rectangle {
+    in property <FileEntry> entry;
+    in property <bool> selected: false;
+    in property <bool> renaming: false;
+    /// 窄窗口下隐藏次要列
+    in property <bool> compact: false;
+    in property <bool> is-drop-target: false;
+    in property <data-transfer> drag-data;
+
+    callback item-clicked();
+    callback item-double-clicked();
+    callback context-requested(string, string, bool, length, length);
+    callback rename-submitted(string);
+    callback drop-can-accept(DropEvent, string) -> DragAction;
+    callback drop-requested(DropEvent, string) -> DragAction;
+
+    // 拖出下载的按压追踪
+    property <bool> drag-pressed: false;
+    property <bool> drag-armed: false;
+    property <bool> drag-out-fired: false;
+
+    // 图标与着色（文件夹用强调色，文件用中性色，保持统一单色风格）
+    property <string> row-glyph: entry.is_dir ? Icons.folder
+        : entry.kind == "image" ? Icons.image
+        : entry.kind == "video" ? Icons.video
+        : entry.kind == "audio" ? Icons.audio
+        : entry.kind == "pdf" ? Icons.pdf
+        : entry.kind == "archive" ? Icons.archive
+        : entry.kind == "office" ? Icons.file
+        : entry.kind == "text" ? Icons.text-file
+        : Icons.file;
+
+    property <brush> row-tint: entry.is_dir ? Theme.accent : Theme.text-secondary;
+
+    height: Theme.row-height;
+    border-radius: Theme.radius-control;
+    opacity: DragOutApi.active && DragOutApi.active-id == entry.id ? 0.4 : 1.0;
+
+    background: root.selected ? (touch.has-hover ? Theme.selected-bg-hover : Theme.selected-bg)
+        : touch.has-hover ? Theme.hover-bg
+        : root.is-drop-target && da.has-drag ? Theme.accent-soft
+        : transparent;
+
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
+    // 选中态左侧指示条
+    Rectangle {
+        x: 0;
+        y: (root.height - 18px) / 2;
+        width: 2px;
+        height: 18px;
+        border-radius: 1px;
+        background: Theme.accent;
+        opacity: root.selected ? 1.0 : 0.0;
+
+        animate opacity {
+            duration: Theme.motion-fast;
+            easing: ease-out;
+        }
+    }
+
+    drag := DragArea {
+        enabled: !root.renaming && !(DragOutApi.mod-pressed && !entry.is_dir);
+        data: root.drag-data;
+        allow-move: true;
+
+        HorizontalLayout {
+            padding-left: FileColumns.pad-left;
+            padding-right: FileColumns.pad-right;
+            spacing: FileColumns.gap;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                width: FileColumns.icon;
+                height: FileColumns.icon;
+                background: transparent;
+
+                Icon {
+                    x: 0;
+                    y: (parent.height - self.height) / 2;
+                    glyph: root.row-glyph;
+                    size: FileColumns.icon;
+                    thickness: 1.6px;
+                    icon-color: root.selected ? Theme.accent : root.row-tint;
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+                height: root.height;
+                background: transparent;
+
+                Text {
+                    visible: !root.renaming;
+                    x: 0;
+                    y: (parent.height - self.height) / 2;
+                    width: parent.width;
+                    text: root.entry.name;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-body-large;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+
+                rename-input := TextInput {
+                    visible: root.renaming;
+                    x: 0;
+                    y: (parent.height - 26px) / 2;
+                    width: parent.width;
+                    height: 26px;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-body-large;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    selection-background-color: Theme.accent;
+                    selection-foreground-color: Theme.text-on-accent;
+                    accepted => {
+                        root.rename-submitted(rename-input.text);
+                    }
+                }
+            }
+
+            if !root.compact: Text {
+                width: FileColumns.size;
+                text: root.entry.size_text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-small;
+                color: Theme.text-tertiary;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if !root.compact: Text {
+                width: FileColumns.time;
+                text: root.entry.modified;
+                font-family: Theme.font-family;
+                font-size: Theme.font-small;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            if !root.compact: Text {
+                width: FileColumns.kind;
+                text: root.entry.kind_text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-small;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+
+        touch := TouchArea {
+            enabled: !root.renaming;
+            mouse-cursor: pointer;
+
+            clicked => {
+                root.item-clicked();
+            }
+            double-clicked => {
+                root.item-double-clicked();
+            }
+            pointer-event(event) => {
+                if (event.button == PointerEventButton.left) {
+                    if (event.kind == PointerEventKind.down) {
+                        root.drag-pressed = true;
+                        root.drag-armed = DragOutApi.mod-pressed && !root.entry.is_dir;
+                        if (!root.drag-armed) {
+                            root.drag-out-fired = false;
+                        }
+                    } else if (event.kind == PointerEventKind.up) {
+                        root.drag-pressed = false;
+                        root.drag-armed = false;
+                        root.drag-out-fired = false;
+                    }
+                }
+                if (event.kind == PointerEventKind.move) {
+                    if (root.drag-armed && !root.drag-out-fired && DragOutApi.mod-pressed && !root.renaming) {
+                        let dx = self.mouse-x - self.pressed-x;
+                        let dy = self.mouse-y - self.pressed-y;
+                        if (dx > 5px || dx < -5px || dy > 5px || dy < -5px) {
+                            root.drag-out-fired = true;
+                            DragOutApi.drag_out(root.entry.id, root.entry.name);
+                        }
+                    }
+                }
+                if (event.kind == PointerEventKind.down && event.button == PointerEventButton.right) {
+                    root.context-requested(
+                        root.entry.id,
+                        root.entry.name,
+                        root.entry.is_dir,
+                        self.absolute-position.x + self.mouse-x,
+                        self.absolute-position.y + self.mouse-y
+                    );
+                }
+            }
+        }
+    }
+
+    da := DropArea {
+        enabled: root.is-drop-target;
+        can-drop(event) => {
+            root.drop-can-accept(event, root.entry.id);
+        }
+        dropped(event) => {
+            root.drop-requested(event, root.entry.id);
+        }
+    }
+
+    changed renaming => {
+        if (renaming) {
+            rename-input.text = root.entry.name;
+            rename-input.focus();
+            rename-input.select-all();
+        }
+    }
+}

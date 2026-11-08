@@ -1,0 +1,116 @@
+// 设计令牌（Design Tokens）
+//
+// 对齐 Windows 11 / Fluent Design 2 的取值：
+//  * 中性色 surfaces 分 window / layer / card / control 四级
+//  * 强调色取 Win11 默认强调蓝（浅色 #0F6CBD，深色 #60CDFF）
+//  * 圆角 4px（控件）/ 8px（卡片）/ 12px（浮层）
+//  * 间距 4px 栅格
+//
+// 颜色统一用 "dark ? 深色 : 浅色" 的绑定表达，切换主题只需改 dark 一个属性。
+
+export global Theme {
+    /// 是否深色主题。由 Rust 侧根据配置 + 系统主题写入。
+    in-out property <bool> dark: false;
+    /// 降低动画（无障碍 / 低性能设备）
+    in-out property <bool> reduce-motion: false;
+    /// UI 字体族。启动时由 Rust 按平台写入（Windows: Segoe UI Variable Text）。
+    in-out property <string> font-family: "Segoe UI Variable Text";
+    /// 等宽字体（路径、密钥等）
+    in-out property <string> mono-font-family: "Cascadia Mono";
+
+    // ---------------------------------------------------------------- 表面
+    /// 窗口底色（Mica 不可用时的回退）
+    out property <color> window-bg: dark ? #202020 : #F3F3F3;
+    /// 次级层（导航栏、面板）
+    out property <color> layer-bg: dark ? #272727 : #F7F7F7;
+    /// 卡片 / 列表行容器
+    out property <color> card-bg: dark ? #2B2B2B : #FFFFFF;
+    /// 输入框、次级控件底
+    out property <color> control-bg: dark ? #323232 : #FBFBFB;
+    out property <color> control-bg-hover: dark ? #3A3A3A : #F0F0F0;
+    out property <color> control-bg-pressed: dark ? #2E2E2E : #E6E6E6;
+    out property <color> control-bg-disabled: dark ? #262626 : #F5F5F5;
+    /// 悬停高亮（列表行 / 导航项）
+    out property <color> hover-bg: dark ? #333333 : #EDEDED;
+    /// 选中态
+    out property <color> selected-bg: dark ? #1F3A4D : #E8F1FB;
+    out property <color> selected-bg-hover: dark ? #24475E : #DCEAF9;
+
+    // ---------------------------------------------------------------- 描边
+    out property <color> stroke: dark ? #3D3D3D : #E1E1E1;
+    out property <color> stroke-strong: dark ? #4A4A4A : #D0D0D0;
+    out property <color> divider: dark ? #303030 : #EDEDED;
+    out property <color> focus-ring: dark ? #60CDFF : #0F6CBD;
+
+    // ---------------------------------------------------------------- 文本
+    out property <color> text-primary: dark ? #FFFFFF : #1A1A1A;
+    out property <color> text-secondary: dark ? #C8C8C8 : #5C5C5C;
+    out property <color> text-tertiary: dark ? #999999 : #8A8A8A;
+    out property <color> text-disabled: dark ? #6A6A6A : #B4B4B4;
+    out property <color> text-on-accent: dark ? #0A0A0A : #FFFFFF;
+
+    // ---------------------------------------------------------------- 强调
+    out property <color> accent: dark ? #60CDFF : #0F6CBD;
+    out property <color> accent-hover: dark ? #4CC2FF : #115EA3;
+    out property <color> accent-pressed: dark ? #3A9BC7 : #0C3B5E;
+    /// 强调色淡底（选中标签、徽章）
+    out property <color> accent-soft: dark ? #163B4D : #EFF6FC;
+    out property <color> accent-soft-hover: dark ? #1D485E : #E1EEFB;
+
+    // ---------------------------------------------------------------- 语义色
+    out property <color> danger: dark ? #FF99A4 : #C42B1C;
+    out property <color> danger-hover: dark ? #FFB3BB : #B0271A;
+    out property <color> danger-pressed: dark ? #E07C86 : #8E1F14;
+    out property <color> danger-soft: dark ? #442A2E : #FDECEA;
+    out property <color> success: dark ? #6CCB5F : #0F7B0F;
+    out property <color> success-hover: dark ? #7FDC72 : #0C6B0C;
+    out property <color> success-soft: dark ? #26401F : #E8F5E8;
+    out property <color> warning: dark ? #FCE100 : #9D5D00;
+    out property <color> warning-soft: dark ? #433B10 : #FFF4CE;
+    /// 遮罩 / 阴影
+    out property <color> shadow: dark ? #66000000 : #1F000000;
+    out property <color> overlay-scrim: #33000000;
+    /// 登录页背景柔光起始色
+    out property <color> login-glow: dark ? #1B2836 : #E9F1FA;
+
+    // ---------------------------------------------------------------- 圆角
+    out property <length> radius-control: 4px;
+    out property <length> radius-card: 8px;
+    out property <length> radius-flyout: 8px;
+    out property <length> radius-pill: 16px;
+
+    // ---------------------------------------------------------------- 间距
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-5: 24px;
+    out property <length> space-6: 32px;
+
+    // ---------------------------------------------------------------- 字号
+    out property <length> font-caption: 11px;
+    out property <length> font-small: 12px;
+    out property <length> font-body: 13px;
+    out property <length> font-body-large: 14px;
+    out property <length> font-subtitle: 16px;
+    out property <length> font-title: 20px;
+    out property <length> font-display: 28px;
+
+    // ---------------------------------------------------------------- 尺寸
+    /// Fluent 标准控件高度
+    out property <length> control-height: 32px;
+    out property <length> control-height-large: 36px;
+    out property <length> row-height: 40px;
+    out property <length> header-height: 44px;
+    out property <length> nav-width: 264px;
+    out property <length> nav-width-compact: 60px;
+    out property <length> nav-item-height: 38px;
+
+    // ---------------------------------------------------------------- 动效
+    /// 快速（悬停、按下）
+    out property <duration> motion-fast: reduce-motion ? 0ms : 90ms;
+    /// 常规（展开、切换）
+    out property <duration> motion-normal: reduce-motion ? 0ms : 180ms;
+    /// 大位移（页面转场、抽屉）
+    out property <duration> motion-slow: reduce-motion ? 0ms : 240ms;
+}

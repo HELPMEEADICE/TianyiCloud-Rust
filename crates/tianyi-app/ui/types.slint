@@ -1,0 +1,63 @@
+// 共享数据结构与全局接口
+//
+// 所有页面/组件都从这里导入结构体，避免 main.slint 成为全局状态集散地。
+
+/// 文件列表项（个人云 / 家庭云 / 搜索结果共用）
+export struct FileEntry {
+    id: string,
+    name: string,
+    size: int,
+    size_text: string,
+    is_dir: bool,
+    thumb: string,
+    modified: string,
+    /// 分类键：folder/image/video/audio/pdf/text/archive/office/other
+    kind: string,
+    /// 类型列展示文案（文件夹 / 图片 / 视频 …）
+    kind_text: string,
+}
+
+/// 传输任务项
+export struct TransferEntry {
+    id: int,
+    name: string,
+    /// upload / download
+    direction: string,
+    size_text: string,
+    /// 0..100
+    progress: float,
+    /// pending/running/paused/completed/failed/canceled
+    status: string,
+    /// 本地化状态文案
+    status_text: string,
+    speed: string,
+    /// “1.2 MB / 5.0 MB · 剩余 12 秒”
+    detail: string,
+    error: string,
+}
+
+/// 面包屑路径项
+export struct CrumbEntry {
+    /// 目录 id（根目录为 "-11"）
+    id: string,
+    name: string,
+}
+
+/// 轻量 Tooltip 状态（由组件在悬停时写入，主窗口统一渲染）
+///
+/// 不使用声明式 `Tooltip` 元素：它在部分容器中会干扰同级的命中测试，
+/// 这里用全局状态 + 窗口顶层浮层实现，行为可控且没有额外开销。
+export global TooltipState {
+    in-out property <string> text: "";
+    in-out property <length> x: 0px;
+    in-out property <length> y: 0px;
+    in-out property <bool> visible: false;
+}
+
+/// 拖出下载（Ctrl/Shift + 拖动文件行）的跨线程状态
+export global DragOutApi {
+    in property <bool> mod-pressed: false;
+    in property <bool> active: false;
+    in property <string> active-id: "";
+    callback drag_out(string, string);
+}

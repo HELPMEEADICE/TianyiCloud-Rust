@@ -1,0 +1,84 @@
+// Fluent InfoBar：页面内状态反馈（成功 / 信息 / 警告 / 错误）
+//
+// 由页面统一渲染在内容区顶部；消息为空时完全收起，不占用布局空间。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "button.slint";
+import { FluentIconButton } from "icon-button.slint";
+
+export component FluentInfoBar inherits Rectangle {
+    in property <string> message: "";
+    /// info / success / warning / error
+    in property <string> kind: "info";
+    in property <bool> closable: true;
+    /// 可选的行动按钮文案（空则不显示）
+    in property <string> action-text: "";
+    callback closed();
+    callback action();
+
+    property <bool> is-error: root.kind == "error";
+    property <bool> is-success: root.kind == "success";
+    property <bool> is-warning: root.kind == "warning";
+
+    visible: root.message != "";
+    height: root.message != "" ? 44px : 0px;
+    border-radius: Theme.radius-card;
+    background: root.is-error ? Theme.danger-soft
+        : root.is-success ? Theme.success-soft
+        : root.is-warning ? Theme.warning-soft
+        : Theme.accent-soft;
+    border-width: 1px;
+    border-color: root.is-error ? Theme.danger
+        : root.is-success ? Theme.success
+        : root.is-warning ? Theme.warning
+        : Theme.accent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 6px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+
+        Icon {
+            glyph: root.is-error || root.is-warning ? Icons.warning
+                : root.is-success ? Icons.check
+                : Icons.info;
+            size: 16px;
+            thickness: 1.7px;
+            icon-color: root.is-error ? Theme.danger
+                : root.is-success ? Theme.success
+                : root.is-warning ? Theme.warning
+                : Theme.accent;
+        }
+
+        Text {
+            text: root.message;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+
+        if root.action-text != "": FluentButton {
+            text: root.action-text;
+            subtle: true;
+            min-w: 60px;
+            clicked => {
+                root.action();
+            }
+        }
+
+        if root.closable: FluentIconButton {
+            glyph: Icons.close;
+            tooltip: "关闭提示";
+            size: 28px;
+            icon-size: 11px;
+            clicked => {
+                root.closed();
+            }
+        }
+    }
+}

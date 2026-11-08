@@ -1,0 +1,61 @@
+// Fluent 复选盒（登录页“保存账号”、设置页开关项）
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+
+export component FluentCheckBox inherits Rectangle {
+    in property <string> text: "";
+    in-out property <bool> checked: false;
+    in property <bool> enabled: true;
+    callback toggled();
+
+    height: 24px;
+    background: transparent;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    HorizontalLayout {
+        spacing: 8px;
+        alignment: start;
+        cross-axis-alignment: center;
+
+        Rectangle {
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            background: root.checked ? Theme.accent : (touch.has-hover ? Theme.control-bg-hover : Theme.control-bg);
+            border-width: 1px;
+            border-color: root.checked ? Theme.accent : Theme.stroke-strong;
+
+            animate background {
+                duration: Theme.motion-fast;
+                easing: ease-out;
+            }
+
+            if root.checked: Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                glyph: Icons.check;
+                size: 12px;
+                thickness: 2.4px;
+                icon-color: Theme.text-on-accent;
+            }
+        }
+
+        Text {
+            text: root.text;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body;
+            color: root.enabled ? Theme.text-secondary : Theme.text-disabled;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+}

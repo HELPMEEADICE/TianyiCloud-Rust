@@ -1,0 +1,602 @@
+// 云盘工作区（个人云 / 家庭云共用）
+//
+// 结构：命令栏（面包屑 + 搜索 + 主操作）→ 选中态命令栏 → 文件明细列表 → 状态栏。
+// 列表使用 ListView 虚拟化，只实例化可见行，避免大目录卡顿。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "../components/button.slint";
+import { FluentIconButton } from "../components/icon-button.slint";
+import { FluentSearchBox } from "../components/search-box.slint";
+import { FileRow, FileColumns } from "../components/file-row.slint";
+import { FluentEmptyState } from "../components/empty-state.slint";
+import { DropOverlay } from "../components/drop-overlay.slint";
+import { ListView } from "std-widgets.slint";
+import { FileEntry, CrumbEntry } from "../types.slint";
+
+export component CloudPage inherits Rectangle {
+    in property <string> space-label: "个人云";
+    in property <string> space-subtitle: "";
+    in property <[CrumbEntry]> crumbs: [];
+    in property <[FileEntry]> rows: [];
+    in property <string> selected-id: "";
+    in property <string> renaming-id: "";
+    in property <bool> searching: false;
+    in property <bool> loading: false;
+    in property <bool> compact: false;
+    in property <string> status-text: "";
+    in property <string> capacity-text: "";
+    in property <int> active-transfers: 0;
+    in property <bool> drop-active: false;
+    in property <string> drop-target-name: "";
+    in property <string> error-text: "";
+
+    callback select-item(string);
+    callback open-item(string, string, bool);
+    callback context-requested(string, string, bool, length, length);
+    callback navigate-crumb(int);
+    callback navigate-up();
+    callback refresh();
+    callback upload();
+    callback create-folder();
+    callback search-changed(string);
+    callback search-submitted(string);
+    callback search-cleared();
+    callback download-selected();
+    callback rename-selected();
+    callback copy-selected();
+    callback move-selected-up();
+    callback delete-selected();
+    callback link-selected();
+    callback rename-submitted(string, string);
+    callback toggle-transfers();
+    pure callback make-drag-data(string, string, bool) -> data-transfer;
+    callback drop-can-accept(DropEvent, string) -> DragAction;
+    callback drop-requested(DropEvent, string) -> DragAction;
+
+    in-out property <string> search-text: "";
+    /// Ctrl+A 全选（单点选择与全选两种模式）
+    in-out property <bool> select-all: false;
+    property <bool> has-selection: root.selected-id != "" || root.select-all;
+
+    background: Theme.window-bg;
+
+    VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 8px;
+        spacing: 8px;
+
+        // ---------------- 主命令栏 ----------------
+        HorizontalLayout {
+            height: Theme.header-height;
+            spacing: 8px;
+            cross-axis-alignment: center;
+
+            // 返回上级（图标按钮放在最左，和资源管理器一致）
+            FluentIconButton {
+                glyph: Icons.back;
+                tooltip: "返回上级目录 (Alt+←)";
+                enabled: root.crumbs.length > 1 && !root.searching;
+                clicked => {
+                    root.navigate-up();
+                }
+            }
+
+            // 面包屑（第一项就是当前云空间名，因此不再重复标题）
+            HorizontalLayout {
+                spacing: 2px;
+                vertical-stretch: 1;
+                cross-axis-alignment: center;
+                horizontal-stretch: 1;
+
+                for crumb[idx] in root.crumbs : HorizontalLayout {
+                    spacing: 2px;
+                    cross-axis-alignment: center;
+
+                    crumb-btn := Rectangle {
+                        height: 26px;
+                        border-radius: Theme.radius-control;
+                        background: crumb-ta.has-hover ? Theme.control-bg-hover : transparent;
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 6px;
+
+                            Text {
+                                text: crumb.name;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-body;
+                                color: idx == root.crumbs.length - 1 ? Theme.text-primary : Theme.text-secondary;
+                                font-weight: idx == root.crumbs.length - 1 ? 600 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+                        }
+
+                        crumb-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.navigate-crumb(idx);
+                            }
+                        }
+                    }
+
+                    if idx < root.crumbs.length - 1: Icon {
+                        glyph: Icons.chevron-right;
+                        size: 11px;
+                        thickness: 1.8px;
+                        icon-color: Theme.text-tertiary;
+                    }
+                }
+
+                if root.crumbs.length == 0: Text {
+                    text: "根目录";
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-body;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+            }
+
+            search := FluentSearchBox {
+                width: root.compact ? 180px : 240px;
+                text <=> root.search-text;
+                placeholder: "搜索云盘文件";
+                search(t) => {
+                    root.search-changed(t);
+                }
+                submitted(t) => {
+                    root.search-submitted(t);
+                }
+                cleared => {
+                    root.search-cleared();
+                }
+            }
+
+            FluentIconButton {
+                glyph: Icons.refresh;
+                tooltip: "刷新 (F5)";
+                enabled: !root.loading;
+                clicked => {
+                    root.refresh();
+                }
+            }
+
+            FluentButton {
+                text: "新建文件夹";
+                glyph: Icons.plus;
+                enabled: !root.loading;
+                clicked => {
+                    root.create-folder();
+                }
+            }
+
+            FluentButton {
+                text: "上传";
+                glyph: Icons.upload;
+                accent: true;
+                enabled: !root.loading;
+                clicked => {
+                    root.upload();
+                }
+            }
+        }
+
+        // ---------------- 选中态命令栏 ----------------
+        if root.has-selection && !root.searching: HorizontalLayout {
+            height: 36px;
+            spacing: 6px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: root.select-all ? ("已选择 " + root.rows.length + " 项") : "已选择 1 项";
+                font-family: Theme.font-family;
+                font-size: Theme.font-small;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                width: 8px;
+            }
+
+            FluentButton {
+                text: "下载";
+                glyph: Icons.download;
+                subtle: true;
+                clicked => {
+                    root.download-selected();
+                }
+            }
+
+            FluentButton {
+                text: "重命名";
+                glyph: Icons.pencil;
+                subtle: true;
+                clicked => {
+                    root.rename-selected();
+                }
+            }
+
+            FluentButton {
+                text: "复制";
+                glyph: Icons.copy;
+                subtle: true;
+                clicked => {
+                    root.copy-selected();
+                }
+            }
+
+            FluentButton {
+                text: "移动到上级";
+                glyph: Icons.folder;
+                subtle: true;
+                enabled: root.crumbs.length > 1;
+                clicked => {
+                    root.move-selected-up();
+                }
+            }
+
+            FluentButton {
+                text: "提取直链";
+                glyph: Icons.link;
+                subtle: true;
+                clicked => {
+                    root.link-selected();
+                }
+            }
+
+            FluentButton {
+                text: "删除";
+                glyph: Icons.trash;
+                danger: true;
+                subtle: true;
+                clicked => {
+                    root.delete-selected();
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        // ---------------- 搜索结果提示 ----------------
+        if root.searching: Rectangle {
+            height: 34px;
+            border-radius: Theme.radius-card;
+            background: Theme.accent-soft;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 6px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Icon {
+                    glyph: Icons.search;
+                    size: 14px;
+                    thickness: 1.7px;
+                    icon-color: Theme.accent;
+                }
+
+                Text {
+                    text: root.status-text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-small;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                FluentButton {
+                    text: "退出搜索";
+                    subtle: true;
+                    clicked => {
+                        root.search-cleared();
+                    }
+                }
+            }
+        }
+
+        if root.error-text != "": Rectangle {
+            height: 36px;
+            border-radius: Theme.radius-card;
+            background: Theme.danger-soft;
+            border-width: 1px;
+            border-color: Theme.danger;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+
+                Icon {
+                    glyph: Icons.warning;
+                    size: 15px;
+                    thickness: 1.7px;
+                    icon-color: Theme.danger;
+                }
+
+                Text {
+                    text: root.error-text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-small;
+                    color: Theme.text-primary;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+            }
+        }
+
+        // ---------------- 文件列表 ----------------
+        list-area := FocusScope {
+            vertical-stretch: 1;
+            horizontal-stretch: 1;
+
+            init => {
+                self.focus();
+            }
+
+            KeyBinding {
+                keys: @keys(F2);
+                activated => {
+                    if (root.has-selection) {
+                        root.rename-selected();
+                    }
+                }
+            }
+            KeyBinding {
+                keys: @keys(Delete);
+                activated => {
+                    if (root.has-selection) {
+                        root.delete-selected();
+                    }
+                }
+            }
+            KeyBinding {
+                keys: @keys(F5);
+                activated => {
+                    root.refresh();
+                }
+            }
+            KeyBinding {
+                keys: @keys(Alt+LeftArrow);
+                activated => {
+                    root.navigate-up();
+                }
+            }
+            KeyBinding {
+                keys: @keys(Control+A);
+                activated => {
+                    root.select-all = true;
+                }
+            }
+            KeyBinding {
+                keys: @keys(Control+F);
+                activated => {
+                    search.focus-input();
+                }
+            }
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                border-radius: Theme.radius-card;
+                background: Theme.card-bg;
+                border-width: 1px;
+                border-color: Theme.stroke;
+
+                VerticalLayout {
+                    // 表头
+                    Rectangle {
+                        height: 32px;
+                        background: Theme.layer-bg;
+                        border-radius: Theme.radius-card;
+                        border-width: 1px;
+                        border-color: Theme.divider;
+
+                        HorizontalLayout {
+                            padding-left: FileColumns.pad-left;
+                            padding-right: FileColumns.pad-right;
+                            spacing: FileColumns.gap;
+                            cross-axis-alignment: center;
+
+                            Rectangle {
+                                width: FileColumns.icon;
+                            }
+
+                            Text {
+                                text: "名称";
+                                horizontal-stretch: 1;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                                vertical-alignment: center;
+                            }
+
+                            if !root.compact: Text {
+                                width: FileColumns.size;
+                                text: "大小";
+                                horizontal-alignment: right;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                                vertical-alignment: center;
+                            }
+
+                            if !root.compact: Text {
+                                width: FileColumns.time;
+                                text: "修改时间";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                                vertical-alignment: center;
+                            }
+
+                            if !root.compact: Text {
+                                width: FileColumns.kind;
+                                text: "类型";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+
+                    // 列表主体
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: transparent;
+
+                        ListView {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+
+                            for row in root.rows : FileRow {
+                                entry: row;
+                                selected: root.select-all || row.id == root.selected-id;
+                                renaming: row.id == root.renaming-id;
+                                compact: root.compact;
+                                is-drop-target: row.is_dir && !root.searching;
+                                drag-data: root.make-drag-data(row.id, row.name, row.is_dir);
+
+                                item-clicked => {
+                                    list-area.focus();
+                                    root.select-item(row.id);
+                                }
+                                item-double-clicked => {
+                                    root.open-item(row.id, row.name, row.is_dir);
+                                }
+                                context-requested(id, name, is-dir, x, y) => {
+                                    list-area.focus();
+                                    root.context-requested(id, name, is-dir, x, y);
+                                }
+                                rename-submitted(name) => {
+                                    root.rename-submitted(row.id, name);
+                                }
+                                drop-can-accept(event, folder-id) => {
+                                    root.drop-can-accept(event, folder-id);
+                                }
+                                drop-requested(event, folder-id) => {
+                                    root.drop-requested(event, folder-id);
+                                }
+                            }
+                        }
+
+                        if root.rows.length == 0: Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            background: Theme.card-bg;
+
+                            FluentEmptyState {
+                                glyph: root.searching ? Icons.search : root.loading ? Icons.refresh : Icons.folder;
+                                title: root.loading ? "正在加载…"
+                                    : root.searching ? "没有找到匹配的文件"
+                                    : "这里还没有文件";
+                                description: root.loading ? "正在从云端读取目录内容"
+                                    : root.searching ? "换个关键词，或退出搜索回到当前目录"
+                                    : "把文件拖到这里即可上传，或点击右上角“上传”";
+                                action-text: root.searching ? "退出搜索" : "";
+                                action => {
+                                    root.search-cleared();
+                                }
+                            }
+                        }
+
+                        if root.loading && root.rows.length > 0: Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: 2px;
+                            background: Theme.accent;
+                        }
+                    }
+                }
+            }
+            // 拖入上传遮罩
+            DropOverlay {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                active: root.drop-active;
+                target-name: root.drop-target-name;
+            }
+        }
+
+        // ---------------- 状态栏 ----------------
+        HorizontalLayout {
+            height: 28px;
+            spacing: 12px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: root.status-text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            task-chip := Rectangle {
+                height: 24px;
+                border-radius: 12px;
+                background: chip-ta.has-hover ? Theme.control-bg-hover : Theme.control-bg;
+                border-width: 1px;
+                border-color: Theme.stroke;
+
+                HorizontalLayout {
+                    padding-left: 8px;
+                    padding-right: 10px;
+                    spacing: 6px;
+                    cross-axis-alignment: center;
+
+                    Icon {
+                        glyph: Icons.transfer;
+                        size: 13px;
+                        thickness: 1.7px;
+                        icon-color: root.active-transfers > 0 ? Theme.accent : Theme.text-tertiary;
+                    }
+
+                    Text {
+                        text: root.active-transfers > 0 ? ("传输中 " + root.active-transfers) : "传输任务";
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-caption;
+                        color: root.active-transfers > 0 ? Theme.accent : Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                chip-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.toggle-transfers();
+                    }
+                }
+            }
+
+            if root.capacity-text != "": Text {
+                text: root.capacity-text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

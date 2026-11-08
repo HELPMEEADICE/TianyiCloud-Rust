@@ -1,0 +1,193 @@
+// 下载直链页
+//
+// 说明：当前客户端只实现了“解析文件下载直链”（getDownloadUrl）这一能力，
+// 并未实现分享链接的创建/管理接口，因此页面标题、导航项与文案都按真实能力命名，
+// 不使用“分享链接”这类与实际能力不符的名称。
+
+import { ListView } from "std-widgets.slint";
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "../components/button.slint";
+import { FluentIconButton } from "../components/icon-button.slint";
+import { FluentEmptyState } from "../components/empty-state.slint";
+
+export struct DirectLink {
+    name: string,
+    url: string,
+}
+
+export component LinksPage inherits Rectangle {
+    in property <[DirectLink]> links: [];
+    in property <string> status-text: "";
+
+    callback copy-link(string);
+    callback go-personal();
+    callback clear-links();
+
+    background: Theme.window-bg;
+
+    VerticalLayout {
+        padding-left: 16px;
+        padding-right: 16px;
+        padding-top: 12px;
+        padding-bottom: 8px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            height: Theme.header-height;
+            spacing: 10px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: "下载直链";
+                font-family: Theme.font-family;
+                font-size: Theme.font-subtitle;
+                font-weight: 600;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+
+            Text {
+                text: "从云盘文件解析出的下载直链，可复制到浏览器或下载工具使用";
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            FluentButton {
+                text: "清理列表";
+                subtle: true;
+                enabled: root.links.length > 0;
+                clicked => {
+                    root.clear-links();
+                }
+            }
+
+            FluentButton {
+                text: "返回云盘";
+                glyph: Icons.back;
+                subtle: true;
+                clicked => {
+                    root.go-personal();
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: Theme.radius-card;
+            background: Theme.card-bg;
+            border-width: 1px;
+            border-color: Theme.stroke;
+
+            Rectangle {
+                x: 0;
+                y: 0;
+                width: parent.width;
+                height: parent.height;
+                background: transparent;
+
+                ListView {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+
+                    for item in root.links : Rectangle {
+                        height: 54px;
+                        background: link-ta.has-hover ? Theme.control-bg-hover : transparent;
+
+                        link-ta := TouchArea {
+                            mouse-cursor: pointer;
+
+                            double-clicked => {
+                                root.copy-link(item.url);
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 8px;
+                                spacing: 10px;
+                                cross-axis-alignment: center;
+
+                                Icon {
+                                    glyph: Icons.link;
+                                    size: 16px;
+                                    thickness: 1.7px;
+                                    icon-color: Theme.accent;
+                                }
+
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    spacing: 2px;
+                                    alignment: center;
+
+                                    Text {
+                                        text: item.name;
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-body;
+                                        font-weight: 600;
+                                        color: Theme.text-primary;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: item.url;
+                                        font-family: Theme.mono-font-family;
+                                        font-size: Theme.font-caption;
+                                        color: Theme.text-tertiary;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                FluentIconButton {
+                                    glyph: Icons.copy;
+                                    tooltip: "复制直链";
+                                    clicked => {
+                                        root.copy-link(item.url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if root.links.length == 0: Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    background: Theme.card-bg;
+
+                    FluentEmptyState {
+                        glyph: Icons.link;
+                        title: "还没有提取过直链";
+                        description: "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果";
+                        action-text: "去个人云";
+                        action => {
+                            root.go-personal();
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            height: 24px;
+            cross-axis-alignment: center;
+
+            Text {
+                text: root.status-text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-caption;
+                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+        }
+    }
+}

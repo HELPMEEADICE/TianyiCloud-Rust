@@ -375,6 +375,88 @@ pub fn format_speed(bytes_per_sec: u64) -> String {
     format!("{}/s", format_size(bytes_per_sec))
 }
 
+/// 格式化剩余时间（ETA）
+///
+/// 速度为 0 或已无剩余字节时返回占位符 `—`（避免出现 “剩余 0 秒” 或除零）。
+/// - `< 60s`  → `剩余 42 秒`
+/// - `< 3600s` → `剩余 3 分 20 秒`
+/// - 其余      → `剩余 1 时 05 分`
+pub fn format_eta(remaining_bytes: u64, bytes_per_sec: u64) -> String {
+    if bytes_per_sec == 0 || remaining_bytes == 0 {
+        return "—".to_string();
+    }
+    // 向上取整：还剩 1 字节但限速 1 B/s 时也应显示 1 秒而不是 0 秒
+    let secs = remaining_bytes.div_ceil(bytes_per_sec);
+    if secs < 60 {
+        format!("剩余 {secs} 秒")
+    } else if secs < 3600 {
+        format!("剩余 {} 分 {} 秒", secs / 60, secs % 60)
+    } else {
+        format!("剩余 {} 时 {:02} 分", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// 解析 `YYYY-MM-DD` 形式的日期前缀，返回 (年, 月, 日)
+fn parse_date_prefix(s: &str) -> Option<(&str, &str, &str)> {
+    let b = s.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let (y, m, d) = (&s[0..4], &s[5..7], &s[8..10]);
+    if y.bytes().all(|c| c.is_ascii_digit())
+        && m.bytes().all(|c| c.is_ascii_digit())
+        && d.bytes().all(|c| c.is_ascii_digit())
+    {
+        Some((y, m, d))
+    } else {
+        None
+    }
+}
+
+/// 格式化接口返回的时间字符串
+///
+/// 天翼云返回的时间格式为 `2024-05-06 12:03:44` / `2024-05-06T12:03:44` / `2024-05-06`，
+/// 统一显示为 `2024/05/06 12:03`（只保留到分钟）或 `2024/05/06`。
+/// 空串或无法解析时原样返回，绝不丢字段。
+pub fn format_datetime(raw: &str) -> String {
+    let s = raw.trim();
+    // 只有 ASCII 才走字节切片，避免在非 ASCII 边界上 panic
+    if s.is_empty() || !s.is_ascii() {
+        return raw.to_string();
+    }
+    let Some((y, m, d)) = parse_date_prefix(s) else {
+        return raw.to_string();
+    };
+    let date = format!("{y}/{m}/{d}");
+    if s.len() == 10 {
+        return date;
+    }
+    let sep = s.as_bytes()[10];
+    if sep != b' ' && sep != b'T' {
+        return raw.to_string();
+    }
+    let time = &s[11..];
+    if time.len() < 5 || time.as_bytes()[2] != b':' {
+        return raw.to_string();
+    }
+    let (hh, mm) = (&time[0..2], &time[3..5]);
+    if !hh.bytes().all(|c| c.is_ascii_digit()) || !mm.bytes().all(|c| c.is_ascii_digit()) {
+        return raw.to_string();
+    }
+    format!("{date} {hh}:{mm}")
+}
+
+/// 计算百分比并限制在 `0.0..=100.0`
+///
+/// `total == 0`（大小未知或空文件）时返回 0.0。
+pub fn percent(done: u64, total: u64) -> f32 {
+    if total == 0 {
+        return 0.0;
+    }
+    let p = (done as f64) / (total as f64) * 100.0;
+    p.clamp(0.0, 100.0) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,6 +478,73 @@ mod tests {
         assert_eq!(format_size(1024), "1.00 KB");
         assert_eq!(format_size(1024 * 1024), "1.00 MB");
         assert_eq!(format_size(500), "500 B");
+    }
+
+    #[test]
+    fn test_format_eta() {
+        // 速率为 0 或已经传完：占位符
+        assert_eq!(format_eta(0, 0), "—");
+        assert_eq!(format_eta(1000, 0), "—");
+        assert_eq!(format_eta(0, 100), "—");
+        // < 60 秒
+        assert_eq!(format_eta(1, 1), "剩余 1 秒");
+        assert_eq!(format_eta(42, 1), "剩余 42 秒");
+        assert_eq!(format_eta(59_000, 1000), "剩余 59 秒");
+        // 向上取整，不会把 60.1 秒显示成 60 秒
+        assert_eq!(format_eta(600, 10), "剩余 1 分 0 秒");
+        assert_eq!(format_eta(605, 10), "剩余 1 分 1 秒");
+        // < 3600 秒
+        assert_eq!(format_eta(200, 1), "剩余 3 分 20 秒");
+        assert_eq!(format_eta(3599, 1), "剩余 59 分 59 秒");
+        // >= 3600 秒
+        assert_eq!(format_eta(3600, 1), "剩余 1 时 00 分");
+        assert_eq!(format_eta(3900, 1), "剩余 1 时 05 分");
+        assert_eq!(format_eta(86_400, 1), "剩余 24 时 00 分");
+        // 巨大值不溢出、不 panic
+        assert!(format_eta(u64::MAX, 1).starts_with("剩余 "));
+        assert!(format_eta(u64::MAX, 1024).ends_with(" 分"));
+    }
+
+    #[test]
+    fn test_format_datetime() {
+        assert_eq!(format_datetime("2024-05-06 12:03:44"), "2024/05/06 12:03");
+        assert_eq!(format_datetime("2024-05-06T12:03:44"), "2024/05/06 12:03");
+        assert_eq!(format_datetime("2024-05-06 12:03"), "2024/05/06 12:03");
+        assert_eq!(format_datetime("2024-05-06"), "2024/05/06");
+        // 空串 / 无法解析：原样返回
+        assert_eq!(format_datetime(""), "");
+        assert_eq!(format_datetime("abc"), "abc");
+        assert_eq!(format_datetime("2024-05-06 12"), "2024-05-06 12");
+        assert_eq!(format_datetime("2024/05/06"), "2024/05/06");
+        assert_eq!(format_datetime("2024-05-06 1x:03"), "2024-05-06 1x:03");
+        assert_eq!(
+            format_datetime("2024-05-06x12:03:44"),
+            "2024-05-06x12:03:44"
+        );
+        // 非 ASCII 不能 panic
+        assert_eq!(format_datetime("2024-05-06 中文"), "2024-05-06 中文");
+    }
+
+    #[test]
+    fn test_percent() {
+        assert_eq!(percent(0, 0), 0.0);
+        assert_eq!(percent(123, 0), 0.0);
+        assert_eq!(percent(0, 100), 0.0);
+        assert_eq!(percent(1, 100), 1.0);
+        assert_eq!(percent(50, 100), 50.0);
+        assert_eq!(percent(100, 100), 100.0);
+        // 超出范围时被裁剪
+        assert_eq!(percent(150, 100), 100.0);
+        assert_eq!(percent(u64::MAX, u64::MAX), 100.0);
+        assert!(percent(1, u64::MAX) < 0.001);
+        // 单调且有界
+        let mut last = 0.0f32;
+        for done in [0u64, 1, 250, 999, 1000, 1001] {
+            let p = percent(done, 1000);
+            assert!((0.0..=100.0).contains(&p));
+            assert!(p >= last);
+            last = p;
+        }
     }
 
     #[test]
