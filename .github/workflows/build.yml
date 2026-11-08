@@ -1,0 +1,239 @@
+name: Build
+
+# 触发方式：
+#   * release published —— 构建 6 个目标，自动把产物附加到该 Release
+#   * workflow_dispatch —— 手动构建，产物以「独立 artifact」形式上架，
+#                          每个文件单独下载（Actions 页面 / run 页面底部）
+#
+# 构建期会把 packaging/ci/apply-ci-profile.py 注入的激进 release profile
+# 写进工作区 Cargo.toml（opt-level=z / fat LTO / panic=abort / strip ...），
+# 仓库里提交的 Cargo.toml 保持不变，因此本地构建不受影响。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "可选：覆盖产物版本号（默认取 Cargo.toml 的 workspace 版本；release 触发时取 tag）"
+        required: false
+        default: ""
+        type: string
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # 上传 Release 素材需要
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------ 版本号
+  meta:
+    name: 解析版本号
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      msi_version: ${{ steps.meta.outputs.msi_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          raw="${RELEASE_TAG:-}"
+          if [ "$EVENT_NAME" != "release" ] || [ -z "$raw" ]; then
+            raw="${INPUT_VERSION:-}"
+          fi
+          if [ -z "$raw" ]; then
+            raw=$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f && $1=="version"{gsub(/[",]/,"",$3);print $3;exit}' Cargo.toml)
+          fi
+
+          version="${raw#v}"
+          version="${version#V}"
+          case "$version" in
+            [0-9]*) ;;
+            *)
+              echo "无法解析版本号: '$raw'" >&2
+              exit 1
+              ;;
+          esac
+
+          # MSI 的 ProductVersion 只接受纯数字的 x.y.z
+          numeric=$(printf '%s' "$version" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')
+          IFS='.' read -r major minor patch _rest <<< "$numeric" || true
+          major=${major:-0}
+          minor=${minor:-0}
+          patch=${patch:-0}
+          patch=${patch%%[!0-9]*}
+          msi_version="${major}.${minor}.${patch:-0}"
+
+          {
+            echo "version=$version"
+            echo "msi_version=$msi_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "版本号: $version (MSI: $msi_version)"
+
+  # -------------------------------------------------------------------- 构建
+  build:
+    name: 构建 ${{ matrix.name }}
+    needs: meta
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x86-64：zip + msi
+          - os: windows-2022
+            name: windows-x64
+            package: windows
+            target: x86_64-pc-windows-msvc
+            wix_arch: x64
+          # Windows arm64：zip + msi（windows-11-arm 仅对公开仓库开放）
+          - os: windows-11-arm
+            name: windows-arm64
+            package: windows
+            target: aarch64-pc-windows-msvc
+            wix_arch: arm64
+          # macOS x86-64：dmg（在 arm64 runner 上交叉编译）
+          - os: macos-latest
+            name: macos-x64
+            package: macos
+            target: x86_64-apple-darwin
+          # macOS arm64：dmg
+          - os: macos-latest
+            name: macos-arm64
+            package: macos
+            target: aarch64-apple-darwin
+          # Linux x86-64：AppImage（22.04 = glibc 2.35，兼容性更好）
+          - os: ubuntu-22.04
+            name: linux-x64
+            package: linux
+            target: x86_64-unknown-linux-gnu
+            appimage_arch: x86_64
+          # Linux arm64：AppImage
+          - os: ubuntu-22.04-arm
+            name: linux-arm64
+            package: linux
+            target: aarch64-unknown-linux-gnu
+            appimage_arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux GUI 依赖
+        if: matrix.package == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            patchelf file curl
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.target }}
+
+      - name: 注入 CI 专用 release profile（Linux / macOS）
+        if: runner.os != 'Windows'
+        run: python3 packaging/ci/apply-ci-profile.py
+
+      - name: 注入 CI 专用 release profile（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python packaging/ci/apply-ci-profile.py
+
+      - name: 编译（release + opt-level=z + fat LTO）
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.package == 'macos' && '11.0' || '' }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: 打包 zip + msi（Windows）
+        if: matrix.package == 'windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/package.ps1 `
+            -Version '${{ needs.meta.outputs.version }}' `
+            -MsiVersion '${{ needs.meta.outputs.msi_version }}' `
+            -Target '${{ matrix.target }}' `
+            -WixArch '${{ matrix.wix_arch }}' `
+            -ArchName '${{ matrix.name }}' `
+            -OutDir 'dist'
+
+      - name: 打包 dmg（macOS）
+        if: matrix.package == 'macos'
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          BUILD_VERSION: ${{ needs.meta.outputs.msi_version }}
+        run: bash packaging/macos/package.sh "$VERSION" "${{ matrix.target }}" "${{ matrix.name }}" "dist"
+
+      - name: 打包 AppImage（Linux）
+        if: matrix.package == 'linux'
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: bash packaging/linux/package.sh "$VERSION" "${{ matrix.target }}" "${{ matrix.name }}" "${{ matrix.appimage_arch }}" "dist"
+
+      # ---------------- 独立 artifact：每个文件单独一条，均可单独下载 ----------------
+      - name: 上传 ZIP
+        if: matrix.package == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-zip
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 上传 MSI
+        if: matrix.package == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-msi
+          path: dist/*.msi
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 上传 DMG
+        if: matrix.package == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-dmg
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: 上传 AppImage
+        if: matrix.package == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      # ---------------- release 触发：自动附加到 Release ----------------
+      - name: 附加到 Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: dist/*
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

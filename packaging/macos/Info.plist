@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    macOS .app 模板：packaging/macos/package.sh 会把 __VERSION__ / __BUILD_VERSION__
+    替换成实际版本号后写进 TianyiCloud.app/Contents/Info.plist。
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>TianyiCloud</string>
+    <key>CFBundleDisplayName</key>
+    <string>天翼云盘</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.tianyicloud.rust</string>
+    <key>CFBundleExecutable</key>
+    <string>tianyi-app</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__BUILD_VERSION__</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>zh_CN</string>
+        <string>en</string>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>GPL-3.0</string>
+</dict>
+</plist>

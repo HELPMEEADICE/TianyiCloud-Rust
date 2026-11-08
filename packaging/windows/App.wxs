@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    WiX v5 安装包定义（dotnet tool: wix）。
+    由 packaging/windows/package.ps1 调用，例如：
+
+        wix build -arch x64 ^
+            -d ProductVersion=0.1.0 ^
+            -d ExePath=target\x86_64-pc-windows-msvc\release\tianyi-app.exe ^
+            -d LicensePath=LICENSE ^
+            -d IconPath=target\package-icons\icon.ico ^
+            -o dist\TianyiCloud-0.1.0-windows-x64.msi packaging\windows\App.wxs
+
+    说明：这里的字符串刻意只用 ASCII，避免不同语言/代码页下 MSI 数据库编码差异。
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="TianyiCloud"
+           Manufacturer="TianyiCloud"
+           Version="$(var.ProductVersion)"
+           UpgradeCode="8f3c1a6e-2b4d-4e77-9a51-6c0d5e7b1234"
+           Language="2052"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of TianyiCloud is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="AppIcon" SourceFile="$(var.IconPath)" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/HELPMEEADICE/TianyiCloud-Rust" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="TianyiCloud" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="TianyiCloud" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <ComponentGroup Id="AppComponents">
+      <Component Id="MainExecutable" Directory="INSTALLFOLDER" Guid="1d4f2a9c-7b31-4c55-8e2a-9d3c6b1f0001">
+        <File Id="TianyiAppExe" Source="$(var.ExePath)" KeyPath="yes" />
+      </Component>
+
+      <Component Id="LicenseFile" Directory="INSTALLFOLDER" Guid="1d4f2a9c-7b31-4c55-8e2a-9d3c6b1f0002">
+        <File Id="LicenseTxt" Source="$(var.LicensePath)" />
+      </Component>
+
+      <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="1d4f2a9c-7b31-4c55-8e2a-9d3c6b1f0003">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="TianyiCloud"
+                  Description="TianyiCloud desktop client"
+                  Target="[INSTALLFOLDER]tianyi-app.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\TianyiCloud" Name="StartMenuShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+
+      <Component Id="DesktopShortcut" Directory="DesktopFolder" Guid="1d4f2a9c-7b31-4c55-8e2a-9d3c6b1f0004">
+        <Shortcut Id="DesktopShortcut"
+                  Name="TianyiCloud"
+                  Description="TianyiCloud desktop client"
+                  Target="[INSTALLFOLDER]tianyi-app.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue Root="HKCU" Key="Software\TianyiCloud" Name="DesktopShortcut"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="MainFeature" Title="TianyiCloud" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+    </Feature>
+  </Package>
+</Wix>

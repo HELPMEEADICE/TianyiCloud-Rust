@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=TianyiCloud
+Name[zh_CN]=天翼云盘
+GenericName=Cloud Drive Client
+GenericName[zh_CN]=云盘客户端
+Comment=TianyiCloud desktop client
+Comment[zh_CN]=天翼云盘第三方桌面客户端
+# Exec 必须与 AppDir/usr/bin 下的可执行文件名一致，appimagetool 会校验
+Exec=tianyi-app
+Icon=tianyi-cloud
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=cloud;drive;tianyi;189;
+StartupNotify=true
+StartupWMClass=tianyi-app

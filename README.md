@@ -76,6 +76,24 @@ cargo build --release
 
 开发模式：`cargo run -p tianyi-app`
 
+## CI / 发布流水线
+
+| 工作流 | 触发 | 内容 |
+|---|---|---|
+| `ci.yml` | push 到 `main`、PR、手动 | `cargo fmt --check`、`cargo clippy -D warnings`、三平台 `cargo check`、`cargo test` |
+| `build.yml` | 发布 Release、手动触发 | 三平台 × 双架构打包，产物见下表 |
+
+| 平台 | 目标三元组 | 产物 |
+|---|---|---|
+| Windows x86-64 / arm64 | `x86_64-pc-windows-msvc` / `aarch64-pc-windows-msvc` | `.zip`（便携版）、`.msi`（安装包） |
+| macOS x86-64 / arm64 | `x86_64-apple-darwin` / `aarch64-apple-darwin` | `.dmg` |
+| Linux x86-64 / arm64 | `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu` | `.AppImage` |
+
+- 手动触发（Actions → Build → Run workflow）时，每个产物都是独立 artifact，可单独下载；也可填写 `version` 覆盖版本号。
+- 发布 Release 时，产物会自动附加到该 Release 的 assets。
+- 构建期由 `packaging/ci/apply-ci-profile.py` 把体积优先的 release profile（`opt-level="z"` + `lto="fat"` + `codegen-units=1` + `panic="abort"` + `strip="debuginfo"`）写进工作区 `Cargo.toml`；仓库里提交的 `Cargo.toml` 保持原样，本地构建仍是 `opt-level = 2`。
+- arm64 构建使用 GitHub 官方 arm64 hosted runner（`windows-11-arm` / `ubuntu-22.04-arm`），这两个 label 只对公开仓库开放。
+
 ## 配置与数据存储
 
 应用数据保存在系统配置目录下的 `tianyi-cloud-rust/`：
