@@ -505,6 +505,9 @@ export component CloudPage inherits Rectangle {
                     if root.refreshing: FluentProgressBar {
                         indeterminate: true;
                         bar-height: 2px;
+                        // 这条只是"正在刷新"的细指示，不需要轨道底色：轨道会在这里
+                        // 画出一条与卡片等宽的浅灰线，看起来像一条多余的分隔线。
+                        track-color: transparent;
                     }
 
                     // 表头

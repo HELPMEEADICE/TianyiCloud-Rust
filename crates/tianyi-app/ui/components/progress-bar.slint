@@ -8,11 +8,14 @@ export component FluentProgressBar inherits Rectangle {
     in property <float> value: 0.0;
     in property <bool> indeterminate: false;
     in property <color> bar-color: Theme.accent;
+    /// 轨道色（未填充部分）。默认取设计令牌；只作为"细进度指示"使用时
+    /// 可以传 transparent 去掉轨道，避免在容器顶部留下一条多余的分隔线。
+    in property <color> track-color: Theme.progress-track;
     in property <length> bar-height: 4px;
 
     height: root.bar-height;
     border-radius: root.bar-height / 2;
-    background: Theme.dark ? #3A3A3A : #E6E6E6;
+    background: root.track-color;
     clip: true;
 
     private property <float> phase:
