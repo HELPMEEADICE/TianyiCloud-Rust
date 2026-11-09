@@ -21,6 +21,10 @@ export component FluentNavItem inherits Rectangle {
 
     callback clicked();
 
+    // 徽章尺寸：固定三档，避免尺寸随内容抖动（与 WinUI InfoBadge 一致）
+    property <int> badge-tier: root.badge > 99 ? 3 : root.badge > 9 ? 2 : 1;
+    property <length> badge-w: root.badge-tier == 3 ? 34px : root.badge-tier == 2 ? 26px : 18px;
+
     height: Theme.nav-item-height;
     border-radius: Theme.radius-control;
     opacity: root.enabled ? 1.0 : 0.4;
@@ -65,7 +69,7 @@ export component FluentNavItem inherits Rectangle {
     if !root.compact: Text {
         x: 41px;
         y: 0;
-        width: root.width - 41px - (root.badge > 0 ? 40px : 12px);
+        width: root.width - 41px - (root.badge > 0 ? root.badge-w + 20px : 12px);
         height: root.height;
         text: root.label;
         font-family: Theme.font-family;
@@ -76,16 +80,18 @@ export component FluentNavItem inherits Rectangle {
         overflow: elide;
     }
 
-    // 徽章
+    // 徽章：宽度显式给定，位置由自身宽度反推，永远在导航项内部
     if !root.compact && root.badge > 0: Rectangle {
-        x: root.width - 34px;
+        x: root.width - self.width - 12px;
         y: (root.height - 18px) / 2;
-        min-width: 18px;
+        width: root.badge-w;
         height: 18px;
         border-radius: 9px;
         background: root.selected ? Theme.accent : Theme.control-bg-pressed;
 
         Text {
+            width: parent.width;
+            height: parent.height;
             text: root.badge > 99 ? "99+" : root.badge;
             font-family: Theme.font-family;
             font-size: Theme.font-caption;
@@ -98,8 +104,8 @@ export component FluentNavItem inherits Rectangle {
 
     // 折叠态的“有任务”小圆点
     if root.compact && root.badge > 0: Rectangle {
-        x: root.width - 14px;
-        y: 5px;
+        x: root.width - 16px;
+        y: 7px;
         width: 6px;
         height: 6px;
         border-radius: 3px;
