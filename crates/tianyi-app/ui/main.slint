@@ -1131,6 +1131,22 @@ export component MainWindow inherits Window {
                 }
             }
         }
+
+        // Esc 关闭：覆盖式浮层原来只有"点别处"一条退出通道，键盘用户会卡在菜单里。
+        // 这里只补 Esc——↑↓/Enter 导航需要可见的高亮态与焦点环，属于后续可访问性
+        // 任务，不在本次改动里顺手改视觉。
+        FocusScope {
+            init => {
+                self.focus();
+            }
+
+            KeyBinding {
+                keys: @keys(Escape);
+                activated => {
+                    root.context-open = false;
+                }
+            }
+        }
     }
 
     // ==================== 顶层：轻量 Tooltip 浮层 ====================
