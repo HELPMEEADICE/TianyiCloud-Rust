@@ -14,6 +14,7 @@ import { Theme } from "../theme/tokens.slint";
 import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
+import { FluentProgressBar } from "../components/progress-bar.slint";
 import { FluentSearchBox } from "../components/search-box.slint";
 import { FileRow, FileColumns } from "../components/file-row.slint";
 import { FluentEmptyState, FluentLoadingState, FluentErrorState } from "../components/state-view.slint";
@@ -499,17 +500,11 @@ export component CloudPage inherits Rectangle {
                     spacing: 0px;
 
                     // 刷新指示：只占 2px，不清空列表（非侵入式加载反馈）
-                    if root.refreshing: Rectangle {
-                        height: 2px;
-                        background: transparent;
-
-                        Rectangle {
-                            x: 0;
-                            y: 0;
-                            width: parent.width * min(1.0, 1 * mod(animation-tick(), 1200ms) / 1200ms);
-                            height: 2px;
-                            background: Theme.accent;
-                        }
+                    // 用不确定态进度条而不是"宽度线性增长后归零"的矩形：后者是锯齿式拉扯，
+                    // 读不出"正在加载"，而 FluentProgressBar 自带滑块循环且尊重 reduce-motion
+                    if root.refreshing: FluentProgressBar {
+                        indeterminate: true;
+                        bar-height: 2px;
                     }
 
                     // 表头
@@ -641,7 +636,7 @@ export component CloudPage inherits Rectangle {
                                 }
                             }
 
-                            if root.detail-level >= 3: Text {
+                            if root.detail-level >= 3: kind-header := Text {
                                 width: FileColumns.kind;
                                 text: "类型";
                                 font-family: Theme.font-family;
