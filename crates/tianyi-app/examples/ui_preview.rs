@@ -62,7 +62,6 @@ fn entry(id: &str, name: &str, size: i64, is_dir: bool, modified: &str, kind: &s
         size: size as i32,
         size_text: SharedString::from(size_text),
         is_dir,
-        thumb: SharedString::default(),
         modified: SharedString::from(modified),
         kind: SharedString::from(kind),
         kind_text: SharedString::from(kind_text),

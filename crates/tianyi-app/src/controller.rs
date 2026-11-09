@@ -2950,7 +2950,6 @@ fn files_to_entries(files: &[FileObject], selected: &HashSet<String>) -> Vec<Fil
                 }
                 .into(),
                 is_dir: f.is_dir,
-                thumb: f.thumb.clone().into(),
                 modified: file::format_datetime(&f.last_op_time).into(),
                 kind: kind.into(),
                 kind_text: kind_text.into(),

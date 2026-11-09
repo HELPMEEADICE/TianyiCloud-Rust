@@ -13,7 +13,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme/tokens.slint";
 import { Icon, IconName } from "theme/icons.slint";
-import { FileEntry, TransferEntry, CrumbEntry, TooltipState } from "types.slint";
+import { FileEntry, TransferEntry, CrumbEntry, TooltipState, LayoutMetrics } from "types.slint";
 import { FluentButton } from "components/button.slint";
 import { FluentIconButton } from "components/icon-button.slint";
 import { FluentNavItem } from "components/nav-item.slint";
@@ -180,11 +180,11 @@ export component MainWindow inherits Window {
     // ==================== 布局状态 ====================
     // 折叠断点：导航栏折叠后内容区仍有足够宽度显示文件名
     property <bool> nav-compact: root.width < 960px;
-    // 文件列表次要列分级，保证任何窗口宽度下列都对齐且不互相挤压
-    property <int> detail-level: root.width < 980px ? 0
-        : root.width < 1120px ? 1
-        : root.width < 1300px ? 2
-        : 3;
+    // 内容区可用宽度：整窗宽度减去左侧导航栏（折叠 56px / 展开 248px）
+    property <length> content-width: root.width - (root.nav-compact ? Theme.nav-width-compact : Theme.nav-width);
+    // 文件列表次要列分级：量的是内容区宽度，不是整窗宽度
+    // （整窗宽度里有一段属于导航栏，按它算会把默认 1180px 窗口误判成四列）
+    property <int> detail-level: LayoutMetrics.detail-level-of(root.content-width);
     property <bool> account-menu-open: false;
     // 右键菜单状态（由控制器写入，菜单面板按此定位）
     in-out property <bool> context-open: false;

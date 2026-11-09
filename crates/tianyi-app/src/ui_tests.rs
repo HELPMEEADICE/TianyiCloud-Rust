@@ -49,6 +49,7 @@ fn ui_geometry_regression() {
     check_task_chip(&mut failures);
     check_context_menu(&mut failures);
     check_empty_state_icon(&mut failures);
+    check_detail_level_columns(&mut failures);
     assert!(
         failures.is_empty(),
         "几何回归失败 {} 项：\n{}",
@@ -334,5 +335,90 @@ fn check_empty_state_icon(failures: &mut Vec<String>) {
                 "D {width}x{height}: 图标水平中心 {icon_center:.1} 偏离列表区中心 {area_center:.1}"
             )
         });
+    }
+}
+
+/// 导航栏宽度（`ui/main.slint` 的 `nav-compact` 断点与 `Theme.nav-width*` 令牌）
+const NAV_WIDTH: f32 = 248.0;
+/// 导航栏折叠后的宽度（窗口窄于 960px 时折叠）
+const NAV_WIDTH_COMPACT: f32 = 56.0;
+/// `ui/main.slint` 的折叠断点
+const NAV_COMPACT_BREAKPOINT: f32 = 960.0;
+/// DE-07 用的宽档：内容区宽度 1352px，四列全开
+const EXTRA_WIDE: (f32, f32) = (1600.0, 760.0);
+
+/// 内容区可用宽度 = 整窗宽度 − 导航栏宽度
+fn content_width(window_width: f32) -> f32 {
+    let nav = if window_width < NAV_COMPACT_BREAKPOINT {
+        NAV_WIDTH_COMPACT
+    } else {
+        NAV_WIDTH
+    };
+    window_width - nav
+}
+
+/// E. 次要列分级：断点必须量「内容区宽度」，不是整窗宽度。
+///
+/// 根因：`ui/main.slint` 曾用 `root.width < 980px ? 0 : …` 分档，而 `root.width` 是整窗
+/// 宽度 —— 默认 1180px 窗口的内容区只有 932px，却被判成 2 档（多出"修改时间"列）。
+/// 修法：断点改吃 `root.width - 导航栏宽度`。
+///
+/// 断言方式是"条件元素不存在就不在元素树里"：`if root.detail-level >= n` 分档渲染的三
+/// 个列头，在元素查询里找不到就说明该档没开。测试后端不能发键盘事件，但读元素树足够。
+fn check_detail_level_columns(failures: &mut Vec<String>) {
+    // (窗口宽, 高, 期望 size / time / kind 三列头是否在元素树里)
+    let cases: [(f32, f32, bool, bool, bool); 3] = [
+        (NARROW.0, NARROW.1, true, false, false),
+        (WIDE.0, WIDE.1, true, false, false),
+        (EXTRA_WIDE.0, EXTRA_WIDE.1, true, true, true),
+    ];
+
+    for (width, height, want_size, want_time, want_kind) in cases {
+        let ui = boot((width, height));
+        ui.set_logged_in(true);
+        settle();
+        let content = content_width(width);
+
+        // 前置条件：没有文件行时列表区仍在，列头也照常渲染（列表状态不影响档位）
+        for (id, want) in [
+            ("CloudPage::size-header", want_size),
+            ("CloudPage::time-header", want_time),
+            ("CloudPage::kind-header", want_kind),
+        ] {
+            let handle = ElementQuery::from_root(&ui).match_id(id).find_first();
+            match (&handle, want) {
+                (Some(element), true) => {
+                    let size = element.size();
+                    println!(
+                        "E {width}x{height} 内容区 {content:.0}: {id} 存在 {}x{}",
+                        size.width, size.height,
+                    );
+                    expect(failures, size.height > 0.0, || {
+                        format!("E {width}x{height} 内容区 {content:.0}: {id} 存在但高度为 0")
+                    });
+                }
+                (None, false) => {
+                    println!("E {width}x{height} 内容区 {content:.0}: {id} 不存在（期望）")
+                }
+                (Some(element), false) => {
+                    let size = element.size();
+                    expect(failures, false, || {
+                        format!(
+                            "E {width}x{height} 内容区 {content:.0}: {id} 不该出现（实测 {}x{}）\
+                             —— 分档还在用整窗宽度",
+                            size.width, size.height,
+                        )
+                    });
+                }
+                (None, true) => {
+                    expect(failures, false, || {
+                        format!(
+                            "E {width}x{height} 内容区 {content:.0}: {id} 缺失 \
+                             —— 分档把内容区宽度算小了"
+                        )
+                    });
+                }
+            }
+        }
     }
 }

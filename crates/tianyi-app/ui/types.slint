@@ -2,6 +2,23 @@
 //
 // 所有页面/组件都从这里导入结构体，避免 main.slint 成为全局状态集散地。
 
+/// 布局度量：把「宽度 → 布局档位」这类纯计算从组件里抽出来，便于单独断言
+export global LayoutMetrics {
+    /// 依据**内容区可用宽度**（整窗宽度 − 左侧导航栏宽度）决定文件列表显示几列
+    /// 次要信息：0=仅名称 1=+大小 2=+修改时间 3=+类型。
+    ///
+    /// 断点必须量内容区宽度：导航栏展开时占 248px（`Theme.nav-width`），
+    /// 用整窗宽度当基准会把默认 1180px 窗口（内容区只有 932px）判成四列。
+    /// 首个断点取 640px：最小窗口 900px（导航折叠，内容区 844px）仍显示"大小"列，
+    /// 却不显示"修改时间"列。
+    public pure function detail-level-of(content-width: length) -> int {
+        content-width < 640px ? 0
+            : content-width < 1120px ? 1
+            : content-width < 1300px ? 2
+            : 3
+    }
+}
+
 /// 文件列表项（个人云 / 家庭云 / 搜索结果共用）
 export struct FileEntry {
     id: string,
@@ -9,7 +26,6 @@ export struct FileEntry {
     size: int,
     size_text: string,
     is_dir: bool,
-    thumb: string,
     modified: string,
     /// 分类键：folder/image/video/audio/pdf/text/archive/office/other
     kind: string,
