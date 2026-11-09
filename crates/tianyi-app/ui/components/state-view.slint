@@ -50,7 +50,8 @@ component StateScaffold inherits Rectangle {
         padding-right: 24px;
 
         // ---- 图标 / 进度环 ----
-        Rectangle {
+        // id 供几何回归测试（ui_tests.rs）定位：只用于查询，不改变任何视觉属性。
+        icon-box := Rectangle {
             width: 64px;
             height: 64px;
             border-radius: 20px;

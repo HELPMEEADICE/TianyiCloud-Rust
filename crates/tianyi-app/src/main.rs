@@ -6,6 +6,9 @@ mod controller;
 #[cfg(windows)]
 mod dragout;
 
+#[cfg(test)]
+mod ui_tests;
+
 use app::MainWindow;
 use backend::Backend;
 use slint::{ComponentHandle, Timer, TimerMode};

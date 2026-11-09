@@ -39,6 +39,12 @@ windows = { version = "0.58", features = [
 ] }
 windows-core = "0.58"
 
+# 测试专用：Slint 官方的无窗口测试后端，只为 ui_tests.rs 的几何断言服务。
+# 必须与 slint 严格同版本（=1.17.1），且刻意不启用 renderer-skia：
+# 那条 feature 会拖入整个 skia，编译成本远超本测试的价值。
+[dev-dependencies]
+i-slint-backend-testing = "=1.17.1"
+
 [build-dependencies]
 slint-build = "1.17"
 

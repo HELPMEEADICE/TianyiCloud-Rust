@@ -4,6 +4,10 @@ fn main() {
     let config = || {
         slint_build::CompilerConfiguration::new()
             .embed_resources(slint_build::EmbedResourcesKind::EmbedFiles)
+            // 元素 id / 类型名表：src/ui_tests.rs 的几何断言靠它定位元素
+            // （i-slint-backend-testing 的 ElementQuery API 在缺这份数据时会静默
+            // 丢掉元素 id）。只在 dev/test 构建里生成，release 二进制不带这份调试数据。
+            .with_debug_info(cfg!(debug_assertions))
     };
     slint_build::compile_with_config("ui/main.slint", config()).expect("slint compile");
 
