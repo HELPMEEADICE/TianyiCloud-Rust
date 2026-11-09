@@ -3258,10 +3258,14 @@ type TransferSnapshot = (u64, TaskStatus, u64);
 /// 目录大小还在后台统计时 `file_size == 0`，百分比恒为 0；如果不换成字节数，这类
 /// 任务的进度就永远触发不了推送，UI 会卡在 0。
 fn progress_marker(t: &Task) -> u64 {
-    if t.file_size == 0 {
-        t.bytes_done
-    } else {
-        t.bytes_done.min(t.file_size) * 1000 / t.file_size
+    let done = t.bytes_done.min(t.file_size);
+    match done
+        .checked_mul(1000)
+        .and_then(|n| n.checked_div(t.file_size))
+    {
+        // 除数为 0（大小未知 / 空文件）：退化成已传字节，仍然能反映进度
+        None => t.bytes_done,
+        Some(permille) => permille,
     }
 }
 
