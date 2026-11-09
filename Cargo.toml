@@ -8,7 +8,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+# slint 1.17.1 自身声明 rust-version = 1.92（cargo metadata 实测的依赖下限），
+# 1.75 只是历史遗留的假设值，无法成立；CI 的 msrv 作业按此值校验。
+rust-version = "1.92"
 
 [profile.release]
 opt-level = 2
