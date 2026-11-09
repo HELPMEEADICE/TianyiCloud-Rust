@@ -47,8 +47,10 @@ export component LoginPage inherits Rectangle {
 
     ScrollView {
         // 卡片在竖直方向居中；内容超出窗口时整页滚动。
-        // cross-axis-alignment 必须显式设为 center：VerticalLayout 的交叉轴默认是
-        // Stretch/Start，只写 alignment 会让固定宽度的卡片被贴到左边。
+        //
+        // 注意：ScrollView 会把内容拉伸到视口宽度，因此横向居中只需要
+        // cross-axis-alignment: center（VerticalLayout 的交叉轴默认是 Stretch/Start，
+        // 只写 alignment 时固定宽度的卡片会贴在左边）。
         VerticalLayout {
             alignment: center;
             cross-axis-alignment: center;

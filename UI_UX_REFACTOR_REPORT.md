@@ -263,16 +263,19 @@ Slint 的 `TouchArea` 点击事件不带修饰键。用 winit `ModifiersChanged`
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通过（0 warning） |
 | `cargo fmt --all -- --check` | 通过 |
 | `cargo build -p tianyi-app` | 通过 |
+| 真机运行 | 启动真实窗口并保持运行 10s 无崩溃、无 panic，日志仅 `starting` |
+| 真机截图（150% DPI） | `screenshots/native/01-real-window-login-150dpi.png`（1770×1140 物理 = 1180×760 逻辑） |
 | 视觉回归 | `examples/ui_preview` 渲染 21 张场景图，逐张人工核对 + 关键场景像素级核验 |
 
 说明（不假装通过的部分）：
 
 * 本机 PATH 上的 `cargo`/`rustc` 来自 MSYS2，其自带 `cargo-clippy` / `rustfmt`；
   rustup 的 stable 工具链缺少 MSVC 链接器（`link.exe not found`），因此 clippy/fmt 使用
-  `C:\msys64\ucrt64\bin\cargo-clippy.exe` 与 `cargo-clippy` 同目录的 `rustfmt` 执行，与项目构建工具链一致。
-* 未能启动真实图形窗口对照截图（当前会话无桌面截图能力）。视觉验证改由 Slint 软件渲染器完成：
-  渲染的是 `ui/` 下的真实组件树与真实布局求解结果，不是静态示意图；差异仅在于不含系统标题栏与
-  原生窗口装饰。**未做真实窗口下的 125%/150%/200% DPI 切换测试**（见第 7 节）。
+  `C:\msys64\ucrt64\bin\cargo-clippy.exe` 与同目录的 `rustfmt` 执行，与项目构建工具链一致。
+* 真实图形窗口已实际启动并截图（见上）。抓图时必须先 `SetProcessDPIAware()` 并把位图尺寸设为
+  **物理客户区**尺寸，否则 Windows 会对 `GetWindowRect`/`CopyFromScreen` 做 DPI 虚拟化，
+  得到"内容被裁切/疑似错位"的假象——本报告早期就踩过这个坑，最终以物理尺寸 `PrintWindow` 为准。
+* 除登录页外，其余页面未在真机上逐页截图（需要真实账号登录）；它们由软件渲染器覆盖。
 
 新增回归测试（`crates/tianyi-app/src/controller.rs::tests`）：
 
@@ -287,9 +290,9 @@ Slint 的 `TouchArea` 点击事件不带修饰键。用 winit `ModifiersChanged`
 
 ## 7. 仍然存在的限制
 
-1. **DPI**：布局全部使用逻辑像素并由 Slint 负责缩放，本轮只验证了 900×620 / 1024×768 / 1180×760 /
-   1920×1080 等窗口尺寸；**未在真实系统上以 125%/150%/200% 缩放实际观察**。软件渲染器的
-   `MinimalSoftwareWindow` 固定 1.0 缩放因子，无法用它模拟 DPI。
+1. **DPI**：登录页已在**真实 150% DPI 窗口**上验证（卡片 648 物理 px = 432 逻辑 px，
+   物理客户区中心 885 / 卡片中心 896，未裁切）。其余页面只有软件渲染（1×）验证，
+   200% / 125% 以及非 Windows 平台未实测。
 2. **系统 Mica / Acrylic 未实现**：保留系统原生标题栏与纯色回退背景，未用半透明纯色冒充系统材质。
 3. **登录卡片在极端组合下需要滚动**（最小窗口 620 高 + 验证码 + 多个已保存账号 + 长错误文案），
    已提供整页滚动而不是裁切；未把登录按钮做成粘性页脚。
@@ -371,6 +374,25 @@ cargo run -p tianyi-app --example ui_preview -- <repo>/screenshots/before
 | 登录卡片 | 窄窗口贴左 | 水平垂直居中 + 整页滚动 |
 | 传输任务行 | 失败行也显示进度条 | 仅进行中/已暂停显示；状态徽章着色 |
 
+### 真实窗口截图 `screenshots/native/`
+
+| 文件 | 说明 |
+| --- | --- |
+| `01-real-window-login-150dpi.png` | 真实进程 + 原生标题栏，150% DPI，1770×1140 物理像素 |
+
+抓图脚本要点（PowerShell，可复现）：
+
+```powershell
+[PW]::SetProcessDPIAware()            # 关键：否则坐标被 DPI 虚拟化
+$cr = GetClientRect($h)               # 物理客户区 1770x1140
+$bmp = new Bitmap $cr.R, $cr.B
+PrintWindow($h, $hdc, 2)              # PW_RENDERFULLCONTENT
+```
+
+> 注意：`screenshots/after/06-cloud-loading.png`、`21-login-qr.png` 含 `animation-tick()` 驱动的
+> 加载动画，每次渲染相位不同，文件字节会有一两字节级差异，属预期。
+
+
 ---
 
 ## 附录：本轮确认的 Slint 布局与颜色语义（写入代码注释，避免再踩）
@@ -382,3 +404,13 @@ cargo run -p tianyi-app --example ui_preview -- <repo>/screenshots/before
 4. `Text` 的 `wrap: word-wrap` 需要显式宽度或 `max-width` 才生效；`overflow: elide` 的文本进布局会放大首选宽度。
 5. `ScrollView` 内容不得用 `Math.min(parent.width, …)` 反推宽度（绑定环），改用页面根宽度。
 6. 8 位颜色是 `#RRGGBBAA`；`Path` 不支持 `rotation-angle`；`TouchArea` 不提供点击时的修饰键。
+7. 真实窗口抓图必须先 `SetProcessDPIAware()` 并按**物理**客户区尺寸建位图，否则得到的是
+   DPI 虚拟化后的裁切图，会误导判断（本轮因此一度误判"登录卡片贴左"，做 A/B 后否定）。
+
+### 两个对照实验（记录在案，避免后人重复猜测）
+
+| 实验 | 结果 | 结论 |
+| --- | --- | --- |
+| 登录页去掉 `cross-axis-alignment: center` | 卡片中心 358（客户区中心 885） | 该属性是**必需**的，就是居中根因 |
+| 登录页加 `width: root.width`（怀疑 ScrollView 不撑满） | 卡片中心 896，与不加完全一致 | `ScrollView` 会把内容撑到视口宽度，该改动**不必要**，已回退 |
+
