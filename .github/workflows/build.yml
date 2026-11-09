@@ -189,13 +189,44 @@ jobs:
           VERSION: ${{ needs.meta.outputs.version }}
         run: bash packaging/linux/package.sh "$VERSION" "${{ matrix.target }}" "${{ matrix.name }}" "${{ matrix.appimage_arch }}" "dist"
 
+      # ---------------- 便携包（绿色版）：exe + LICENSE + README，免安装 ----------------
+      # 版本号复用 meta 作业的输出，不另建一套版本逻辑。
+      - name: 打包便携包 zip（Windows）
+        if: matrix.package == 'windows'
+        shell: pwsh
+        run: |
+          $version = '${{ needs.meta.outputs.version }}'
+          $stage = Join-Path $env:RUNNER_TEMP "portable-${{ matrix.name }}"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "target/${{ matrix.target }}/release/tianyi-app.exe" (Join-Path $stage 'tianyi-app.exe')
+          Copy-Item 'LICENSE' $stage
+          Copy-Item 'README.md' $stage
+
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          $zip = Join-Path 'dist' "tianyi-cloud-$version-${{ matrix.name }}-portable.zip"
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+          Write-Host "[portable] $zip"
+
+      - name: 上传便携包 ZIP
+        if: matrix.package == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tianyi-cloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-portable
+          path: dist/*-portable.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
       # ---------------- 独立 artifact：每个文件单独一条，均可单独下载 ----------------
       - name: 上传 ZIP
         if: matrix.package == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-zip
-          path: dist/*.zip
+          path: dist/TianyiCloud-*.zip
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
