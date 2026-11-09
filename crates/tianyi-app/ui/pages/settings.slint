@@ -5,8 +5,12 @@
 // 每个 SettingsRow 都是"左名称/说明 + 右控件"，行高、分隔线、间距只在
 // components/settings-section.slint 里定义一次。
 //
-// 只放真正生效的开关：主题、减少动画、下载目录、退出登录。
+// 只放真正生效的开关：主题、减少动画、默认下载目录、并发分片数、退出登录。
 // 每一项都直接调用控制器，不存在"点了没反应"的控件。
+//
+// 「并发分片数」的 −/+ 只是上报"用户点了一下"，钳制到 1..=8、写回 AppConfig、
+// 回填显示值全部在控制器里完成（`Controller::set_thread_counts`）：如果这里自己也
+// 钳制一遍，两边规则迟早会漂移，界面上就会出现"显示 9 但实际按 8 跑"的情况。
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
@@ -109,6 +113,63 @@ component PathRow inherits HorizontalLayout {
     }
 }
 
+// 并发分片数步进器：标签 + 「−」+ 数值 + 「+」
+//
+// 为什么用 FluentButton(subtle) 而不是自绘按钮：
+// * 高度沿用 Theme.control-height（32px），离 SettingsRow 的 48px 行高还有余量，
+//   因此设置行的高度与分隔线节奏完全不变；
+// * 悬停/按下/禁用/动画与页面其它按钮共用同一份实现，不新增任何颜色字面量；
+// * 边界用 `enabled` 表达，用户一眼能看到"到顶了"，而不是点了没反应。
+component ThreadStepper inherits HorizontalLayout {
+    in property <string> label: "";
+    /// 显示用的数字（控制器按 AppConfig 回填，字符串形态避免二次格式化）
+    in property <string> value: "";
+    /// 数值形态：只用于判断 −/+ 是否已经到达 1 / 8 边界
+    in property <int> count: 1;
+
+    /// 用户点了方向：-1 = 减一，+1 = 加一（越界钳制在控制器里做）
+    callback step(int);
+
+    spacing: Theme.space-1;
+    cross-axis-alignment: center;
+
+    Text {
+        text: root.label;
+        font-family: Theme.font-family;
+        font-size: Theme.font-small;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+
+    FluentButton {
+        text: "−";
+        subtle: true;
+        enabled: root.count > 1;
+        clicked => {
+            root.step(-1);
+        }
+    }
+
+    Text {
+        text: root.value;
+        min-width: 16px;
+        horizontal-alignment: center;
+        font-family: Theme.font-family;
+        font-size: Theme.font-small;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+    }
+
+    FluentButton {
+        text: "+";
+        subtle: true;
+        enabled: root.count < 8;
+        clicked => {
+            root.step(1);
+        }
+    }
+}
+
 export component SettingsPage inherits Rectangle {
     in property <string> account-name: "";
     /// 0 = 跟随系统，1 = 浅色，2 = 深色
@@ -117,12 +178,18 @@ export component SettingsPage inherits Rectangle {
     in property <string> download-dir: "";
     in property <string> upload-thread: "";
     in property <string> download-thread: "";
+    /// 并发分片数的数值形态：只用来决定 −/+ 的可用边界（1..=8），
+    /// 显示仍然取上面的字符串，避免同一数字被格式化两次
+    in property <int> upload-thread-count: 3;
+    in property <int> download-thread-count: 4;
     in property <string> version-text: "";
     in property <string> config-dir: "";
 
     callback theme-changed(int);
     callback reduce-motion-changed(bool);
     callback choose-download-dir();
+    /// (下载分片数, 上传分片数)：值可能越界，钳制由控制器负责
+    callback thread-count-changed(int, int);
     callback open-config-dir();
     callback copy-text(string);
     callback logout();
@@ -225,14 +292,32 @@ export component SettingsPage inherits Rectangle {
 
                         SettingsRow {
                             label: "并发分片数";
+                            // 说明文案保持与改动前逐字一致：多出的"仅对新任务生效"写在
+                            // 控制器注释里，避免窄窗口下说明折行把行高撑高
                             description: "分片并发越高占用带宽越多，网络不稳定时建议下调";
 
-                            Text {
-                                text: "下载 " + root.download-thread + " 线程 · 上传 " + root.upload-thread + " 线程";
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-small;
-                                color: Theme.text-secondary;
-                                vertical-alignment: center;
+                            HorizontalLayout {
+                                spacing: Theme.space-3;
+                                cross-axis-alignment: center;
+
+                                ThreadStepper {
+                                    label: "下载";
+                                    value: root.download-thread;
+                                    count: root.download-thread-count;
+                                    step(delta) => {
+                                        // 另一个方向的值原样带回，避免一次点击把两边都改掉
+                                        root.thread-count-changed(root.download-thread-count + delta, root.upload-thread-count);
+                                    }
+                                }
+
+                                ThreadStepper {
+                                    label: "上传";
+                                    value: root.upload-thread;
+                                    count: root.upload-thread-count;
+                                    step(delta) => {
+                                        root.thread-count-changed(root.download-thread-count, root.upload-thread-count + delta);
+                                    }
+                                }
                             }
                         }
                     }

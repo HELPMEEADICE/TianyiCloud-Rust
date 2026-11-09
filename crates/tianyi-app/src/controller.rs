@@ -12,13 +12,13 @@ use crate::app::{CrumbEntry, DirectLink, DragOutApi, FileEntry, MainWindow, Them
 use crate::backend::{invoke_ui, Backend};
 use slint::{ComponentHandle, SharedString, Weak};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
-use tianyi_core::config::{AppConfig, AppStore, ThemeMode};
+use tianyi_core::config::{Accounts, AppConfig, AppStore, ThemeMode};
 use tianyi_core::file::{self, FileKind};
 use tianyi_core::models::{AccountConfig, FileObject, TokenInfo};
 use tianyi_core::task::{Task, TaskDirection, TaskManager, TaskStatus, TransferControl};
@@ -44,6 +44,13 @@ const MAX_CONCURRENT_TRANSFERS: usize = 3;
 /// 低于这个幅度的进度变化不重建列表模型；200ms 一跳的定时器会把它们累积起来，
 /// 最多晚 1% 才刷一次屏，肉眼无感但省掉大量字符串格式化。
 const PROGRESS_PUBLISH_PERMILLE: u64 = 10;
+/// 并发分片数允许区间（设置页 `−/+` 与写回配置共用同一处定义）
+const MIN_THREADS: i32 = 1;
+const MAX_THREADS: i32 = 8;
+/// 主配置目录不可用时的降级目录（位于系统临时目录下）
+const FALLBACK_CONFIG_DIR: &str = "tianyi-cloud-fallback";
+/// 内存态配置（不落盘）时设置页「配置目录」一栏的显示文案
+const MEMORY_CONFIG_LABEL: &str = "（配置目录不可写，本次运行不保存设置）";
 
 /// 登录通知器（向 UI 推送验证码 / 二维码状态）
 ///
@@ -157,7 +164,7 @@ pub struct Controller {
     /// 用来判断"已经在 UI 线程上"的调用可以同步执行闭包，不必再排一次事件循环。
     ui_thread: std::thread::ThreadId,
     backend: Arc<Backend>,
-    store: AppStore,
+    store: ConfigStore,
     client: Mutex<Option<Arc<TianyiClient>>>,
     current_user: Mutex<String>,
 
@@ -229,8 +236,16 @@ pub struct Controller {
 
 impl Controller {
     pub fn new(ui: Weak<MainWindow>, backend: Arc<Backend>) -> Arc<Self> {
-        let store = AppStore::new(None).expect("init app store");
-        let tasks = TaskManager::new(Some(store.root().join("tasks.json")));
+        // 配置目录不可写时降级启动（主目录 → 临时目录 → 内存态），绝不 panic：
+        // 一个只读的 AppData 不应该让整个客户端起不来。
+        let (store, degraded) = ConfigStore::open();
+        // 内存态下不配持久化路径：既写不进去，也没必要留下半个任务文件
+        let persist_path = if store.is_persistent() {
+            Some(store.root().join("tasks.json"))
+        } else {
+            None
+        };
+        let tasks = TaskManager::new(persist_path);
         let theme_mode = ThemeMode::parse(
             &store
                 .load_config()
@@ -277,13 +292,22 @@ impl Controller {
         Self::bind_ui(Arc::clone(&c));
         c.refresh_saved_accounts();
         c.initial_sync();
+        // 降级必须让用户看见（放在 initial_sync 之后，避免被"空提示"覆盖）
+        if let Some(msg) = degraded {
+            c.notice("warning", msg);
+        }
         c
     }
 
     /// 初始化静态 UI 状态：版本号、配置目录、字体、主题、任务列表
     fn initial_sync(self: &Arc<Self>) {
         let version = env!("CARGO_PKG_VERSION").to_string();
-        let config_dir = self.store.root().display().to_string();
+        // 内存态（配置目录不可写）时不能把假路径发给用户：直接说明设置不会保存
+        let config_dir = if self.store.is_persistent() {
+            self.store.root().display().to_string()
+        } else {
+            MEMORY_CONFIG_LABEL.to_string()
+        };
         let font = platform_ui_font();
         let mono = platform_mono_font();
         self.apply_theme();
@@ -293,12 +317,17 @@ impl Controller {
             .unwrap_or_else(|_| AppConfig::default_config());
         let upload_thread = cfg.upload_thread.to_string();
         let download_thread = cfg.download_thread.to_string();
+        // 并发数同时以 int 形式下发：设置页的 +/− 需要数值边界，字符串只用于显示
+        let upload_count = cfg.upload_thread as i32;
+        let download_count = cfg.download_thread as i32;
         let download_dir = cfg.download_dir.display().to_string();
         self.set_ui_state(move |ui| {
             ui.set_version_text(SharedString::from(version));
             ui.set_config_dir(SharedString::from(config_dir));
             ui.set_upload_thread(SharedString::from(upload_thread));
             ui.set_download_thread(SharedString::from(download_thread));
+            ui.set_upload_thread_count(upload_count);
+            ui.set_download_thread_count(download_count);
             ui.set_download_dir(SharedString::from(download_dir));
             let theme = ui.global::<Theme>();
             theme.set_font_family(SharedString::from(font.as_str()));
@@ -666,6 +695,16 @@ impl Controller {
             });
         });
 
+        // 并发分片数：Slint 只上报"+/-被点了一下"的目标值，钳制/落盘/回填都在控制器里，
+        // 保证"界面上显示的数字"永远等于 AppConfig 里真正生效的数字。
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_thread_count_changed(move |download, upload| {
+                let c = c.clone();
+                c.set_thread_counts(download, upload);
+            });
+        });
+
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
             ui.on_choose_download_dir(move || {
@@ -765,6 +804,23 @@ impl Controller {
                 c.handle_drag_out(id.as_str(), name.as_str());
             });
         });
+
+        // ---------------- 关窗 ----------------
+        // 用户点 × 时不再"直接把传输 future 丢掉"：先取消在途传输、把任务状态归一化
+        // 并落盘，再让窗口关闭。这条路径上**绝不等**传输 future 结束（那会把关窗卡住
+        // 几秒），只做"发取消信号 + 用当前状态落盘"。
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            let weak = ui.as_weak();
+            ui.window().on_close_requested(move || {
+                c.begin_close();
+                // 显式 hide：即便某个平台不按 CloseRequested 的返回值收窗口，也能关掉
+                if let Some(win) = weak.upgrade() {
+                    let _ = win.window().hide();
+                }
+                slint::CloseRequestResponse::HideWindow
+            });
+        });
     }
 
     // ==================================================================
@@ -805,7 +861,7 @@ impl Controller {
     }
 
     fn client(&self) -> Option<Arc<TianyiClient>> {
-        self.client.lock().unwrap().clone()
+        lock_or_recover(&self.client).clone()
     }
 
     /// 统一的提示条（Toast）
@@ -822,14 +878,14 @@ impl Controller {
         self.set_ui_state(move |ui| {
             // 计时器必须建在事件循环线程上，这个闭包正是运行在 UI 线程
             let weak = ui.as_weak();
-            let (gen, count) = slot.lock().unwrap().push(&text, now_millis());
+            let (gen, count) = lock_or_recover(&slot).push(&text, now_millis());
             ui.set_notice_text(SharedString::from(text.as_str()));
             ui.set_notice_kind(SharedString::from(kind.as_str()));
             ui.set_notice_count(count);
             let ttl = notice_ttl(kind.as_str());
             let slot = Arc::clone(&slot);
             slint::Timer::single_shot(ttl, move || {
-                if !slot.lock().unwrap().expire(gen) {
+                if !lock_or_recover(&slot).expire(gen) {
                     return;
                 }
                 if let Some(ui) = weak.upgrade() {
@@ -842,7 +898,7 @@ impl Controller {
 
     /// 用户手动关闭提示：同时让在途的自动消失计时器失效
     fn dismiss_notice(&self) {
-        self.notice_slot.lock().unwrap().dismiss();
+        lock_or_recover(&self.notice_slot).dismiss();
         self.set_ui_state(|ui| {
             ui.set_notice_text(SharedString::default());
             ui.set_notice_count(1);
@@ -866,7 +922,7 @@ impl Controller {
             .load_config()
             .unwrap_or_else(|_| AppConfig::default_config());
         let mode = ThemeMode::parse(&cfg.theme);
-        *self.theme_mode.lock().unwrap() = mode;
+        *lock_or_recover(&self.theme_mode) = mode;
         let dark = match mode {
             ThemeMode::Light => false,
             ThemeMode::Dark => true,
@@ -889,7 +945,7 @@ impl Controller {
 
     /// 跟随系统主题时的定时检查（由 UI 线程定时器调用）
     pub fn poll_system_theme(self: &Arc<Self>) {
-        if *self.theme_mode.lock().unwrap() != ThemeMode::System {
+        if *lock_or_recover(&self.theme_mode) != ThemeMode::System {
             return;
         }
         let dark = tianyi_core::theme::system_prefers_dark();
@@ -924,6 +980,51 @@ impl Controller {
             }
         }
         self.apply_theme();
+    }
+
+    /// 设置页「并发分片数」：钳制到 1..=8 后写回配置
+    ///
+    /// 只改 `AppConfig`，**只对之后新启动的传输任务生效**：正在跑的任务在
+    /// `run_transfer` 里已经拷走了 `thread_count`，这里刻意不去动它们——中途改变分片数
+    /// 会让已建立的分片会话失去对应关系。
+    fn set_thread_counts(self: &Arc<Self>, download: i32, upload: i32) {
+        let download_thread = clamp_threads(download);
+        let upload_thread = clamp_threads(upload);
+        let mut cfg = self
+            .store
+            .load_config()
+            .unwrap_or_else(|_| AppConfig::default_config());
+        cfg.download_thread = download_thread;
+        cfg.upload_thread = upload_thread;
+        let saved = match self.store.save_config(&cfg) {
+            Ok(()) => true,
+            Err(e) => {
+                self.notice("error", format!("保存并发设置失败：{e}"));
+                false
+            }
+        };
+        // 回填"真正生效的数字"：连点 +/− 越过边界时停在 1 / 8，而不是显示越界值
+        let (d, u) = (download_thread as i32, upload_thread as i32);
+        self.set_ui_state(move |ui| {
+            ui.set_download_thread_count(d);
+            ui.set_upload_thread_count(u);
+            ui.set_download_thread(SharedString::from(d.to_string()));
+            ui.set_upload_thread(SharedString::from(u.to_string()));
+        });
+        if saved {
+            if self.store.is_persistent() {
+                self.notice(
+                    "success",
+                    format!("并发分片数已保存：下载 {download_thread} · 上传 {upload_thread}"),
+                );
+            } else {
+                // 内存态：值在本进程内生效，但没有落盘，必须如实说明
+                self.notice(
+                    "warning",
+                    "并发分片数已在本次运行内生效；配置目录不可写，重启后会恢复默认值",
+                );
+            }
+        }
     }
 
     fn choose_download_dir(self: &Arc<Self>) {
@@ -1080,7 +1181,7 @@ impl Controller {
                 this.store.load_config().unwrap_or_default(),
                 acc,
             ));
-            *this.client.lock().unwrap() = Some(client.clone());
+            *lock_or_recover(&this.client) = Some(client.clone());
             if let Err(e) = client.refresh_session().await {
                 log::warn!("quick login refresh session: {e}");
             }
@@ -1223,18 +1324,18 @@ impl Controller {
             }
         }
 
-        *self.current_user.lock().unwrap() = username.clone();
-        *self.space.lock().unwrap() = "personal".to_string();
-        *self.folder_id.lock().unwrap() = ROOT_FOLDER_ID.to_string();
-        self.path_stack.lock().unwrap().clear();
-        self.dir_rows.lock().unwrap().clear();
-        self.visible_rows.lock().unwrap().clear();
+        *lock_or_recover(&self.current_user) = username.clone();
+        *lock_or_recover(&self.space) = "personal".to_string();
+        *lock_or_recover(&self.folder_id) = ROOT_FOLDER_ID.to_string();
+        lock_or_recover(&self.path_stack).clear();
+        lock_or_recover(&self.dir_rows).clear();
+        lock_or_recover(&self.visible_rows).clear();
 
         let client = Arc::new(TianyiClient::new(
             self.store.load_config().unwrap_or_default(),
             acc,
         ));
-        *self.client.lock().unwrap() = Some(client);
+        *lock_or_recover(&self.client) = Some(client);
 
         // 已登录：把仍在进行中的其它登录尝试全部作废
         self.login_gen.fetch_add(1, Ordering::SeqCst);
@@ -1264,18 +1365,18 @@ impl Controller {
         self.search_gen.fetch_add(1, Ordering::SeqCst);
         self.space_gen.fetch_add(1, Ordering::SeqCst);
         {
-            let controls = self.controls.lock().unwrap();
+            let controls = lock_or_recover(&self.controls);
             for ctl in controls.values() {
                 ctl.cancel();
             }
         }
-        *self.client.lock().unwrap() = None;
-        *self.current_user.lock().unwrap() = String::new();
-        *self.space.lock().unwrap() = "personal".to_string();
-        *self.folder_id.lock().unwrap() = ROOT_FOLDER_ID.to_string();
-        self.path_stack.lock().unwrap().clear();
-        self.dir_rows.lock().unwrap().clear();
-        self.visible_rows.lock().unwrap().clear();
+        *lock_or_recover(&self.client) = None;
+        *lock_or_recover(&self.current_user) = String::new();
+        *lock_or_recover(&self.space) = "personal".to_string();
+        *lock_or_recover(&self.folder_id) = ROOT_FOLDER_ID.to_string();
+        lock_or_recover(&self.path_stack).clear();
+        lock_or_recover(&self.dir_rows).clear();
+        lock_or_recover(&self.visible_rows).clear();
         if let Ok(mut cfg) = self.store.load_config() {
             cfg.last_account = String::new();
             let _ = self.store.save_config(&cfg);
@@ -1313,7 +1414,7 @@ impl Controller {
     // 目录浏览
     // ==================================================================
     fn space_label(&self) -> &'static str {
-        if self.space.lock().unwrap().as_str() == "family" {
+        if lock_or_recover(&self.space).as_str() == "family" {
             "家庭云"
         } else {
             "个人云"
@@ -1326,7 +1427,7 @@ impl Controller {
             id: ROOT_FOLDER_ID.into(),
             name: self.space_label().into(),
         }];
-        for (id, name) in self.path_stack.lock().unwrap().iter() {
+        for (id, name) in lock_or_recover(&self.path_stack).iter() {
             out.push(CrumbEntry {
                 id: id.clone().into(),
                 name: name.clone().into(),
@@ -1354,9 +1455,12 @@ impl Controller {
 
     /// 把行数据推送到 UI，并按当前选择集标记 selected
     fn push_rows(&self, rows: &[FileObject]) {
-        let selected: HashSet<String> = self.selected_ids.lock().unwrap().iter().cloned().collect();
+        let selected: HashSet<String> = lock_or_recover(&self.selected_ids)
+            .iter()
+            .cloned()
+            .collect();
         let entries = files_to_entries(rows, &selected);
-        *self.entry_cache.lock().unwrap() = entries.clone();
+        *lock_or_recover(&self.entry_cache) = entries.clone();
         let count = selected.len() as i32;
         self.set_ui_state(move |ui| {
             ui.set_file_list(entries_model(entries));
@@ -1369,9 +1473,9 @@ impl Controller {
     /// 这是选择状态的唯一事实来源：UI 侧只读 FileEntry.selected 与 selected-count，
     /// 不允许自己维护一份"看起来选中了"的状态，避免出现界面多选、操作只作用于一个文件。
     fn set_selection(&self, ids: Vec<String>) {
-        *self.selected_ids.lock().unwrap() = ids.clone();
+        *lock_or_recover(&self.selected_ids) = ids.clone();
         let set: HashSet<String> = ids.iter().cloned().collect();
-        let mut cache = self.entry_cache.lock().unwrap();
+        let mut cache = lock_or_recover(&self.entry_cache);
         for e in cache.iter_mut() {
             e.selected = set.contains(e.id.as_str());
         }
@@ -1387,16 +1491,13 @@ impl Controller {
     /// 丢弃已不在列表里的选中项（不会触发额外的 UI 更新）
     fn retain_selection(&self, rows: &[FileObject]) {
         let live: HashSet<&str> = rows.iter().map(|f| f.id.as_str()).collect();
-        self.selected_ids
-            .lock()
-            .unwrap()
-            .retain(|id| live.contains(id.as_str()));
+        lock_or_recover(&self.selected_ids).retain(|id| live.contains(id.as_str()));
     }
 
     fn sort_key_pair(&self) -> (i32, bool) {
         (
-            *self.sort_key.lock().unwrap(),
-            *self.sort_asc.lock().unwrap(),
+            *lock_or_recover(&self.sort_key),
+            *lock_or_recover(&self.sort_asc),
         )
     }
 
@@ -1434,8 +1535,8 @@ impl Controller {
     fn sort_changed(self: &Arc<Self>, key: i32) {
         let key = key.clamp(0, 2);
         {
-            let mut cur = self.sort_key.lock().unwrap();
-            let mut asc = self.sort_asc.lock().unwrap();
+            let mut cur = lock_or_recover(&self.sort_key);
+            let mut asc = lock_or_recover(&self.sort_asc);
             if *cur == key {
                 *asc = !*asc;
             } else {
@@ -1443,11 +1544,11 @@ impl Controller {
                 *asc = true;
             }
         }
-        let mut rows = self.visible_rows.lock().unwrap().clone();
+        let mut rows = lock_or_recover(&self.visible_rows).clone();
         self.sorted_rows(&mut rows);
-        *self.visible_rows.lock().unwrap() = rows.clone();
+        *lock_or_recover(&self.visible_rows) = rows.clone();
         {
-            let mut dir = self.dir_rows.lock().unwrap();
+            let mut dir = lock_or_recover(&self.dir_rows);
             self.sorted_rows(&mut dir);
         }
         let (key, asc) = self.sort_key_pair();
@@ -1484,9 +1585,9 @@ impl Controller {
             self.set_file_error("未登录");
             return;
         };
-        let had_rows = !self.visible_rows.lock().unwrap().is_empty();
+        let had_rows = !lock_or_recover(&self.visible_rows).is_empty();
         let silent = keep_selection && had_rows;
-        let folder_id = self.folder_id.lock().unwrap().clone();
+        let folder_id = lock_or_recover(&self.folder_id).clone();
         let this = Arc::clone(self);
         let backend = self.backend.clone();
 
@@ -1514,8 +1615,8 @@ impl Controller {
                     }
                     this.sorted_rows(&mut files);
                     let count = files.len();
-                    *this.dir_rows.lock().unwrap() = files.clone();
-                    *this.visible_rows.lock().unwrap() = files.clone();
+                    *lock_or_recover(&this.dir_rows) = files.clone();
+                    *lock_or_recover(&this.visible_rows) = files.clone();
                     // 目录内容变了：丢掉已不存在的选中项，保证后续操作对象始终有效
                     this.retain_selection(&files);
                     this.push_rows(&files);
@@ -1575,14 +1676,14 @@ impl Controller {
 
     fn navigate_crumb(self: &Arc<Self>, index: usize) {
         // index 0 = 根目录
-        let mut stack = self.path_stack.lock().unwrap();
+        let mut stack = lock_or_recover(&self.path_stack);
         if index == 0 {
             stack.clear();
-            *self.folder_id.lock().unwrap() = ROOT_FOLDER_ID.to_string();
+            *lock_or_recover(&self.folder_id) = ROOT_FOLDER_ID.to_string();
         } else if index <= stack.len() {
             stack.truncate(index);
             let (id, _) = stack.last().cloned().unwrap();
-            *self.folder_id.lock().unwrap() = id;
+            *lock_or_recover(&self.folder_id) = id;
         } else {
             return;
         }
@@ -1591,13 +1692,13 @@ impl Controller {
     }
 
     fn navigate_up(self: &Arc<Self>) {
-        let mut stack = self.path_stack.lock().unwrap();
+        let mut stack = lock_or_recover(&self.path_stack);
         if stack.pop().is_some() {
             let next = stack
                 .last()
                 .map(|(id, _)| id.clone())
                 .unwrap_or_else(|| ROOT_FOLDER_ID.to_string());
-            *self.folder_id.lock().unwrap() = next;
+            *lock_or_recover(&self.folder_id) = next;
             drop(stack);
             self.load_dir(false);
         }
@@ -1610,14 +1711,14 @@ impl Controller {
             "personal"
         }
         .to_string();
-        *self.space.lock().unwrap() = space.clone();
+        *lock_or_recover(&self.space) = space.clone();
         let gen = self.space_gen.fetch_add(1, Ordering::SeqCst) + 1;
         self.dir_gen.fetch_add(1, Ordering::SeqCst);
         self.search_gen.fetch_add(1, Ordering::SeqCst);
-        *self.folder_id.lock().unwrap() = ROOT_FOLDER_ID.to_string();
-        self.path_stack.lock().unwrap().clear();
-        self.dir_rows.lock().unwrap().clear();
-        self.visible_rows.lock().unwrap().clear();
+        *lock_or_recover(&self.folder_id) = ROOT_FOLDER_ID.to_string();
+        lock_or_recover(&self.path_stack).clear();
+        lock_or_recover(&self.dir_rows).clear();
+        lock_or_recover(&self.visible_rows).clear();
 
         let Some(client) = self.client() else { return };
         client.set_account(|acc| acc.space_type = space.clone());
@@ -1658,7 +1759,7 @@ impl Controller {
                     if let Some(c) = this.client() {
                         c.set_account(|acc| acc.space_type = "personal".to_string());
                     }
-                    *this.space.lock().unwrap() = "personal".to_string();
+                    *lock_or_recover(&this.space) = "personal".to_string();
                     this.set_ui_state(|ui| {
                         ui.set_current_page(0);
                     });
@@ -1675,23 +1776,20 @@ impl Controller {
             self.preview_file(id, name);
             return;
         }
-        let current = self.folder_id.lock().unwrap().clone();
-        self.path_stack
-            .lock()
-            .unwrap()
-            .push((current, name.to_string()));
-        *self.folder_id.lock().unwrap() = id.to_string();
+        let current = lock_or_recover(&self.folder_id).clone();
+        lock_or_recover(&self.path_stack).push((current, name.to_string()));
+        *lock_or_recover(&self.folder_id) = id.to_string();
         self.load_dir(false);
     }
 
     /// 单击选择：普通点击=单选，Ctrl=切换，Shift=从锚点范围选择
     fn handle_select_item(self: &Arc<Self>, id: &str, ctrl: bool, shift: bool) {
-        let rows = self.visible_rows.lock().unwrap().clone();
+        let rows = lock_or_recover(&self.visible_rows).clone();
         if rows.is_empty() {
             return;
         }
-        let anchor = self.selection_anchor.lock().unwrap().clone();
-        let mut ids = self.selected_ids.lock().unwrap().clone();
+        let anchor = lock_or_recover(&self.selection_anchor).clone();
+        let mut ids = lock_or_recover(&self.selected_ids).clone();
 
         if shift && !anchor.is_empty() && !ctrl {
             // 范围选择：用锚点到目标之间的连续区间替换当前选择
@@ -1709,23 +1807,20 @@ impl Controller {
             } else {
                 ids.push(id.to_string());
             }
-            *self.selection_anchor.lock().unwrap() = id.to_string();
+            *lock_or_recover(&self.selection_anchor) = id.to_string();
             self.set_selection(ids);
             self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
             return;
         }
 
-        *self.selection_anchor.lock().unwrap() = id.to_string();
+        *lock_or_recover(&self.selection_anchor) = id.to_string();
         self.set_selection(vec![id.to_string()]);
         self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
     }
 
     /// 全选当前目录 / 搜索结果
     fn select_all_items(self: &Arc<Self>) {
-        let ids: Vec<String> = self
-            .visible_rows
-            .lock()
-            .unwrap()
+        let ids: Vec<String> = lock_or_recover(&self.visible_rows)
             .iter()
             .map(|f| f.id.clone())
             .collect();
@@ -1740,9 +1835,9 @@ impl Controller {
     fn handle_context(self: &Arc<Self>, id: &str, name: &str, is_dir: bool, x: f32, y: f32) {
         // 右键的行若不在当前选择里，则先把选择切到这一行，
         // 保证菜单里的操作对象与用户看到的选中项一致。
-        let in_selection = self.selected_ids.lock().unwrap().iter().any(|s| s == id);
+        let in_selection = lock_or_recover(&self.selected_ids).iter().any(|s| s == id);
         if !in_selection {
-            *self.selection_anchor.lock().unwrap() = id.to_string();
+            *lock_or_recover(&self.selection_anchor) = id.to_string();
             self.set_selection(vec![id.to_string()]);
         }
         let id_s = id.to_string();
@@ -1760,14 +1855,12 @@ impl Controller {
 
     /// 当前操作的目标文件集合（全部来自选择模型的唯一事实来源）
     fn targets(&self) -> Vec<FileObject> {
-        let ids = self.selected_ids.lock().unwrap().clone();
+        let ids = lock_or_recover(&self.selected_ids).clone();
         if ids.is_empty() {
             return Vec::new();
         }
         let set: HashSet<String> = ids.into_iter().collect();
-        self.visible_rows
-            .lock()
-            .unwrap()
+        lock_or_recover(&self.visible_rows)
             .iter()
             .filter(|f| set.contains(&f.id))
             .cloned()
@@ -1907,7 +2000,7 @@ impl Controller {
         if targets.is_empty() {
             return;
         }
-        let dst = self.folder_id.lock().unwrap().clone();
+        let dst = lock_or_recover(&self.folder_id).clone();
         let Some(client) = self.client() else { return };
         let count = targets.len();
         let this = Arc::clone(self);
@@ -1930,7 +2023,7 @@ impl Controller {
 
     fn move_selected_up(self: &Arc<Self>) {
         let parent_id = {
-            let stack = self.path_stack.lock().unwrap();
+            let stack = lock_or_recover(&self.path_stack);
             if stack.len() < 2 {
                 // 栈中只有一项时，上级就是根目录
                 if stack.is_empty() {
@@ -1993,7 +2086,7 @@ impl Controller {
         } else {
             format!("确认删除 {} 个项目", targets.len())
         };
-        *self.pending_confirm.lock().unwrap() = Some(PendingConfirm::DeleteFiles(targets));
+        *lock_or_recover(&self.pending_confirm) = Some(PendingConfirm::DeleteFiles(targets));
         self.set_ui_state(move |ui| {
             ui.set_dialog_title(SharedString::from(title));
             ui.set_dialog_message(SharedString::from(message));
@@ -2004,12 +2097,12 @@ impl Controller {
     }
 
     fn dialog_cancel(self: &Arc<Self>) {
-        *self.pending_confirm.lock().unwrap() = None;
+        *lock_or_recover(&self.pending_confirm) = None;
         self.set_ui_state(|ui| ui.set_dialog_open(false));
     }
 
     fn dialog_confirm(self: &Arc<Self>) {
-        let action = self.pending_confirm.lock().unwrap().take();
+        let action = lock_or_recover(&self.pending_confirm).take();
         self.set_ui_state(|ui| ui.set_dialog_open(false));
         match action {
             Some(PendingConfirm::DeleteFiles(targets)) => self.perform_delete(targets),
@@ -2072,7 +2165,7 @@ impl Controller {
 
     fn push_link(self: &Arc<Self>, name: String, url: String, copied: bool) {
         {
-            let mut links = self.links.lock().unwrap();
+            let mut links = lock_or_recover(&self.links);
             if let Some(exist) = links.iter_mut().find(|l| l.name == name) {
                 exist.url = url.clone().into();
             } else {
@@ -2095,7 +2188,7 @@ impl Controller {
     }
 
     fn push_links(&self) {
-        let links: Vec<DirectLink> = self.links.lock().unwrap().clone();
+        let links: Vec<DirectLink> = lock_or_recover(&self.links).clone();
         self.set_ui_state(move |ui| {
             ui.set_links(slint::ModelRc::new(slint::VecModel::from(links)));
         });
@@ -2109,15 +2202,13 @@ impl Controller {
     }
 
     fn clear_links(self: &Arc<Self>) {
-        self.links.lock().unwrap().clear();
+        lock_or_recover(&self.links).clear();
         self.push_links();
         self.notice("info", "已清空直链列表");
     }
 
     fn find_visible(&self, id: &str) -> Option<FileObject> {
-        self.visible_rows
-            .lock()
-            .unwrap()
+        lock_or_recover(&self.visible_rows)
             .iter()
             .find(|f| f.id == id)
             .cloned()
@@ -2152,7 +2243,7 @@ impl Controller {
                     }
                     this.sorted_rows(&mut files);
                     let count = files.len();
-                    *this.visible_rows.lock().unwrap() = files.clone();
+                    *lock_or_recover(&this.visible_rows) = files.clone();
                     this.retain_selection(&files);
                     this.push_rows(&files);
                     this.set_ui_state(|ui| {
@@ -2179,9 +2270,9 @@ impl Controller {
     fn clear_search(self: &Arc<Self>) {
         // 让任何在途搜索失效，并恢复当前目录内容
         self.search_gen.fetch_add(1, Ordering::SeqCst);
-        let dir = self.dir_rows.lock().unwrap().clone();
+        let dir = lock_or_recover(&self.dir_rows).clone();
         let rows = Self::rows_for_display(&dir, None);
-        *self.visible_rows.lock().unwrap() = rows.clone();
+        *lock_or_recover(&self.visible_rows) = rows.clone();
         self.retain_selection(&rows);
         let count = rows.len();
         self.push_rows(&rows);
@@ -2270,13 +2361,13 @@ impl Controller {
         if paths.is_empty() {
             return;
         }
-        let folder_id = self.folder_id.lock().unwrap().clone();
+        let folder_id = lock_or_recover(&self.folder_id).clone();
         self.upload_paths(paths, &folder_id);
     }
 
     fn create_folder(self: &Arc<Self>) {
         let Some(client) = self.client() else { return };
-        let folder_id = self.folder_id.lock().unwrap().clone();
+        let folder_id = lock_or_recover(&self.folder_id).clone();
         let name = "新建文件夹";
         let this = Arc::clone(self);
         self.backend.spawn(move || async move {
@@ -2388,7 +2479,7 @@ impl Controller {
             self.notice("error", "请先登录后再拖入文件");
             return;
         }
-        let folder_id = self.folder_id.lock().unwrap().clone();
+        let folder_id = lock_or_recover(&self.folder_id).clone();
         self.upload_paths(paths, &folder_id);
     }
 
@@ -2407,14 +2498,11 @@ impl Controller {
         let Some(task) = self.tasks.get(task_id) else {
             return;
         };
-        if self.controls.lock().unwrap().contains_key(&task_id) {
+        if lock_or_recover(&self.controls).contains_key(&task_id) {
             return; // 已有存活的控制句柄，说明任务还在跑（可能是暂停挂起或正在排队）
         }
         let control = TransferControl::new();
-        self.controls
-            .lock()
-            .unwrap()
-            .insert(task_id, control.clone());
+        lock_or_recover(&self.controls).insert(task_id, control.clone());
         let permits = Arc::clone(&self.transfer_permits);
         let this = Arc::clone(self);
         self.backend.spawn(move || async move {
@@ -2424,7 +2512,7 @@ impl Controller {
                 Ok(p) => p,
                 Err(_) => {
                     // 信号量随 runtime 销毁，正常路径走不到；兜底避免任务永远 Pending
-                    this.controls.lock().unwrap().remove(&task_id);
+                    lock_or_recover(&this.controls).remove(&task_id);
                     this.finish_task(
                         task_id,
                         TaskStatus::Failed,
@@ -2443,7 +2531,7 @@ impl Controller {
                 if status == Some(TaskStatus::Paused) {
                     // 排队期间被暂停：摘掉控制句柄，用户点"继续"会走"会话已丢失"的分支
                     // 重新排队，而不是对着一个从未启动的任务假 Running
-                    this.controls.lock().unwrap().remove(&task_id);
+                    lock_or_recover(&this.controls).remove(&task_id);
                 }
                 drop(permit);
                 return;
@@ -2461,7 +2549,7 @@ impl Controller {
         let task_id = task.id;
         let Some(client) = self.client() else {
             self.finish_task(task_id, TaskStatus::Failed, Some("未登录".to_string()));
-            self.controls.lock().unwrap().remove(&task_id);
+            lock_or_recover(&self.controls).remove(&task_id);
             return;
         };
         let progress = self.progress_callback(task_id, task.file_size);
@@ -2552,8 +2640,8 @@ impl Controller {
                     t.speed = 0;
                     t.error = None;
                 });
-                self.controls.lock().unwrap().remove(&task_id);
-                self.rate_samples.lock().unwrap().remove(&task_id);
+                lock_or_recover(&self.controls).remove(&task_id);
+                lock_or_recover(&self.rate_samples).remove(&task_id);
                 let label = if task.direction == TaskDirection::Upload {
                     "上传完成"
                 } else {
@@ -2570,13 +2658,13 @@ impl Controller {
             }
             Outcome::Canceled => {
                 self.tasks.transition(task_id, TaskStatus::Canceled);
-                self.controls.lock().unwrap().remove(&task_id);
-                self.rate_samples.lock().unwrap().remove(&task_id);
+                lock_or_recover(&self.controls).remove(&task_id);
+                lock_or_recover(&self.rate_samples).remove(&task_id);
             }
             Outcome::Failed(msg) => {
                 self.finish_task(task_id, TaskStatus::Failed, Some(msg));
-                self.controls.lock().unwrap().remove(&task_id);
-                self.rate_samples.lock().unwrap().remove(&task_id);
+                lock_or_recover(&self.controls).remove(&task_id);
+                lock_or_recover(&self.rate_samples).remove(&task_id);
             }
         }
         self.dirty.store(true, Ordering::SeqCst);
@@ -2608,7 +2696,7 @@ impl Controller {
         let samples = Arc::clone(&self.rate_samples);
         Arc::new(move |done: u64| {
             let now = now_millis();
-            let mut guard = samples.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = lock_or_recover(&samples);
             let last_ms = guard.get(&task_id).map(|(_, ms)| *ms).unwrap_or(0);
             // 200ms 采样窗口：既算瞬时速度，也避免高频写盘与 UI 抖动
             if now.saturating_sub(last_ms) < TICK_MS {
@@ -2630,7 +2718,7 @@ impl Controller {
         if !task.status.can_pause() {
             return;
         }
-        let control = self.controls.lock().unwrap().get(&id).cloned();
+        let control = lock_or_recover(&self.controls).get(&id).cloned();
         match control {
             Some(ctl) => {
                 // 真正的协作式暂停：传输任务在检查点挂起，连接与会话保留
@@ -2655,7 +2743,7 @@ impl Controller {
         if !task.status.can_resume() {
             return;
         }
-        let control = self.controls.lock().unwrap().get(&id).cloned();
+        let control = lock_or_recover(&self.controls).get(&id).cloned();
         match control {
             Some(ctl) => {
                 // 会话仍在：唤醒挂起的传输
@@ -2688,17 +2776,17 @@ impl Controller {
             }
             return;
         }
-        let control = self.controls.lock().unwrap().get(&id).cloned();
+        let control = lock_or_recover(&self.controls).get(&id).cloned();
         if let Some(ctl) = control {
             // 取消 → 检查点返回 Canceled → 传输任务自行收尾
             ctl.cancel();
             self.tasks.transition(id, TaskStatus::Canceled);
             self.tasks.update(id, |t| t.speed = 0);
-            self.controls.lock().unwrap().remove(&id);
+            lock_or_recover(&self.controls).remove(&id);
         } else {
             self.tasks.transition(id, TaskStatus::Canceled);
         }
-        self.rate_samples.lock().unwrap().remove(&id);
+        lock_or_recover(&self.rate_samples).remove(&id);
         self.notice("info", format!("已取消：{}", task.file_name));
         self.refresh_transfers();
     }
@@ -2722,10 +2810,10 @@ impl Controller {
     }
 
     fn remove_task(self: &Arc<Self>, id: u64) {
-        if let Some(ctl) = self.controls.lock().unwrap().remove(&id) {
+        if let Some(ctl) = lock_or_recover(&self.controls).remove(&id) {
             ctl.cancel();
         }
-        self.rate_samples.lock().unwrap().remove(&id);
+        lock_or_recover(&self.rate_samples).remove(&id);
         self.tasks.remove(id);
         self.refresh_transfers();
     }
@@ -2790,7 +2878,7 @@ impl Controller {
         let snapshot = transfer_snapshot(&tasks);
         let force = self.force_publish.swap(false, Ordering::SeqCst);
         {
-            let mut prev = self.last_snapshot.lock().unwrap();
+            let mut prev = lock_or_recover(&self.last_snapshot);
             if !force && !needs_publish(&prev, &snapshot) {
                 return;
             }
@@ -2832,10 +2920,49 @@ impl Controller {
     }
 
     // ==================================================================
+    // 关窗
+    // ==================================================================
+    /// 关窗收尾：取消在途传输 + 任务状态归一化 + 落盘
+    ///
+    /// 关窗语义选"已暂停"而不是"已取消"，理由有两条：
+    /// * `Canceled` 是终态（`TaskStatus::is_terminal`），既不再出现在"进行中"筛选里，
+    ///   也不能 `resume`；用户只是关了窗口，不该因此丧失断点续传能力（下载默认
+    ///   `resume: true`，上传也有本地文件可重来）；
+    /// * 下次启动 `TaskManager::new` 本来就会把遗留的 `Running` 降级成 `Paused`
+    ///   （`mark_interrupted_as_paused`）——这里直接写成 `Paused`，让"退出时看到的状态"
+    ///   与"启动后看到的状态"一致，不会出现一闪而过的状态跳变。
+    ///
+    /// 控制句柄仍然调 `cancel()`：`pause()` 只是把会话挂起，进程退出前它还会占着连接与
+    /// socket；关窗要的是"立刻停手"，状态由下面的归一化统一负责。
+    fn begin_close(self: &Arc<Self>) {
+        {
+            let controls = lock_or_recover(&self.controls);
+            for ctl in controls.values() {
+                ctl.cancel();
+            }
+        }
+        let transitions = close_transitions(&self.tasks.list());
+        for (id, status) in &transitions {
+            // 状态机拒绝（理论上不会）时兜底强写，绝不留 Running
+            if !self.tasks.transition(*id, *status) {
+                self.tasks.update(*id, |t| {
+                    t.status = *status;
+                    t.speed = 0;
+                });
+            }
+        }
+        // 最后一次"等价于重启恢复"的归并 + 立即落盘：兜住上面那一瞬间才转成 Running 的
+        // 任务。`TaskManager::transition` / `update` / 这里都会走内部 `persist()`，
+        // 这就是任务表的保存入口（没有额外的 flush 接口）。
+        self.tasks.mark_interrupted_as_paused();
+        log::info!("关窗：{} 个任务已归一化为已暂停", transitions.len());
+    }
+
+    // ==================================================================
     // 拖拽
     // ==================================================================
     pub fn set_drag_state(&self, state: &'static crate::DragDropState) {
-        *self.drag_state.lock().unwrap() = Some(state);
+        *lock_or_recover(&self.drag_state) = Some(state);
     }
 
     /// 判断拖放目标是否可接收
@@ -2983,6 +3110,187 @@ impl Controller {
                 }
             }
         });
+    }
+}
+
+// ==================================================================
+// 基础设施：锁恢复 + 配置目录降级
+// ==================================================================
+
+/// 取锁；若锁已被 panic 毒化，记录 warn 并继续用内部数据（不连锁 panic）
+///
+/// 控制器里每个 `Mutex` 装的都是"可重建的 UI 状态"（当前目录、选择集、提示条……），
+/// 中毒只说明之前某次持锁期间 panic 过一次，数据本身仍然可用。`unwrap()` 会让之后
+/// 每一次取锁都 panic，把一次局部故障放大成整个进程不可用，所以统一改成继续用。
+fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| {
+        log::warn!("互斥锁已中毒，继续使用其中的数据（避免连锁 panic）");
+        e.into_inner()
+    })
+}
+
+/// 把任意输入钳制到 1..=8（并发分片数的唯一钳制点）
+fn clamp_threads(v: i32) -> u32 {
+    v.clamp(MIN_THREADS, MAX_THREADS) as u32
+}
+
+/// 关窗时任务应落成的状态；`None` 表示无需改动
+///
+/// `Pending` 也要改成 `Paused`：排队中的任务在进程退出后没有任何东西会去唤醒它，
+/// 留着 `Pending` 下次启动就是一个不会动、也不会被 `mark_interrupted_as_paused`
+/// 处理的幽灵任务。
+fn close_status_for(status: TaskStatus) -> Option<TaskStatus> {
+    match status {
+        TaskStatus::Pending | TaskStatus::Running => Some(TaskStatus::Paused),
+        _ => None,
+    }
+}
+
+/// 关窗归一化计划：(任务 id, 目标状态)
+fn close_transitions(tasks: &[Task]) -> Vec<(u64, TaskStatus)> {
+    tasks
+        .iter()
+        .filter_map(|t| close_status_for(t.status).map(|s| (t.id, s)))
+        .collect()
+}
+
+/// 配置根目录的选择结果
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StoreRoot {
+    /// 主目录可用
+    Primary(PathBuf),
+    /// 主目录不可用，已退到回退目录
+    Fallback(PathBuf),
+    /// 两处都不可用：本次运行使用内存态配置，不落盘
+    Memory,
+}
+
+/// 决定本次运行用哪个配置根目录
+///
+/// `primary = None` 表示"由 `AppStore` 自己解析系统默认配置目录"（生产路径），只有单测
+/// 才需要显式指定一个必然失败的路径。任何一步失败都不 panic：最差落到 `Memory`。
+fn pick_store_root(primary: Option<&Path>, fallback: &Path) -> StoreRoot {
+    match AppStore::new(primary.map(Path::to_path_buf)) {
+        Ok(store) => return StoreRoot::Primary(store.root().clone()),
+        Err(e) => log::warn!(
+            "配置目录不可用（{}）：{e}",
+            primary
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "系统默认".to_string())
+        ),
+    }
+    match AppStore::new(Some(fallback.to_path_buf())) {
+        Ok(store) => StoreRoot::Fallback(store.root().clone()),
+        Err(e) => {
+            log::warn!("回退配置目录 {} 也不可用：{e}", fallback.display());
+            StoreRoot::Memory
+        }
+    }
+}
+
+/// 配置存储：优先磁盘，目录不可用时退化为内存态
+///
+/// 为什么要再包一层：`AppStore` 每个接口都直接摸文件系统，目录不可写时连
+/// `load_config` 都会失败。这里把"内存态"显式建模出来，让控制器沿用同一套调用形状，
+/// 同时保证内存态下 `save_config` 真的能改变本进程内的配置（否则设置页改了也白改）。
+struct ConfigStore {
+    /// `None` = 内存态（本次运行不落盘）
+    disk: Option<AppStore>,
+    /// 内存态下配置的唯一副本；磁盘态时同步跟随，供回读兜底
+    mem: Mutex<AppConfig>,
+    /// 展示用配置目录
+    root: PathBuf,
+}
+
+impl ConfigStore {
+    /// 按"主目录 → 临时目录 → 内存态"的顺序打开，返回 (存储, 降级提示)
+    fn open() -> (Self, Option<String>) {
+        let fallback = std::env::temp_dir().join(FALLBACK_CONFIG_DIR);
+        match pick_store_root(None, &fallback) {
+            StoreRoot::Primary(root) => (Self::open_disk(root), None),
+            StoreRoot::Fallback(root) => {
+                let msg = format!(
+                    "配置目录不可写，已改用临时目录 {}：设置会写在那里，可能被系统清理",
+                    root.display()
+                );
+                (Self::open_disk(root), Some(msg))
+            }
+            StoreRoot::Memory => (
+                Self::memory(fallback),
+                Some("配置目录不可写，本次运行不会保存设置".to_string()),
+            ),
+        }
+    }
+
+    /// 打开磁盘态；万一二次打开失败，退化为内存态而不是 panic
+    fn open_disk(root: PathBuf) -> Self {
+        match AppStore::new(Some(root.clone())) {
+            Ok(store) => {
+                let cfg = store.load_config().unwrap_or_else(|e| {
+                    log::warn!("读取配置失败，使用默认值：{e}");
+                    AppConfig::default_config()
+                });
+                Self {
+                    disk: Some(store),
+                    mem: Mutex::new(cfg),
+                    root,
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "配置目录 {} 二次打开失败，退化为内存态：{e}",
+                    root.display()
+                );
+                Self::memory(root)
+            }
+        }
+    }
+
+    fn memory(root: PathBuf) -> Self {
+        Self {
+            disk: None,
+            mem: Mutex::new(AppConfig::default_config()),
+            root,
+        }
+    }
+
+    /// 是否真的会落盘（决定任务表要不要配持久化路径、提示条怎么说）
+    fn is_persistent(&self) -> bool {
+        self.disk.is_some()
+    }
+
+    fn root(&self) -> &PathBuf {
+        &self.root
+    }
+
+    fn load_config(&self) -> anyhow::Result<AppConfig> {
+        match &self.disk {
+            Some(store) => Ok(store.load_config()?),
+            None => Ok(lock_or_recover(&self.mem).clone()),
+        }
+    }
+
+    fn save_config(&self, cfg: &AppConfig) -> anyhow::Result<()> {
+        *lock_or_recover(&self.mem) = cfg.clone();
+        match &self.disk {
+            Some(store) => Ok(store.save_config(cfg)?),
+            // 内存态：只更新进程内副本，启动时的提示条已经说明"不会保存"
+            None => Ok(()),
+        }
+    }
+
+    fn load_accounts(&self) -> anyhow::Result<Accounts> {
+        match &self.disk {
+            Some(store) => Ok(store.load_accounts()?),
+            None => Ok(Accounts::default()),
+        }
+    }
+
+    fn save_accounts(&self, accounts: &Accounts) -> anyhow::Result<()> {
+        match &self.disk {
+            Some(store) => Ok(store.save_accounts(accounts)?),
+            None => Ok(()),
+        }
     }
 }
 
@@ -3956,5 +4264,150 @@ mod tests {
             vec![1, 2, 3]
         );
         assert_eq!(transfer_snapshot(&[c, a, b]), sorted);
+    }
+
+    // ---------------- 锁中毒：不再连锁 panic ----------------
+
+    #[test]
+    fn lock_or_recover_survives_poisoned_mutex() {
+        // 刻意在持锁期间 panic 一次（stderr 里会出现一行 panic 信息），把锁真的毒化掉
+        let m = Mutex::new(vec![1_u32, 2]);
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = m.lock().expect("首次取锁");
+            panic!("刻意毒化互斥锁");
+        }));
+        assert!(poisoned.is_err(), "panic 应被 catch_unwind 捕获");
+        assert!(m.is_poisoned(), "持有者 panic 后锁必须处于中毒状态");
+
+        // 1) 中毒后仍然拿得到守卫，并且能改内部数据
+        lock_or_recover(&m).push(3);
+        // 2) 再取一次也不 panic：证明不会"连锁"
+        assert_eq!(*lock_or_recover(&m), vec![1, 2, 3]);
+    }
+
+    // ---------------- 配置目录降级启动 ----------------
+
+    fn unique_tmp(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("tianyi-{name}-{}", std::process::id()))
+    }
+
+    /// 构造"必然不能当目录打开"的路径：该位置先放一个普通文件
+    fn blocked_dir(name: &str) -> (PathBuf, PathBuf) {
+        let base = unique_tmp(name);
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).expect("创建测试根目录");
+        let blocked = base.join("occupied");
+        fs::write(&blocked, b"x").expect("写入占位文件");
+        (base, blocked)
+    }
+
+    #[test]
+    fn pick_store_root_uses_primary_when_usable() {
+        let primary = unique_tmp("store-primary");
+        let _ = fs::remove_dir_all(&primary);
+        let fallback = unique_tmp("store-primary-fb");
+        let _ = fs::remove_dir_all(&fallback);
+
+        match pick_store_root(Some(&primary), &fallback) {
+            StoreRoot::Primary(root) => assert_eq!(root, primary),
+            other => panic!("主目录可用时必须用主目录，实际 {other:?}"),
+        }
+        assert!(primary.is_dir(), "主目录应被创建出来");
+        // 没有降级就不该顺手创建回退目录
+        assert!(!fallback.exists(), "主目录可用时不应触碰回退目录");
+
+        let _ = fs::remove_dir_all(&primary);
+    }
+
+    #[test]
+    fn pick_store_root_falls_back_then_degrades_to_memory() {
+        let (base, blocked) = blocked_dir("store-fallback");
+        let fallback = unique_tmp("store-fallback-dir");
+        let _ = fs::remove_dir_all(&fallback);
+
+        // 主目录被普通文件占住（create_dir_all 必然失败）→ 退到回退目录
+        match pick_store_root(Some(&blocked), &fallback) {
+            StoreRoot::Fallback(root) => assert_eq!(root, fallback),
+            other => panic!("主目录不可用时必须退到回退目录，实际 {other:?}"),
+        }
+        assert!(fallback.is_dir(), "回退目录应被创建出来");
+
+        // 回退目录也不可用 → 内存态（全程不 panic）
+        assert_eq!(
+            pick_store_root(Some(&blocked), &blocked),
+            StoreRoot::Memory,
+            "两处都不可用时必须落到内存态而不是 panic"
+        );
+
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::remove_dir_all(&fallback);
+    }
+
+    // ---------------- 并发分片数钳制 ----------------
+
+    #[test]
+    fn clamp_threads_limits_to_one_through_eight() {
+        assert_eq!(clamp_threads(0), 1, "0 线程无意义，抬到下限");
+        assert_eq!(clamp_threads(1), 1);
+        assert_eq!(clamp_threads(4), 4, "区间内的值必须原样保留");
+        assert_eq!(clamp_threads(8), 8);
+        assert_eq!(clamp_threads(9), 8, "超过上限钳到 8");
+        assert_eq!(clamp_threads(-3), 1, "负数钳到下限");
+        assert_eq!(clamp_threads(i32::MIN), 1);
+        assert_eq!(clamp_threads(i32::MAX), 8);
+    }
+
+    // ---------------- 关窗：任务状态归一化 ----------------
+
+    #[test]
+    fn close_status_pauses_every_unfinished_task() {
+        // 未结束的两种状态都要落成"已暂停"
+        assert_eq!(
+            close_status_for(TaskStatus::Running),
+            Some(TaskStatus::Paused)
+        );
+        assert_eq!(
+            close_status_for(TaskStatus::Pending),
+            Some(TaskStatus::Paused),
+            "排队中的任务关窗后没人会唤醒，必须一并落成已暂停"
+        );
+        // 已暂停 / 终态不需要改动（终态一旦改写就丢了"完成过"的事实）
+        assert_eq!(close_status_for(TaskStatus::Paused), None);
+        assert_eq!(close_status_for(TaskStatus::Completed), None);
+        assert_eq!(close_status_for(TaskStatus::Failed), None);
+        assert_eq!(close_status_for(TaskStatus::Canceled), None);
+    }
+
+    #[test]
+    fn close_transitions_leave_no_running_or_pending_task() {
+        let tasks = vec![
+            task(1, TaskDirection::Download, TaskStatus::Running),
+            task(2, TaskDirection::Upload, TaskStatus::Pending),
+            task(3, TaskDirection::Download, TaskStatus::Paused),
+            task(4, TaskDirection::Upload, TaskStatus::Completed),
+            task(5, TaskDirection::Download, TaskStatus::Failed),
+        ];
+        let plan = close_transitions(&tasks);
+        assert_eq!(
+            plan,
+            vec![(1, TaskStatus::Paused), (2, TaskStatus::Paused)],
+            "只有 Pending/Running 需要改写"
+        );
+
+        // 按计划改写后的任务表：不应残留 Running / Pending
+        let mut applied = tasks.clone();
+        for (id, status) in plan {
+            let t = applied.iter_mut().find(|t| t.id == id).expect("任务应存在");
+            t.status = status;
+        }
+        assert!(
+            applied
+                .iter()
+                .all(|t| !matches!(t.status, TaskStatus::Running | TaskStatus::Pending)),
+            "关窗后不允许残留 Running / Pending（否则下次启动就是幽灵任务）"
+        );
+        assert_eq!(applied[2].status, TaskStatus::Paused, "已暂停保持不变");
+        assert_eq!(applied[3].status, TaskStatus::Completed, "终态不受影响");
+        assert_eq!(applied[4].status, TaskStatus::Failed, "终态不受影响");
     }
 }
