@@ -220,6 +220,26 @@ fn shoot(
     Ok(())
 }
 
+/// 合成一张验证码位图（120×40，3:1），让登录页的验证码区域在预览里真正可见。
+///
+/// 真实验证码由服务端下发，预览不联网；这里只提供一张同比例的噪点图。
+/// 存在的意义是"让缺陷可见"：此前场景 20 只打开 `show-captcha` 却没给位图，
+/// 容器里是空的，于是"验证码被非等比拉伸"这件事在视觉基线里完全隐形——
+/// 缺陷能在上一轮 UI 重构中活下来，正是因为这个洞。
+fn captcha_demo_image() -> slint::Image {
+    const W: u32 = 120;
+    const H: u32 = 40;
+    let mut img = image::RgbaImage::new(W, H);
+    for (x, y, px) in img.enumerate_pixels_mut() {
+        // 对角条纹：一旦被横向拉伸，条纹斜率会明显变平，肉眼即可判断宽高比
+        let v = (((x * 3 + y * 5) % 180) + 40) as u8;
+        *px = image::Rgba([v, 255 - v, 160, 255]);
+    }
+    let buffer =
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&img.into_raw(), W, H);
+    slint::Image::from_rgba8(buffer)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args()
         .nth(1)
@@ -388,6 +408,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ---------------- 20. 登录页（最窄窗口 + 验证码 + 错误） ----------------
     ui.set_show_captcha(true);
+    ui.set_captcha_image(captcha_demo_image());
     ui.set_login_error(SharedString::from(
         "账号或密码不正确，请检查后重试（剩余尝试次数 4）",
     ));
