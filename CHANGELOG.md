@@ -38,6 +38,10 @@
 
 ### Fixed
 
+- **单击必须一次到位（导航栏 / 右键菜单 / 按钮 / 分段控件）**：`FocusScope` 的 `focus-on-click` 默认 true，这些控件的 FocusScope 覆盖整个控件且声明在 `TouchArea` 之后（命中测试在前），按下时返回 `EventAccepted` 直接终止派发，`TouchArea` 收不到这次点击——表现为"左侧导航要点两下才切页""右键菜单点不动""按钮第一下没反应"。改为 `focus-on-click: false` + `TouchArea` 按下时显式 `fs.focus()`，点击一次即生效，键盘焦点照旧跟手。
+- **双击 / Enter 进入文件夹**：此前每次点击都整表替换 `file-list` 模型，ListView 随之重建所有行实例，Slint 的点击计数因"命中项变了"被清零（`set_click_count(0)`），`double-clicked` 永远凑不齐。现在选中态变化走就地更新（`set_row_data`），只有行集合真的变了（换目录 / 换云空间 / 搜索）才换模型；列表补上 `@keys(Return)`，Enter 打开当前唯一选中项（文件夹进入、文件预览）。
+- **重命名时 Enter / Delete / Esc 不再被列表快捷键抢走**：`KeyBinding` 在**捕获阶段**判定，匹配上就吃掉按键——把开关写在 `activated` 的 if 里已经太晚，此前在重命名框里按 Delete 会直接删掉选中文件。条件一律移到 `KeyBinding.enabled`，不适用时按键正常传给输入框（Enter 提交、Delete 删字、Esc 取消重命名）。
+- **右键菜单关掉之后快捷键仍然有效**：菜单需要焦点才能收 Esc，关闭时把焦点还给文件列表，F5 / Delete / Enter 不再"关掉菜单就集体失灵"。
 - **会话失效判定改为结构化错误码**：不再依赖错误字符串匹配判断登录态过期，改为识别结构化错误码，避免接口文案变化后误判/漏判。
 - **HTTP 客户端构建失败不再 panic**：初始化路径上不再 `expect` 崩掉进程，改为三级降级（完整 client → 仅 UA/超时的最小 client → `reqwest::Client::new()`）并记 warn 日志。
 - **验证码图片不再被非等比拉伸**：登录页验证码改用 `image-fit: contain`（此前被强行拉满容器，3:1 的图被画成 6.6:1）。
