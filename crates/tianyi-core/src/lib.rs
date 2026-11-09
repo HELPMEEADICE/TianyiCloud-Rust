@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod error;
 pub mod file;
 pub mod models;
+pub(crate) mod retry;
 pub mod task;
 pub mod theme;
 pub mod torrent;
