@@ -97,7 +97,9 @@ pub fn rsa_encrypt(public_key: &str, orig_data: &str) -> Result<String, crate::e
 fn pkcs7_padding(data: &[u8], block_size: usize) -> Vec<u8> {
     let padding = block_size - data.len() % block_size;
     let mut out = data.to_vec();
-    out.extend(std::iter::repeat(padding as u8).take(padding));
+    // `repeat_n` 语义与 `repeat().take()` 完全一致，但 clippy 认为后者更啰嗦
+    // （clippy 1.99 起 manual_repeat_n 默认告警，会让 CI 的 -D warnings 变红）。
+    out.extend(std::iter::repeat_n(padding as u8, padding));
     out
 }
 
