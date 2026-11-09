@@ -84,6 +84,9 @@ export component FluentTextField inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 enabled: root.enabled;
+                // 无障碍：TextInput 自带 text-input 角色，但名称默认为空；
+                // 用占位文本作为可读名称（登录页即"手机号 / 邮箱""密码"，搜索框即"搜索云盘文件"）。
+                accessible-label: root.placeholder;
                 font-family: Theme.font-family;
                 font-size: root.font-size;
                 color: Theme.text-primary;

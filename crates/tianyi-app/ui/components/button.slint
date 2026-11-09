@@ -25,6 +25,14 @@ export component FluentButton inherits Rectangle {
 
     callback clicked();
 
+    // 无障碍：暴露 button 角色，可读名称取按钮文字。
+    // 辅助技术触发的"默认动作"等价于鼠标点一下，走同一个 callback。
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
     height: Theme.control-height;
     min-width: root.min-w;
     border-radius: Theme.radius-control;

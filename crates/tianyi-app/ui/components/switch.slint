@@ -12,6 +12,15 @@ export component FluentSwitch inherits Rectangle {
 
     callback toggled();
 
+    // 无障碍：开关自身通常没有文字（标签在调用方的行标题里），
+    // 因此可读名称由调用方通过内建的 accessible-label 传入；
+    // 状态必须映射到 accessible-checked，动作等价于点一下。
+    accessible-role: switch;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.toggled();
+    }
+
     height: 24px;
     background: transparent;
     opacity: root.enabled ? 1.0 : 0.45;

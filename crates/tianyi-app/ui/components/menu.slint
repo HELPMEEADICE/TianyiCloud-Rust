@@ -15,6 +15,15 @@ export component FluentMenuItem inherits Rectangle {
 
     callback triggered();
 
+    // 无障碍：Slint 没有 menuitem 角色，用 button 表达"可触发的菜单行"；
+    // 快捷键不是按钮文字的一部分，放进 description 供辅助技术附加朗读。
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.shortcut;
+    accessible-action-default => {
+        root.triggered();
+    }
+
     height: 32px;
     border-radius: Theme.radius-control;
     opacity: root.enabled ? 1.0 : 0.4;

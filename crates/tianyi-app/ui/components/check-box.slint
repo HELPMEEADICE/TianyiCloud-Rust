@@ -10,6 +10,14 @@ export component FluentCheckBox inherits Rectangle {
 
     callback toggled();
 
+    // 无障碍：复选盒的选中态必须跟着实际状态走，否则屏幕阅读器会一直报"未选中"。
+    accessible-role: checkbox;
+    accessible-label: root.text;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.toggled();
+    }
+
     height: 24px;
     background: transparent;
     opacity: root.enabled ? 1.0 : 0.45;

@@ -193,6 +193,8 @@ export component SettingsPage inherits Rectangle {
 
                             FluentSwitch {
                                 checked: root.reduce-motion;
+                                // 开关自己没有文字，可读名称由行标题提供
+                                accessible-label: "减少动画";
                                 toggled => {
                                     root.reduce-motion-changed(!root.reduce-motion);
                                 }

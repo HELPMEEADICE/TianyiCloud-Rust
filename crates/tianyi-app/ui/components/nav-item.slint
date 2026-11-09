@@ -30,6 +30,16 @@ export component FluentNavItem inherits Rectangle {
 
     callback clicked();
 
+    // 无障碍：导航项在辅助技术里是"按钮"（Slint 没有 navigation-item 角色）。
+    // 折叠态没有文字，accessible-label 刚好补回可读名称；
+    // 选中态用描述字段说明"当前页面"，而不是依赖左侧那条纯视觉的指示条。
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-description: root.selected ? "当前页面" : "";
+    accessible-action-default => {
+        root.clicked();
+    }
+
     // 徽章尺寸：固定三档，避免尺寸随内容抖动（与 WinUI InfoBadge 一致）
     property <int> badge-tier: root.badge > 99 ? 3 : root.badge > 9 ? 2 : 1;
     property <length> badge-w: root.badge-tier == 3 ? 34px : root.badge-tier == 2 ? 26px : 18px;

@@ -18,7 +18,7 @@
 //! 每条断言各自守住一个历史上真实出现过的布局缺陷，注释里写清了根因，
 //! 改 UI 时若把它们改红，先读那条注释再决定是不是真的要改布局。
 
-use i_slint_backend_testing::{ElementHandle, ElementQuery};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
 use slint::{ComponentHandle, Model};
 use std::sync::Once;
 use std::time::Duration;
@@ -50,6 +50,7 @@ fn ui_geometry_regression() {
     check_context_menu(&mut failures);
     check_empty_state_icon(&mut failures);
     check_detail_level_columns(&mut failures);
+    check_a11y_semantics(&mut failures);
     assert!(
         failures.is_empty(),
         "几何回归失败 {} 项：\n{}",
@@ -419,6 +420,212 @@ fn check_detail_level_columns(failures: &mut Vec<String>) {
                     });
                 }
             }
+        }
+    }
+}
+
+// ==================== F. 可访问性（辅助技术可读名称与角色） ====================
+
+/// 角色枚举的可读名。`AccessibleRole` 是 `#[non_exhaustive]`，匹配必须带兜底分支。
+fn role_name(role: Option<AccessibleRole>) -> &'static str {
+    match role {
+        Some(AccessibleRole::None) => "none",
+        Some(AccessibleRole::Button) => "button",
+        Some(AccessibleRole::Checkbox) => "checkbox",
+        Some(AccessibleRole::Switch) => "switch",
+        Some(AccessibleRole::TextInput) => "text-input",
+        Some(AccessibleRole::Text) => "text",
+        Some(AccessibleRole::Navigation) => "navigation",
+        _ => "other",
+    }
+}
+
+/// 元素的 accessible-label（没有就是空串）
+fn label_of(element: &ElementHandle) -> String {
+    element
+        .accessible_label()
+        .map(|label| label.to_string())
+        .unwrap_or_default()
+}
+
+/// 元素的 accessible-description（没有就是空串）
+fn description_of(element: &ElementHandle) -> String {
+    element
+        .accessible_description()
+        .map(|text| text.to_string())
+        .unwrap_or_default()
+}
+
+/// 按可访问标签查元素。注意 `Text` 也会把自己的文字当成 accessible-label，
+/// 所以同一段文字常常同时命中"容器"和它的文字子元素 —— 调用方必须再按角色筛。
+fn a11y_hits(ui: &crate::app::MainWindow, label: &str) -> Vec<ElementHandle> {
+    ElementHandle::find_by_accessible_label(ui, label).collect()
+}
+
+/// 从命中结果里按角色筛，并把每个命中的 (角色, 标签) 打印出来供人眼核对
+fn a11y_with_role(hits: &[ElementHandle], tag: &str, role: &str) -> Vec<ElementHandle> {
+    println!("F {tag}: 同标签命中 {} 个元素", hits.len());
+    let mut picked = Vec::new();
+    for element in hits {
+        let label = label_of(element);
+        let actual = role_name(element.accessible_role());
+        println!("F {tag}:   role={actual} label={label:?}");
+        if actual == role {
+            picked.push(element.clone());
+        }
+    }
+    picked
+}
+
+/// F. 可访问性：关键控件必须能被辅助技术**按可访问标签找到**，且角色正确。
+///
+/// 与 A~E 的几何断言不同，这里断言的是元素树里的可访问语义。每条断言都能因为
+/// "没写 accessible-label / accessible-role" 而变红 —— 判据不是"元素存在"，
+/// 而是"按标签查得到，且拿到的角色/状态对得上"。
+///
+/// 复选框的两态不是靠点鼠标（测试后端不能发鼠标事件），而是走辅助技术的
+/// `invoke_accessible_default_action()`：它等价于键盘/屏幕阅读器触发的默认动作。
+fn check_a11y_semantics(failures: &mut Vec<String>) {
+    // ---------- 已登录态：命令栏、搜索框、导航 ----------
+    {
+        let ui = boot(WIDE);
+        ui.set_logged_in(true);
+        settle();
+
+        // F1 主命令栏的「上传」按钮：资格来自 root.text，角色 button
+        let hits = a11y_hits(&ui, "上传");
+        let buttons = a11y_with_role(&hits, "F1 上传", "button");
+        expect(failures, buttons.len() == 1, || {
+            format!(
+                "F1: 按 accessible-label=\"上传\" 找到 {} 个 button（期望 1）\
+                 —— FluentButton 的 accessible-role / accessible-label 没生效",
+                buttons.len()
+            )
+        });
+        if let Some(button) = buttons.first() {
+            let label = label_of(button);
+            expect(failures, label == "上传", || {
+                format!("F1: 上传按钮的 accessible-label 实测 {label:?}，期望 \"上传\"")
+            });
+        }
+
+        // F2 搜索框：TextInput 自带 text-input 角色，本任务补的是可读名称
+        let hits = a11y_hits(&ui, "搜索云盘文件");
+        let inputs = a11y_with_role(&hits, "F2 搜索框", "text-input");
+        expect(failures, inputs.len() == 1, || {
+            format!(
+                "F2: 按 accessible-label=\"搜索云盘文件\" 找到 {} 个 text-input（期望 1）\
+                 —— FluentTextField 内层 TextInput 的 accessible-label 没绑到 placeholder",
+                inputs.len()
+            )
+        });
+        if let Some(input) = inputs.first() {
+            let label = label_of(input);
+            expect(failures, label == "搜索云盘文件", || {
+                format!("F2: 搜索框的 accessible-label 实测 {label:?}，期望 \"搜索云盘文件\"")
+            });
+        }
+
+        // F3 导航项「个人云」：角色 button，选中态用描述字段说明"当前页面"
+        let hits = a11y_hits(&ui, "个人云");
+        let navs = a11y_with_role(&hits, "F3 个人云", "button");
+        expect(failures, navs.len() == 1, || {
+            format!(
+                "F3: 按 accessible-label=\"个人云\" 找到 {} 个 button（期望 1）\
+                 —— FluentNavItem 的 accessible-role / accessible-label 没生效",
+                navs.len()
+            )
+        });
+        if let Some(nav) = navs.first() {
+            let description = description_of(nav);
+            expect(failures, description == "当前页面", || {
+                format!(
+                    "F3: 个人云是选中态，accessible-description 实测 {description:?}，\
+                     期望 \"当前页面\""
+                )
+            });
+        }
+
+        // F4 导航栏容器：landmark 角色 navigation
+        let hits = a11y_hits(&ui, "主导航");
+        let regions = a11y_with_role(&hits, "F4 主导航", "navigation");
+        expect(failures, regions.len() == 1, || {
+            format!(
+                "F4: 按 accessible-label=\"主导航\" 找到 {} 个 navigation 角色元素（期望 1）",
+                regions.len()
+            )
+        });
+    }
+
+    // ---------- 未登录态：登录页的「保存账号」复选框 ----------
+    {
+        let ui = boot(WIDE);
+        settle();
+
+        let hits = a11y_hits(&ui, "保存账号");
+        let checkboxes = a11y_with_role(&hits, "F5 保存账号", "checkbox");
+        expect(failures, checkboxes.len() == 1, || {
+            format!(
+                "F5: 按 accessible-label=\"保存账号\" 找到 {} 个 checkbox（期望 1）\
+                 —— FluentCheckBox 的 accessible-role / accessible-label 没生效",
+                checkboxes.len()
+            )
+        });
+        if let Some(checkbox) = checkboxes.first() {
+            // 登录页 save-account 默认为 true：初值必须读得出来
+            let first = checkbox.accessible_checked();
+            println!("F5 保存账号: 初始 accessible-checked={first:?}");
+            expect(failures, first == Some(true), || {
+                format!(
+                    "F5: 初始 accessible-checked 实测 {first:?}，期望 Some(true) —— \
+                     accessible-checked 没绑定到 root.checked"
+                )
+            });
+
+            // 走辅助技术的默认动作翻一次，必须真的变成未选中
+            checkbox.invoke_accessible_default_action();
+            settle();
+            let second = checkbox.accessible_checked();
+            println!("F5 保存账号: 触发默认动作后 accessible-checked={second:?}");
+            expect(failures, second == Some(false), || {
+                format!("F5: 触发默认动作后 accessible-checked 实测 {second:?}，期望 Some(false)")
+            });
+
+            // 再翻回来，确认两态都跟得住
+            checkbox.invoke_accessible_default_action();
+            settle();
+            let third = checkbox.accessible_checked();
+            println!("F5 保存账号: 再翻一次后 accessible-checked={third:?}");
+            expect(failures, third == Some(true), || {
+                format!(
+                    "F5: 第二次触发默认动作后 accessible-checked 实测 {third:?}，期待 Some(true)"
+                )
+            });
+        }
+    }
+
+    // ---------- 设置页：只有标签、自己没有文字的「减少动画」开关 ----------
+    {
+        let ui = boot(WIDE);
+        ui.set_logged_in(true);
+        ui.set_current_page(4);
+        settle();
+
+        let hits = a11y_hits(&ui, "减少动画");
+        let switches = a11y_with_role(&hits, "F6 减少动画", "switch");
+        expect(failures, switches.len() == 1, || {
+            format!(
+                "F6: 按 accessible-label=\"减少动画\" 找到 {} 个 switch（期望 1）\
+                 —— 设置页没给 FluentSwitch 传 accessible-label，或它没声明 switch 角色",
+                switches.len()
+            )
+        });
+        if let Some(toggle) = switches.first() {
+            let checked = toggle.accessible_checked();
+            println!("F6 减少动画: accessible-checked={checked:?}");
+            expect(failures, checked.is_some(), || {
+                "F6: 减少动画开关的 accessible-checked 读不到 —— 没绑定到 root.checked".to_string()
+            });
         }
     }
 }

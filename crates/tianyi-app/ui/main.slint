@@ -235,6 +235,9 @@ export component MainWindow inherits Window {
         // ---------------- 导航栏 ----------------
         nav := Rectangle {
             width: root.nav-compact ? Theme.nav-width-compact : Theme.nav-width;
+            // 无障碍：把导航栏标成一个导航区域，辅助技术可以整体跳过或整体进入
+            accessible-role: navigation;
+            accessible-label: "主导航";
             background: Theme.layer-bg;
             border-width: 1px;
             border-color: Theme.divider;
