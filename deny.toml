@@ -1,0 +1,31 @@
+# cargo-deny 配置
+#
+# 使用方：.github/workflows/ci.yml 的 `audit` 作业（EmbarkStudios/cargo-deny-action）。
+# 该作业是**非阻塞**的（continue-on-error: true），也不进入 `ci` 汇总门禁的 needs：
+# 它只负责把依赖树里的漏洞与许可证问题打成报告，红绿灯不拦 PR。
+#
+# 因此这里刻意保持最小：不为了"凑绿"去放大白名单，白名单只列本项目实际用到的
+# 宽松/常见许可证。首次运行若因某个依赖的许可证不在下表而报错，那是报告要暴露的信息，
+# 不是要靠改依赖或堆白名单掩盖的东西。
+
+[licenses]
+# 允许的许可证标识（SPDX）。常见宽松许可 + 项目自身 GPL-3.0 生态。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "BSL-1.0",
+]
+# 许可证识别置信度门槛；低于它的视为未知许可证并报错。
+confidence-threshold = 0.9
+
+# 漏洞库（RustSec）检查：全部使用 cargo-deny 默认值（默认数据库、默认 yanked 策略）。
+# 需要临时忽略某条 advisory 时再扩写本段，并写明理由。
+[advisories]

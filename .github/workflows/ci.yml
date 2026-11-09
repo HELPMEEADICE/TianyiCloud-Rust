@@ -5,6 +5,11 @@ name: CI
 #   * cargo clippy —— 静态检查（-D warnings，严格门禁）
 #   * cargo check  —— 三平台（Linux / Windows / macOS）编译校验
 #   * cargo test   —— 单元测试
+#
+# 另有两条**非阻塞**作业（continue-on-error，不进入汇总门禁 needs）：
+#   * audit    —— cargo-deny 检查依赖漏洞与许可证
+#   * coverage —— cargo-llvm-cov 输出行覆盖率摘要
+# 它们只出报告，红了也不拦 PR；报告请到 Actions 页面对应作业查看。
 
 on:
   push:
@@ -143,6 +148,12 @@ jobs:
         with:
           key: ci-test-windows
 
+      # 版本一致性：打包模板与 Cargo.toml 的 workspace 版本必须对齐。
+      # 放在 Windows 作业里是因为 runner 自带 pwsh，不需要额外引入 shell。
+      - name: 版本一致性校验
+        shell: pwsh
+        run: ./tools/check-versions.ps1
+
       - name: cargo test
         run: cargo test --workspace --locked
 
@@ -174,6 +185,52 @@ jobs:
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --locked
 
+  # ---------------------------------------------------------------- 依赖审计（非阻塞）
+  # 只出报告：continue-on-error 让它红也不影响本工作流结论，
+  # 且刻意**不**进入下面 `ci` 汇总作业的 needs（否则 needs.*.result 会把失败算进门禁）。
+  audit:
+    name: 依赖审计 (cargo-deny, 非阻塞)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          arguments: --all-features
+
+  # ---------------------------------------------------------------- 覆盖率（非阻塞）
+  # 同上：非阻塞，不进汇总门禁的 needs。
+  coverage:
+    name: 覆盖率 (cargo-llvm-cov, 非阻塞)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux GUI 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-coverage
+
+      - uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: cargo llvm-cov --summary-only
+        run: cargo llvm-cov --workspace --locked --summary-only
+
   # ---------------------------------------------------------------- 汇总门禁
   ci:
     name: CI 汇总
@@ -184,6 +241,7 @@ jobs:
       - name: 检查各任务结果
         run: |
           echo "fmt=${{ needs.fmt.result }} clippy=${{ needs.clippy.result }} check=${{ needs.check.result }} test=${{ needs.test.result }} test-windows=${{ needs.test-windows.result }} msrv=${{ needs.msrv.result }}"
+          echo "非阻塞作业（不计入本门禁）：audit / coverage —— 结果请到 Actions 页面查看各自作业"
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
             echo "存在失败的任务" >&2
             exit 1
