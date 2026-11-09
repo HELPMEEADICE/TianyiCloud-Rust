@@ -101,6 +101,8 @@ export component MainWindow inherits Window {
     // ==================== 提示与拖拽 ====================
     in property <string> notice-text: "";
     in property <string> notice-kind: "info";
+    /// 去重计数：同一段提示在 3 s 内重复出现时由控制器累加，Toast 用 " ×N" 呈现
+    in property <int> notice-count: 1;
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
 
@@ -132,6 +134,7 @@ export component MainWindow inherits Window {
     callback download_selected();
     callback rename_selected();
     callback rename_submitted(string, string);
+    callback rename_cancelled(string);
     callback copy_selected();
     callback move_selected_up();
     callback delete_selected();
@@ -683,6 +686,9 @@ export component MainWindow inherits Window {
                     rename-submitted(id, name) => {
                         root.rename_submitted(id, name);
                     }
+                    rename-cancelled(id) => {
+                        root.rename_cancelled(id);
+                    }
                     copy-selected => {
                         root.copy_selected();
                     }
@@ -842,7 +848,7 @@ export component MainWindow inherits Window {
             }
 
             Text {
-                text: root.notice-text;
+                text: root.notice-text + (root.notice-count > 1 ? " ×" + root.notice-count : "");
                 font-family: Theme.font-family;
                 font-size: Theme.font-small;
                 color: Theme.text-primary;

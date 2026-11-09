@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
 use tianyi_core::config::{AppConfig, AppStore, ThemeMode};
@@ -194,6 +195,10 @@ pub struct Controller {
     // ---------------- 主题 ----------------
     theme_mode: Mutex<ThemeMode>,
 
+    // ---------------- 提示条（Toast） ----------------
+    /// 去重与代际状态：只在 UI 线程上读写，`Arc` 只为了跨闭包共享
+    notice_slot: Arc<Mutex<NoticeSlot>>,
+
     // ---------------- 拖拽 ----------------
     drag_state: Mutex<Option<&'static crate::DragDropState>>,
     #[cfg(windows)]
@@ -237,6 +242,7 @@ impl Controller {
             rate_samples: Arc::new(Mutex::new(HashMap::new())),
             links: Mutex::new(Vec::new()),
             theme_mode: Mutex::new(theme_mode),
+            notice_slot: Arc::new(Mutex::new(NoticeSlot::default())),
             drag_state: Mutex::new(None),
             #[cfg(windows)]
             drag_out_busy: AtomicBool::new(false),
@@ -447,6 +453,14 @@ impl Controller {
             ui.on_rename_submitted(move |id, name| {
                 let c = c.clone();
                 c.rename_submitted(id.as_str(), name.as_str());
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_rename_cancelled(move |id| {
+                let c = c.clone();
+                c.rename_cancelled(id.as_str());
             });
         });
 
@@ -665,9 +679,7 @@ impl Controller {
         this.ui_set(move |ui| {
             ui.on_notice_closed(move || {
                 let c = c.clone();
-                c.set_ui_state(|ui| {
-                    ui.set_notice_text(SharedString::default());
-                });
+                c.dismiss_notice();
             });
         });
 
@@ -746,16 +758,44 @@ impl Controller {
         self.client.lock().unwrap().clone()
     }
 
-    /// 统一的提示条（InfoBar）
+    /// 统一的提示条（Toast）
+    ///
+    /// 到期自动消失；同一文案在去重窗口内重复出现时累加为 `×N` 而不是重开一段；
+    /// 计时器带代际，只有最新一代能清空，避免旧计时器把新提示吞掉。
     fn notice(&self, kind: &str, text: impl Into<String>) {
         let text: String = text.into();
         let kind = kind.to_string();
         if kind == "error" {
             log::warn!("notice(error): {text}");
         }
+        let slot = Arc::clone(&self.notice_slot);
         self.set_ui_state(move |ui| {
-            ui.set_notice_text(SharedString::from(text));
-            ui.set_notice_kind(SharedString::from(kind));
+            // 计时器必须建在事件循环线程上，这个闭包正是运行在 UI 线程
+            let weak = ui.as_weak();
+            let (gen, count) = slot.lock().unwrap().push(&text, now_millis());
+            ui.set_notice_text(SharedString::from(text.as_str()));
+            ui.set_notice_kind(SharedString::from(kind.as_str()));
+            ui.set_notice_count(count);
+            let ttl = notice_ttl(kind.as_str());
+            let slot = Arc::clone(&slot);
+            slint::Timer::single_shot(ttl, move || {
+                if !slot.lock().unwrap().expire(gen) {
+                    return;
+                }
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_notice_text(SharedString::default());
+                    ui.set_notice_count(1);
+                }
+            });
+        });
+    }
+
+    /// 用户手动关闭提示：同时让在途的自动消失计时器失效
+    fn dismiss_notice(&self) {
+        self.notice_slot.lock().unwrap().dismiss();
+        self.set_ui_state(|ui| {
+            ui.set_notice_text(SharedString::default());
+            ui.set_notice_count(1);
         });
     }
 
@@ -1796,6 +1836,19 @@ impl Controller {
                     this.notice("error", format!("重命名失败：{e}"));
                 }
             }
+        });
+    }
+
+    /// Esc 取消重命名：不碰后端，只把行从输入态退回展示态
+    ///
+    /// 必须与 rename_submitted 走同一条"清空 renaming-id"的路径——
+    /// 行内 TouchArea 在 renaming 时被禁用，不清空就再也点不回来。
+    fn rename_cancelled(&self, id: &str) {
+        log::debug!("rename cancelled: {id}");
+        let (renaming_id, status) = rename_cancelled_state();
+        self.set_ui_state(move |ui| {
+            ui.set_renaming_id(renaming_id);
+            ui.set_status_text(SharedString::from(status));
         });
     }
 
@@ -3048,6 +3101,89 @@ fn now_millis() -> u64 {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
+// ==================================================================
+// 提示条（Toast）：分级时长 + 去重 + 代际
+// ==================================================================
+
+/// 去重窗口（毫秒）：窗口内出现相同文案时只累加次数，不重开一段提示
+const NOTICE_DEDUP_MS: u64 = 3_000;
+
+/// 提示条自动消失时长
+///
+/// 错误信息通常要读完才知道怎么处理，给最长 8 s；正常反馈 3 s 足够，
+/// 警告居中取 5 s，未知类型按 info 处理。
+fn notice_ttl(kind: &str) -> Duration {
+    match kind {
+        "warning" => Duration::from_secs(5),
+        "error" => Duration::from_secs(8),
+        _ => Duration::from_secs(3),
+    }
+}
+
+/// 到期回调是否允许清空提示条
+///
+/// 连续操作会连排多个计时器；旧计时器到期时若直接抹掉文案，就会把刚出现的新提示吞掉，
+/// 所以只有"最新一代"的计时器有权清空。
+fn should_clear_notice(current_gen: u64, fired_gen: u64) -> bool {
+    current_gen == fired_gen
+}
+
+/// Toast 的去重与代际状态
+#[derive(Default)]
+struct NoticeSlot {
+    /// 每记录一条提示 +1；计时器只清空与自己同代的提示
+    gen: u64,
+    /// 当前展示的文案（空 = 没有提示）
+    text: String,
+    /// 最近一次记录时间（毫秒），用于判断去重窗口
+    at_ms: u64,
+    /// 去重窗口内的重复次数
+    count: i32,
+}
+
+impl NoticeSlot {
+    /// 记录一条提示，返回 (本代 gen, 应显示的重复次数)
+    fn push(&mut self, text: &str, now_ms: u64) -> (u64, i32) {
+        let repeat = !self.text.is_empty()
+            && self.text == text
+            && now_ms.saturating_sub(self.at_ms) <= NOTICE_DEDUP_MS;
+        if repeat {
+            self.count = self.count.saturating_add(1);
+        } else {
+            self.text = text.to_string();
+            self.count = 1;
+        }
+        self.at_ms = now_ms;
+        self.gen = self.gen.wrapping_add(1);
+        (self.gen, self.count)
+    }
+
+    /// 用户手动关闭：推进代际，让在途计时器失效
+    fn dismiss(&mut self) {
+        self.text.clear();
+        self.count = 1;
+        self.gen = self.gen.wrapping_add(1);
+    }
+
+    /// 计时器到期：仅当代际仍是自己的时候清空
+    fn expire(&mut self, fired_gen: u64) -> bool {
+        if !should_clear_notice(self.gen, fired_gen) {
+            return false;
+        }
+        self.text.clear();
+        self.count = 1;
+        true
+    }
+}
+
+/// 取消重命名后要写回 UI 的 (renaming-id, 状态栏文案)
+///
+/// 抽成纯函数，让"取消之后 renaming-id 必定为空"这条约定能被单元测试钉住：
+/// 重命名输入框原本只有 accepted 一个出口，Esc 必须走同一条清空路径。
+fn rename_cancelled_state() -> (SharedString, &'static str) {
+    (SharedString::default(), "已取消重命名")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3376,5 +3512,86 @@ mod tests {
         assert!(now_secs() > 1_600_000_000);
         assert!(now_millis() > 1_600_000_000_000);
         assert!(now_millis() / 1000 >= now_secs() as u64 - 1);
+    }
+
+    // ---------------- 提示条：分级时长 ----------------
+
+    #[test]
+    fn notice_ttl_maps_each_kind() {
+        assert_eq!(notice_ttl("info"), Duration::from_secs(3));
+        assert_eq!(notice_ttl("success"), Duration::from_secs(3));
+        assert_eq!(notice_ttl("warning"), Duration::from_secs(5));
+        assert_eq!(notice_ttl("error"), Duration::from_secs(8));
+        // 未知类型退化为 info 的时长，不会变成"永不消失"
+        assert_eq!(notice_ttl("never-seen"), Duration::from_secs(3));
+    }
+
+    // ---------------- 提示条：去重 ----------------
+
+    #[test]
+    fn notice_same_text_within_window_accumulates() {
+        let mut slot = NoticeSlot::default();
+        assert_eq!(slot.push("已删除 1 项", 1_000).1, 1);
+        assert_eq!(slot.push("已删除 1 项", 1_500).1, 2);
+        // 窗口边界（恰好 3 s）仍算重复
+        assert_eq!(slot.push("已删除 1 项", 4_000).1, 3);
+        assert_eq!(slot.text, "已删除 1 项");
+    }
+
+    #[test]
+    fn notice_dedup_window_expires() {
+        let mut slot = NoticeSlot::default();
+        assert_eq!(slot.push("已删除 1 项", 1_000).1, 1);
+        // 超过 3 s：视为新提示，计数回到 1
+        assert_eq!(slot.push("已删除 1 项", 4_001).1, 1);
+    }
+
+    #[test]
+    fn notice_different_text_resets_count() {
+        let mut slot = NoticeSlot::default();
+        assert_eq!(slot.push("已复制链接", 1_000).1, 1);
+        assert_eq!(slot.push("已复制链接", 1_100).1, 2);
+        // 文案变了：不再叠加，计数回到 1
+        assert_eq!(slot.push("已删除 1 项", 1_200).1, 1);
+        assert_eq!(slot.text, "已删除 1 项");
+    }
+
+    // ---------------- 提示条：代际 ----------------
+
+    #[test]
+    fn stale_notice_timer_cannot_clear_newer_notice() {
+        let mut slot = NoticeSlot::default();
+        let (old_gen, _) = slot.push("第一条", 1_000);
+        let (new_gen, _) = slot.push("第二条", 1_100);
+        assert_ne!(old_gen, new_gen);
+        assert!(!should_clear_notice(new_gen, old_gen));
+        // 旧计时器到期：不动新提示
+        assert!(!slot.expire(old_gen));
+        assert_eq!(slot.text, "第二条");
+        // 最新一代到期：允许清空
+        assert!(should_clear_notice(new_gen, new_gen));
+        assert!(slot.expire(new_gen));
+        assert!(slot.text.is_empty());
+    }
+
+    #[test]
+    fn manual_close_invalidates_pending_notice_timer() {
+        let mut slot = NoticeSlot::default();
+        let (gen, _) = slot.push("已复制链接", 1_000);
+        slot.dismiss();
+        // 手动关闭后，在途计时器即使到期也不能再动状态
+        assert!(!slot.expire(gen));
+        assert!(slot.text.is_empty());
+        assert_eq!(slot.count, 1);
+    }
+
+    // ---------------- 重命名取消 ----------------
+
+    #[test]
+    fn rename_cancel_clears_renaming_id() {
+        let (renaming_id, status) = rename_cancelled_state();
+        // 空 id = 没有任何行处于输入态，行内 TouchArea 恢复可用
+        assert!(renaming_id.is_empty());
+        assert_eq!(status, "已取消重命名");
     }
 }
