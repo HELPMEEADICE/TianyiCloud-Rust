@@ -111,11 +111,15 @@ export global InputMode {
 
     /// **唯一写入入口**：所有控件都通过它更新键盘模式，不得直接写 `keyboard`。
     ///
-    /// 当前用"焦点变化的原因"近似键盘/鼠标：Tab 进入 = 键盘，其余（鼠标点击等）
-    /// = 鼠标。精确的信号其实是窗口层的原始输入事件（winit 的 `KeyboardInput` /
-    /// `MouseInput`），但那要求 Rust 侧能写这个 global —— 即 `ui/main.slint` 把
-    /// `InputMode` 加进 `export { ... } from "types.slint"` 的导出列表。
-    /// 换驱动源时只改本函数体（调用方一行都不用动）。
+    /// 有两个驱动源，二者结论一致、互为兜底：
+    /// 1. **主驱动**：`src/main.rs` 的 winit 钩子把原始输入事件映射过来——任何
+    ///    `KeyboardInput` 置真，任何鼠标按下置假。它覆盖了 focus-reason 判断不到的
+    ///    两种情况：点击空白处（没有可聚焦元素，不产生 focus 变化）、点击已聚焦的
+    ///    同一控件（reason 不变）。
+    /// 2. **兜底**：`track-focus(reason)` 用"焦点变化的原因"近似——Tab 进入 = 键盘，
+    ///    其余 = 鼠标。没有 winit 窗口时（例如 `examples/ui_preview` 的软件渲染器）
+    ///    仍能保持行为合理。
+    /// 换驱动源时只改本函数体或 Rust 侧那一处（调用方一行都不用动）。
     public function track-focus(reason: FocusReason) {
         keyboard = reason == FocusReason.tab-navigation;
     }

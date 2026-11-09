@@ -29,7 +29,7 @@ import { SettingsPage } from "pages/settings.slint";
 
 // 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
 export { Theme } from "theme/tokens.slint";
-export { DragOutApi, ModifiersApi } from "types.slint";
+export { DragOutApi, InputMode, ModifiersApi } from "types.slint";
 
 export component MainWindow inherits Window {
     title: "天翼云盘";

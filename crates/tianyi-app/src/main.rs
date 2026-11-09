@@ -101,6 +101,23 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
                     keys.set_alt(s.contains(ModifiersState::ALT));
                 }
             }
+            // 键盘 / 鼠标模式：焦点环只在键盘操作时出现（对齐 WinUI 的 :focus-visible）。
+            // 控件里的 focus-reason 近似在两处会失真——点击空白处（无可聚焦元素，不会
+            // 产生 focus 变化）与点击已聚焦的同一控件（reason 不变）。窗口层的原始输入
+            // 事件能把它们彻底覆盖，因此这里是主要驱动源，focus-reason 作为兜底。
+            winit::event::WindowEvent::KeyboardInput { .. } => {
+                if let Some(app) = ui.upgrade() {
+                    app.global::<crate::app::InputMode>().set_keyboard(true);
+                }
+            }
+            winit::event::WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                ..
+            } => {
+                if let Some(app) = ui.upgrade() {
+                    app.global::<crate::app::InputMode>().set_keyboard(false);
+                }
+            }
             winit::event::WindowEvent::HoveredFile(_) => {
                 state.hovering.store(true, Ordering::SeqCst);
                 let ui = ui.clone();
