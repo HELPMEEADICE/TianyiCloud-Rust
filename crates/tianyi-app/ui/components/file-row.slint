@@ -35,6 +35,8 @@ export component FileRow inherits Rectangle {
     callback item-double-clicked();
     callback context-requested(string, string, bool, length, length);
     callback rename-submitted(string);
+    /// Esc 退出重命名：只收起输入态，不提交任何名字
+    callback rename-cancelled();
     callback drop-can-accept(DropEvent, string) -> DragAction;
     callback drop-requested(DropEvent, string) -> DragAction;
 
@@ -145,6 +147,17 @@ export component FileRow inherits Rectangle {
                     selection-foreground-color: Theme.text-on-accent;
                     accepted => {
                         root.rename-submitted(rename-input.text);
+                    }
+                    // Esc 是回车之外唯一的退出通道：行内 TouchArea 在 renaming 时被禁用，
+                    // 输入框一旦失去焦点就再也点不回来，必须在这里收尾。
+                    // 语义按 TextInput 文档：accept = 已处理（不再交给 TextInput），
+                    // reject = 交回 TextInput 正常处理——所以只有 Esc 返回 accept。
+                    key-pressed(event) => {
+                        if (event.text == Key.Escape) {
+                            root.rename-cancelled();
+                            return accept;
+                        }
+                        return reject;
                     }
                 }
             }
