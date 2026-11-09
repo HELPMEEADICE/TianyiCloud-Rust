@@ -41,7 +41,7 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 - 可展开的传输抽屉（默认收起，状态栏有实时任务计数）、统一 InfoBar 状态反馈、轻量 Tooltip 浮层
 - 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
-  详见 [ICON_SYSTEM_MIGRATION.md](ICON_SYSTEM_MIGRATION.md) 与
+  详见 [docs/ICON_SYSTEM_MIGRATION.md](docs/ICON_SYSTEM_MIGRATION.md) 与
   `crates/tianyi-app/ui/assets/icons/SOURCES.md`
 - 支持“减少动画”，关闭全部过渡动画
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
@@ -99,6 +99,22 @@ cargo build --release
 ```
 
 开发模式：`cargo run -p tianyi-app`
+
+仓库根目录的 `rust-toolchain.toml` 固定了 `channel = "stable"`，并声明 `rustfmt` / `clippy` 两个组件
+（MSRV 在 `Cargo.toml` 的 `rust-version` 里单独声明，CI 的 `msrv` 作业按它校验）；
+`cargo` 在该目录下会自动使用这份工具链清单，无需手动 `rustup default`。
+
+## 测试与门禁
+
+- **单元测试**：`cargo test --workspace`。除核心库的持久化/任务状态机测试外，UI 层还有一组基于
+  Slint 测试后端的**几何断言**（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局尺寸。
+- **代码门禁**：`cargo fmt --all -- --check` 与 `cargo clippy --workspace --all-targets --locked -- -D warnings`
+  在 CI 中都是硬门禁（`ci` 汇总作业会因此失败）；`cargo check --workspace --all-targets` 覆盖三平台。
+- **本机（MSYS2 ucrt64）跑 clippy**：本机没有 rustup/`link.exe`，`cargo clippy` 会转发到 msvc 工具链而失败，
+  用等价替代 `pwsh tools/clippy.ps1`（本质是 `RUSTC_WORKSPACE_WRAPPER=clippy-driver` + `cargo check`），
+  详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **只出报告、不拦门禁**的两个 CI 作业：`audit`（`cargo-deny` 依赖漏洞/许可证）与 `coverage`
+  （`cargo-llvm-cov` 行覆盖率摘要）。它们是 `continue-on-error` 且不在 `ci` 汇总作业的 `needs` 里。
 
 ## CI / 发布流水线
 
