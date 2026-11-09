@@ -34,6 +34,10 @@ const SIZES: [(f32, f32); 2] = [NARROW, WIDE];
 /// 云盘页根布局的横向内边距：`ui/pages/cloud.slint` 的 `padding-left/right: Theme.space-4`
 const PAGE_PADDING: f32 = 16.0;
 
+/// 状态栏传输胶囊的内容宽度上界（px）：实际内容宽约 84px，这里给字体度量留余量，
+/// 同时与"被主轴 stretch 拉宽"后的量级（400px 以上）保持可区分的差距
+const CHIP_MAX_WIDTH: f32 = 120.0;
+
 /// 进程内只能初始化一次测试后端（Slint 的平台是进程级全局状态）
 static INIT: Once = Once::new();
 
@@ -156,12 +160,20 @@ fn check_login_card(failures: &mut Vec<String>) {
     }
 }
 
-/// B. 状态栏传输胶囊：右边缘贴着内容区右边缘减去页内边距。
+/// B. 状态栏传输胶囊：宽度只由内容决定（不参与主轴 stretch），且右边缘贴住内容区右侧。
 ///
 /// 根因：`Rectangle` 在 `HorizontalLayout` 里默认参与主轴 stretch 分配，
-/// 少了 `horizontal-stretch: 0` 就会被拉成整行；这条断言同时守住"被拉宽"和
-/// "贴错边"两种表现（右边缘会明显偏离）。
+/// 少了 `horizontal-stretch: 0` 就会被拉宽 —— 剩余空间在状态文本与胶囊之间分摊，
+/// 胶囊吃到大半行（900 宽窗口下约 426px）。
+///
+/// 只断言"右边缘贴右"抓不到这个缺陷：胶囊是状态栏的**最后一个**子元素，无论是否
+/// 参与 stretch 分配，它的右边缘都贴着容器右侧，那条断言在任何宽度下恒真。
+/// 真正的判别量是**跨窗口宽度的宽度不变量**：胶囊宽度只由内容决定，窗口从 900
+/// 加宽到 1180 时不得变化；一旦它参与 stretch，宽度会随剩余空间一起增长。
 fn check_task_chip(failures: &mut Vec<String>) {
+    // 逐档实测的 (窗口宽, 胶囊宽)
+    let mut widths: Vec<(f32, f32)> = Vec::new();
+
     for (width, height) in SIZES {
         let ui = boot((width, height));
         ui.set_logged_in(true);
@@ -183,14 +195,32 @@ fn check_task_chip(failures: &mut Vec<String>) {
         expect(failures, (chip_right - expected_right).abs() <= 2.0, || {
             format!("B {width}x{height}: 传输胶囊右边缘 {chip_right:.1} 偏离 {expected_right:.1}")
         });
-        // 胶囊按内容自适应宽度：被主轴 stretch 拉成整行时这个上限会被突破
-        expect(failures, chip_size.width < width / 2.0, || {
+        // 内容宽度的绝对上界：实际内容宽约 84px，120px 给字体度量留足余量，
+        // 但与"被主轴拉伸"（约 426px）差一个量级。
+        expect(failures, chip_size.width <= CHIP_MAX_WIDTH, || {
             format!(
-                "B {width}x{height}: 传输胶囊宽度 {:.1} 被拉成了整行",
+                "B {width}x{height}: 传输胶囊宽度 {:.1} 超过内容宽度上界 {CHIP_MAX_WIDTH:.0}px",
                 chip_size.width,
             )
         });
+
+        widths.push((width, chip_size.width));
     }
+
+    // 跨档不变量：胶囊宽度与窗口宽度无关
+    let (narrow_window, narrow_chip) = widths[0];
+    let (wide_window, wide_chip) = widths[1];
+    println!(
+        "B: chip.width 跨档 {narrow_chip:.1}@{narrow_window:.0}x vs {wide_chip:.1}@{wide_window:.0}x \
+         差值={:.1}",
+        (wide_chip - narrow_chip).abs(),
+    );
+    expect(failures, (wide_chip - narrow_chip).abs() <= 1.0, || {
+        format!(
+            "B: 胶囊宽度随窗口宽度变化（{narrow_chip:.1}@{narrow_window:.0}x vs \
+             {wide_chip:.1}@{wide_window:.0}x）—— 它参与了主轴 stretch 分配"
+        )
+    });
 }
 
 /// C. 右键菜单：把上下文坐标推到窗口四角，菜单矩形必须始终完整落在窗口内。
