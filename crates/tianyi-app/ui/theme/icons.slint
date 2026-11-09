@@ -16,7 +16,13 @@
 //    所以官方 SVG 保持微软原始字节，深浅色/选中/禁用全部在 Slint 侧着色，
 //    不需要为每种颜色复制一份图标，也不存在彩色图标被染坏的情况。
 //  * 风格规范（Fluent Design 2）：默认 Regular，选中态用 Filled。
-//    两者 canvas 一致（24×24），切换时不会改变尺寸或位置。
+//    同一图标的两种风格 canvas 完全一致，切换时不会改变尺寸或位置。
+//
+//  * 画布尺寸：绝大多数图标是官方 24×24 画布，按目标尺寸重新栅格化。
+//    唯一例外是「登录」：上游没有 24px 的 Sign In / Arrow Enter（逐文件实测 404），
+//    因此改用官方 20×20 的 arrow_enter。它在 20px 下显示时笔画视觉重量与
+//    24 画布缩放到 20px 的图标略有差异（WinUI 允许的取舍），若将来上游补上
+//    24px 版本，改 tools/fetch-fluent-icons.ps1 清单里的 size 即可。
 //
 // 修改图标清单：改 tools/fetch-fluent-icons.ps1 里的 $manifest，重跑该脚本，
 // 它会下载缺失资源、更新 SOURCES.md，并回填下面两个 generated 区块。
@@ -249,7 +255,8 @@ export component Icon inherits Image {
     /// 不裁切、不失真；组件布局留白与 SVG 自身留白严格分离。
     image-fit: contain;
     image-rendering: smooth;
-    /// none 不参与布局绘制（但仍占位，便于状态切换时布局不动）
+    /// none 直接不绘制；调用方都用显式坐标把它放在固定尺寸的容器里，
+    /// 因此隐藏后不会引起布局跳动（不要把它放进 LinearLayout 依赖占位）
     visible: root.name != IconName.none;
     // <generated:source>
     source: root.name == IconName.none ? IconAssets.placeholder
@@ -318,6 +325,8 @@ export component Icon inherits Image {
         easing: ease-out;
     }
 }
+
+
 
 
 

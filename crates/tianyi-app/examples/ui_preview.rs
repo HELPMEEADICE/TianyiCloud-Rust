@@ -405,5 +405,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_qr_status(SharedString::from("等待扫码…"));
     shoot(&ui, &window, &out, "21-login-qr", 1180, 760)?;
 
+    // ---------------- 22. 文件右键菜单（菜单项图标覆盖） ----------------
+    // 上下文菜单里的图标只有在右键后才出现，普通页面截图覆盖不到，
+    // 这里直接把菜单状态置起来渲染一张。
+    ui.set_qr_mode(false);
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+    ui.set_list_state(SharedString::from("ready"));
+    ui.set_file_list(ModelRc::new(VecModel::from(demo_files())));
+    ui.set_status_text(SharedString::from("8 个项目"));
+    ui.set_context_item_id(SharedString::from("f1"));
+    ui.set_context_item_name(SharedString::from(
+        "2024年度产品规划与季度目标拆解_v3_final.docx",
+    ));
+    ui.set_context_is_dir(false);
+    ui.set_context_x(520.0);
+    ui.set_context_y(240.0);
+    ui.set_context_open(true);
+    shoot(&ui, &window, &out, "22-context-menu", 1180, 760)?;
+    ui.set_context_open(false);
+
     Ok(())
 }

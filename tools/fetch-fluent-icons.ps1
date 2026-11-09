@@ -189,7 +189,7 @@ $sb = [System.Text.StringBuilder]::new()
 [void]$sb.AppendLine("| 引用 | ``$Ref`` |")
 [void]$sb.AppendLine("| 解析到的提交 | ``$commit`` |")
 [void]$sb.AppendLine('| 许可证 | MIT（见同目录 LICENSE） |')
-[void]$sb.AppendLine('| 规格 | 24px 画布，Regular 为默认态，Filled 为选中态 |')
+[void]$sb.AppendLine(('| 规格 | 24px 画布（{0} 个图标因上游无 24px 版本改用其它尺寸，见下表画布列）；Regular 为默认态，Filled 为选中态 |' -f ($rows | Where-Object { $_.size -ne 24 }).Count))
 [void]$sb.AppendLine("| 抓取时间 | $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') |")
 [void]$sb.AppendLine()
 [void]$sb.AppendLine('## 文件清单与语义映射')
@@ -312,7 +312,7 @@ Add-Lines @(
     '        cross-axis-alignment: start;',
     '',
     '        Text {',
-    ('            text: "Fluent UI System Icons · {0} 个图标（112 个 SVG） · 24px 画布 · Regular 与 Filled 对照";' -f $rows.Count),
+    ('            text: "Fluent UI System Icons · {0} 个图标（{1} 个 SVG） · 官方 24px 画布（{2} 个例外） · Regular 与 Filled 对照";' -f $rows.Count, ($rows.Count * 2), ($rows | Where-Object { $_.size -ne 24 }).Count),
     '            font-family: Theme.font-family;',
     '            font-size: Theme.font-body-large;',
     '            font-weight: Theme.weight-semibold;',

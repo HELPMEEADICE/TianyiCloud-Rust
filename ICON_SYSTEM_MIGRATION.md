@@ -276,7 +276,40 @@ Rust 侧逻辑未改动，本次只替换 UI 图标层与导航项布局，`carg
 
 ---
 
-## 10. 无法验证的部分及原因
+## 10. 独立复核
+
+实现完成后由独立复核者（只读、不改文件、不跑 cargo）逐条核查了：自绘图标残留、
+注册表三方一致性、`@image-url` 路径可解析性、Icon 尺寸/着色、徽章布局、
+许可与溯源、资源嵌入方式、旧 API 回归面。
+
+结论：**通过，无阻塞项**。复核给出的证据摘要：
+
+```text
+ui/ 下 Slint Path 仅剩 1 处：components/spinner.slint 的进度环（非图标）
+图标字体 / Emoji 当图标 / 矩形拼图标：0
+IconName 57 = none + 56；@image-url 113（1 placeholder + 112）；磁盘 112；缺失 0；孤儿 0
+查表分支 56/56 全覆盖；SOURCES.md 映射表 56 行
+112 个 SVG 仅含 <svg> + <path>，无 <image>/<script>/foreignObject
+110 个 viewBox 为 0 0 24 24，2 个为 0 0 20 20（同一 login 的 regular/filled，画布一致）
+徽章：宽度显式 18/26/34px，x 由自身宽度反推，展开态占 184..218（界内），折叠态改圆点
+```
+
+复核提出的 4 条**非阻塞**项已全部修正（本轮提交）：
+
+1. `icons.slint` / `tokens.slint` / `SOURCES.md` 里“24px 画布”的说法与事实不符
+   → 改为“24px 画布，1 个图标按上游可用尺寸为 20px”，并在 `icons.slint` 头部显式记录该例外。
+2. 图标总览标题把“112 个 SVG / 24px 画布”写成字面量
+   → 改为从清单推导（`$rows.Count * 2` 与尺寸例外数），清单变化时不会自相矛盾。
+3. `login` 用 20 画布而其余 24 画布，同尺寸下笔画视觉重量略有差异
+   → 在 `icons.slint` 头部写明这是 WinUI 允许的取舍，并注明上游补上 24px 版本时的改法。
+4. `visible: name != none` 的注释称“仍占位”不准确（Slint 里 `visible:false` 不参与布局）
+   → 注释改为“不绘制；调用方都在显式坐标的固定尺寸容器里，故不会布局跳动”。
+
+另需说明：`components/spinner.slint` 保留的 `Path` 是**加载进度环**（弧线动画），
+不是 UI 图标，本次不做改动；`cloud.slint` / `login.slint` 文案里的 `←`、`→`
+是纯文本提示（tooltip / 说明文字），不是图标。
+
+## 11. 无法验证的部分及原因
 
 1. **真实 150%/200% DPI 的窗口截图**：本机无交互桌面会话可用
    （`MinimalSoftwareWindow` 的 scale factor 固定为 1.0，且没有 setter）。
