@@ -11,7 +11,7 @@
 use crate::app::{CrumbEntry, DirectLink, DragOutApi, FileEntry, MainWindow, Theme, TransferEntry};
 use crate::backend::{invoke_ui, Backend};
 use slint::{ComponentHandle, SharedString, Weak};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -159,6 +159,23 @@ pub struct Controller {
     search_gen: AtomicU64,
     space_gen: AtomicU64,
 
+    // ---------------- 选择 ----------------
+    /// 多选：当前选中的文件 id（唯一事实来源；UI 只读 FileEntry.selected）
+    selected_ids: Mutex<Vec<String>>,
+    /// Shift 范围选择的锚点 id
+    selection_anchor: Mutex<String>,
+    /// 当前文件列表条目的缓存：选择变化时只更新 selected 标记，不重新构造文件对象
+    entry_cache: Mutex<Vec<FileEntry>>,
+
+    // ---------------- 排序 ----------------
+    /// 0 = 名称，1 = 大小，2 = 修改时间
+    sort_key: Mutex<i32>,
+    sort_asc: Mutex<bool>,
+
+    // ---------------- 确认对话框 ----------------
+    /// 等待用户确认的动作（危险操作不直接执行）
+    pending_confirm: Mutex<Option<PendingConfirm>>,
+
     // ---------------- 登录 ----------------
     login_gen: Arc<AtomicU64>,
 
@@ -207,6 +224,12 @@ impl Controller {
             dir_gen: AtomicU64::new(0),
             search_gen: AtomicU64::new(0),
             space_gen: AtomicU64::new(0),
+            selected_ids: Mutex::new(Vec::new()),
+            selection_anchor: Mutex::new(String::new()),
+            entry_cache: Mutex::new(Vec::new()),
+            sort_key: Mutex::new(0),
+            sort_asc: Mutex::new(true),
+            pending_confirm: Mutex::new(None),
             login_gen: Arc::new(AtomicU64::new(0)),
             tasks: Arc::new(tasks),
             controls: Mutex::new(HashMap::new()),
@@ -299,9 +322,50 @@ impl Controller {
 
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
-            ui.on_select_item(move |id| {
+            ui.on_select_item(move |id, ctrl, shift| {
                 let c = c.clone();
-                c.handle_select_item(id.as_str());
+                c.handle_select_item(id.as_str(), ctrl, shift);
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_select_all(move || {
+                let c = c.clone();
+                c.select_all_items();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_clear_selection(move || {
+                let c = c.clone();
+                c.set_selection(Vec::new());
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_sort_changed(move |key| {
+                let c = c.clone();
+                c.sort_changed(key);
+            });
+        });
+
+        // ---------------- 确认对话框 ----------------
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_dialog_confirm(move || {
+                let c = c.clone();
+                c.dialog_confirm();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_dialog_cancel(move || {
+                let c = c.clone();
+                c.dialog_cancel();
             });
         });
 
@@ -571,6 +635,21 @@ impl Controller {
             ui.on_open_config_dir(move || {
                 let c = c.clone();
                 c.open_config_dir();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_copy_text(move |text| {
+                let c = c.clone();
+                let text = text.to_string();
+                if text.trim().is_empty() {
+                    return;
+                }
+                match copy_to_clipboard(&text) {
+                    Ok(()) => c.notice("success", "已复制到剪贴板"),
+                    Err(e) => c.notice("error", format!("复制失败：{e}")),
+                }
             });
         });
 
@@ -1081,10 +1160,9 @@ impl Controller {
             ui.set_login_error(SharedString::default());
             ui.set_current_page(0);
             ui.set_search_keyword(SharedString::default());
-            ui.set_select_all(false);
             ui.set_notice_text(SharedString::default());
         });
-        this.refresh_files();
+        this.load_dir(false);
         this.load_capacity();
         this.refresh_transfers();
     }
@@ -1122,9 +1200,8 @@ impl Controller {
             ui.set_crumbs(slint::ModelRc::default());
             ui.set_searching(false);
             ui.set_search_keyword(SharedString::default());
-            ui.set_selected_id(SharedString::default());
-            ui.set_select_all(false);
             ui.set_renaming_id(SharedString::default());
+            ui.set_list_state(SharedString::from("idle"));
             ui.set_total_space(SharedString::default());
             ui.set_used_space(SharedString::default());
             ui.set_capacity_ratio(0.0);
@@ -1185,68 +1262,185 @@ impl Controller {
         }
     }
 
-    fn push_rows(&self, rows: Vec<FileObject>) {
-        let entries = files_to_entries(&rows);
+    /// 把行数据推送到 UI，并按当前选择集标记 selected
+    fn push_rows(&self, rows: &[FileObject]) {
+        let selected: HashSet<String> = self.selected_ids.lock().unwrap().iter().cloned().collect();
+        let entries = files_to_entries(rows, &selected);
+        *self.entry_cache.lock().unwrap() = entries.clone();
+        let count = selected.len() as i32;
         self.set_ui_state(move |ui| {
             ui.set_file_list(entries_model(entries));
+            ui.set_selected_count(count);
         });
     }
 
-    /// 加载当前目录
+    /// 更新选择集
+    ///
+    /// 这是选择状态的唯一事实来源：UI 侧只读 FileEntry.selected 与 selected-count，
+    /// 不允许自己维护一份"看起来选中了"的状态，避免出现界面多选、操作只作用于一个文件。
+    fn set_selection(&self, ids: Vec<String>) {
+        *self.selected_ids.lock().unwrap() = ids.clone();
+        let set: HashSet<String> = ids.iter().cloned().collect();
+        let mut cache = self.entry_cache.lock().unwrap();
+        for e in cache.iter_mut() {
+            e.selected = set.contains(e.id.as_str());
+        }
+        let entries = cache.clone();
+        drop(cache);
+        let count = ids.len() as i32;
+        self.set_ui_state(move |ui| {
+            ui.set_file_list(entries_model(entries));
+            ui.set_selected_count(count);
+        });
+    }
+
+    /// 丢弃已不在列表里的选中项（不会触发额外的 UI 更新）
+    fn retain_selection(&self, rows: &[FileObject]) {
+        let live: HashSet<&str> = rows.iter().map(|f| f.id.as_str()).collect();
+        self.selected_ids
+            .lock()
+            .unwrap()
+            .retain(|id| live.contains(id.as_str()));
+    }
+
+    fn sort_key_pair(&self) -> (i32, bool) {
+        (
+            *self.sort_key.lock().unwrap(),
+            *self.sort_asc.lock().unwrap(),
+        )
+    }
+
+    fn sorted_rows(&self, rows: &mut [FileObject]) {
+        let (key, asc) = self.sort_key_pair();
+        sort_files(rows, key, asc);
+    }
+
+    fn push_sort_state(&self) {
+        let (key, asc) = self.sort_key_pair();
+        self.set_ui_state(move |ui| {
+            ui.set_sort_key(key);
+            ui.set_sort_asc(asc);
+        });
+    }
+
+    /// 列表状态与状态栏文案一起更新，避免"加载中"标志和文案不同步
+    fn set_list_state(&self, state: &str, status: &str) {
+        let state = state.to_string();
+        let status = status.to_string();
+        self.set_ui_state(move |ui| {
+            ui.set_list_state(SharedString::from(state));
+            ui.set_status_text(SharedString::from(status));
+        });
+    }
+
+    fn set_file_error(&self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.set_ui_state(move |ui| {
+            ui.set_file_error(SharedString::from(msg));
+        });
+    }
+
+    /// 切换排序：同一列再次点击变为反向
+    fn sort_changed(self: &Arc<Self>, key: i32) {
+        let key = key.clamp(0, 2);
+        {
+            let mut cur = self.sort_key.lock().unwrap();
+            let mut asc = self.sort_asc.lock().unwrap();
+            if *cur == key {
+                *asc = !*asc;
+            } else {
+                *cur = key;
+                *asc = true;
+            }
+        }
+        let mut rows = self.visible_rows.lock().unwrap().clone();
+        self.sorted_rows(&mut rows);
+        *self.visible_rows.lock().unwrap() = rows.clone();
+        {
+            let mut dir = self.dir_rows.lock().unwrap();
+            self.sorted_rows(&mut dir);
+        }
+        let (key, asc) = self.sort_key_pair();
+        self.push_sort_state();
+        self.push_rows(&rows);
+        self.set_status(format!(
+            "已按{} {}排序",
+            sort_label(key),
+            if asc { "升序" } else { "降序" }
+        ));
+    }
+
+    /// 加载当前目录（F5 / 刷新按钮 / 操作后刷新）
+    ///
+    /// 同一目录的刷新保留选中项与已有列表内容，只给非侵入式刷新指示；
+    /// 目录切换由 `load_dir(false)` 走另一条路径。
     pub fn refresh_files(self: &Arc<Self>) {
+        self.load_dir(true)
+    }
+
+    /// 重新加载当前目录
+    ///
+    /// keep_selection=true → 视为刷新：保留选中项与列表内容
+    /// keep_selection=false → 视为目录切换：清空选择，重新进入加载态
+    fn load_dir(self: &Arc<Self>, keep_selection: bool) {
         let gen = self.dir_gen.fetch_add(1, Ordering::SeqCst) + 1;
         // 任何目录加载都会终止搜索结果
         self.search_gen.fetch_add(1, Ordering::SeqCst);
+        if !keep_selection {
+            self.set_selection(Vec::new());
+        }
         let Some(client) = self.client() else {
-            self.set_ui_state(|ui| {
-                ui.set_file_loading(false);
-                ui.set_status_text(SharedString::from("未登录"));
-            });
+            self.set_list_state("error", "未登录");
+            self.set_file_error("未登录");
             return;
         };
+        let had_rows = !self.visible_rows.lock().unwrap().is_empty();
+        let silent = keep_selection && had_rows;
         let folder_id = self.folder_id.lock().unwrap().clone();
         let this = Arc::clone(self);
         let backend = self.backend.clone();
 
         self.push_crumbs();
-        self.set_ui_state(|ui| {
-            ui.set_file_loading(true);
-            ui.set_file_error(SharedString::default());
+        self.push_sort_state();
+        self.set_ui_state(move |ui| {
             ui.set_searching(false);
-            ui.set_selected_id(SharedString::default());
-            ui.set_select_all(false);
             ui.set_renaming_id(SharedString::default());
-            ui.set_status_text(SharedString::from("正在加载目录…"));
+            ui.set_file_error(SharedString::default());
         });
+        self.set_list_state(
+            if silent { "refreshing" } else { "loading" },
+            if silent {
+                "正在刷新目录…"
+            } else {
+                "正在加载目录…"
+            },
+        );
 
         backend.spawn(move || async move {
-            let result = client.list_files(&folder_id).await;
-            match result {
-                Ok(files) => {
+            match client.list_files(&folder_id).await {
+                Ok(mut files) => {
                     if this.dir_gen.load(Ordering::SeqCst) != gen {
                         return; // 已被更新的请求取代
                     }
+                    this.sorted_rows(&mut files);
                     let count = files.len();
                     *this.dir_rows.lock().unwrap() = files.clone();
                     *this.visible_rows.lock().unwrap() = files.clone();
-                    let this_ui = Arc::clone(&this);
-                    this.set_ui_state(move |ui| {
-                        this_ui.push_rows(files);
-                        ui.set_file_loading(false);
-                        ui.set_file_error(SharedString::default());
-                        ui.set_status_text(SharedString::from(format!("{count} 个项目")));
-                    });
+                    // 目录内容变了：丢掉已不存在的选中项，保证后续操作对象始终有效
+                    this.retain_selection(&files);
+                    this.push_rows(&files);
+                    this.set_list_state(
+                        if count == 0 { "empty" } else { "ready" },
+                        &format!("{count} 个项目"),
+                    );
                 }
                 Err(e) => {
                     if this.dir_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
                     let msg = format!("加载目录失败：{e}");
-                    this.set_ui_state(move |ui| {
-                        ui.set_file_loading(false);
-                        ui.set_file_error(SharedString::from(msg.clone()));
-                        ui.set_status_text(SharedString::from(msg));
-                    });
+                    this.set_file_error(msg.clone());
+                    this.set_list_state("error", &msg);
                 }
             }
         });
@@ -1303,7 +1497,7 @@ impl Controller {
             return;
         }
         drop(stack);
-        self.refresh_files();
+        self.load_dir(false);
     }
 
     fn navigate_up(self: &Arc<Self>) {
@@ -1315,7 +1509,7 @@ impl Controller {
                 .unwrap_or_else(|| ROOT_FOLDER_ID.to_string());
             *self.folder_id.lock().unwrap() = next;
             drop(stack);
-            self.refresh_files();
+            self.load_dir(false);
         }
     }
 
@@ -1338,20 +1532,19 @@ impl Controller {
         let Some(client) = self.client() else { return };
         client.set_account(|acc| acc.space_type = space.clone());
 
+        self.set_selection(Vec::new());
         self.set_ui_state(|ui| {
             ui.set_file_list(slint::ModelRc::default());
             ui.set_searching(false);
             ui.set_search_keyword(SharedString::default());
-            ui.set_selected_id(SharedString::default());
-            ui.set_select_all(false);
             ui.set_renaming_id(SharedString::default());
             ui.set_file_error(SharedString::default());
-            ui.set_status_text(SharedString::from("正在切换云空间…"));
         });
+        self.set_list_state("loading", "正在切换云空间…");
         self.push_crumbs();
 
         if space == "personal" {
-            self.refresh_files();
+            self.load_dir(false);
             self.load_capacity();
             return;
         }
@@ -1364,7 +1557,7 @@ impl Controller {
                     if this.space_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
-                    this.refresh_files();
+                    this.load_dir(false);
                     this.load_capacity();
                 }
                 Err(e) => {
@@ -1380,7 +1573,7 @@ impl Controller {
                         ui.set_current_page(0);
                     });
                     this.notice("error", format!("家庭云不可用，已返回个人云：{e}"));
-                    this.refresh_files();
+                    this.load_dir(false);
                     this.load_capacity();
                 }
             }
@@ -1398,28 +1591,73 @@ impl Controller {
             .unwrap()
             .push((current, name.to_string()));
         *self.folder_id.lock().unwrap() = id.to_string();
-        self.set_ui_state(|ui| {
-            ui.set_selected_id(SharedString::default());
-            ui.set_select_all(false);
-        });
-        self.refresh_files();
+        self.load_dir(false);
     }
 
-    fn handle_select_item(self: &Arc<Self>, id: &str) {
-        let id = id.to_string();
-        self.set_ui_state(move |ui| {
-            ui.set_selected_id(SharedString::from(id));
-            ui.set_select_all(false);
-            ui.set_renaming_id(SharedString::default());
-        });
+    /// 单击选择：普通点击=单选，Ctrl=切换，Shift=从锚点范围选择
+    fn handle_select_item(self: &Arc<Self>, id: &str, ctrl: bool, shift: bool) {
+        let rows = self.visible_rows.lock().unwrap().clone();
+        if rows.is_empty() {
+            return;
+        }
+        let anchor = self.selection_anchor.lock().unwrap().clone();
+        let mut ids = self.selected_ids.lock().unwrap().clone();
+
+        if shift && !anchor.is_empty() && !ctrl {
+            // 范围选择：用锚点到目标之间的连续区间替换当前选择
+            if let Some(range) = range_selection(&rows, &anchor, id) {
+                self.set_selection(range);
+                self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
+                return;
+            }
+            // 锚点已被刷新掉：退化为单选
+        }
+
+        if ctrl {
+            if let Some(pos) = ids.iter().position(|x| x == id) {
+                ids.remove(pos);
+            } else {
+                ids.push(id.to_string());
+            }
+            *self.selection_anchor.lock().unwrap() = id.to_string();
+            self.set_selection(ids);
+            self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
+            return;
+        }
+
+        *self.selection_anchor.lock().unwrap() = id.to_string();
+        self.set_selection(vec![id.to_string()]);
+        self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
+    }
+
+    /// 全选当前目录 / 搜索结果
+    fn select_all_items(self: &Arc<Self>) {
+        let ids: Vec<String> = self
+            .visible_rows
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|f| f.id.clone())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let count = ids.len();
+        self.set_selection(ids);
+        self.set_status(format!("已全选 {count} 项"));
     }
 
     fn handle_context(self: &Arc<Self>, id: &str, name: &str, is_dir: bool, x: f32, y: f32) {
+        // 右键的行若不在当前选择里，则先把选择切到这一行，
+        // 保证菜单里的操作对象与用户看到的选中项一致。
+        let in_selection = self.selected_ids.lock().unwrap().iter().any(|s| s == id);
+        if !in_selection {
+            *self.selection_anchor.lock().unwrap() = id.to_string();
+            self.set_selection(vec![id.to_string()]);
+        }
         let id_s = id.to_string();
         let name_s = name.to_string();
         self.set_ui_state(move |ui| {
-            ui.set_selected_id(SharedString::from(id_s.clone()));
-            ui.set_select_all(false);
             ui.set_renaming_id(SharedString::default());
             ui.set_context_open(true);
             ui.set_context_x(x);
@@ -1430,23 +1668,20 @@ impl Controller {
         });
     }
 
-    /// 当前操作的目标文件集合（考虑全选模式）
+    /// 当前操作的目标文件集合（全部来自选择模型的唯一事实来源）
     fn targets(&self) -> Vec<FileObject> {
-        let select_all = self
-            .ui
-            .upgrade()
-            .map(|ui| ui.get_select_all())
-            .unwrap_or(false);
-        let rows = self.visible_rows.lock().unwrap().clone();
-        if select_all {
-            return rows;
+        let ids = self.selected_ids.lock().unwrap().clone();
+        if ids.is_empty() {
+            return Vec::new();
         }
-        let selected = self
-            .ui
-            .upgrade()
-            .map(|ui| ui.get_selected_id().to_string())
-            .unwrap_or_default();
-        rows.into_iter().filter(|f| f.id == selected).collect()
+        let set: HashSet<String> = ids.into_iter().collect();
+        self.visible_rows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|f| set.contains(&f.id))
+            .cloned()
+            .collect()
     }
 
     // ==================================================================
@@ -1626,28 +1861,64 @@ impl Controller {
         });
     }
 
+    /// 删除：先弹出应用内确认对话框（同步的 rfd::MessageDialog 会阻塞 UI 线程），
+    /// 用户确认后才真正执行，取消则完全不动数据。
     fn delete_selected(self: &Arc<Self>) {
         let targets = self.targets();
         if targets.is_empty() {
+            self.notice("info", "请先选择要删除的项目");
             return;
         }
-        let what = if targets.len() == 1 {
-            format!("「{}」", targets[0].name)
+        let message = if targets.len() == 1 {
+            let t = &targets[0];
+            if t.is_dir {
+                format!(
+                    "确定要删除文件夹「{}」吗？其中的内容会一并删除，且无法恢复。",
+                    t.name
+                )
+            } else {
+                format!("确定要删除「{}」吗？此操作无法恢复。", t.name)
+            }
         } else {
-            format!("选中的 {} 个项目", targets.len())
+            format!(
+                "确定要删除选中的 {} 个项目吗？此操作无法恢复。",
+                targets.len()
+            )
         };
-        let confirmed = rfd::MessageDialog::new()
-            .set_title("确认删除")
-            .set_description(format!("确定要删除{what}吗？此操作不可撤销。"))
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .set_level(rfd::MessageLevel::Warning)
-            .show();
-        if !matches!(confirmed, rfd::MessageDialogResult::Yes) {
-            return;
+        let title = if targets.len() == 1 {
+            "确认删除".to_string()
+        } else {
+            format!("确认删除 {} 个项目", targets.len())
+        };
+        *self.pending_confirm.lock().unwrap() = Some(PendingConfirm::DeleteFiles(targets));
+        self.set_ui_state(move |ui| {
+            ui.set_dialog_title(SharedString::from(title));
+            ui.set_dialog_message(SharedString::from(message));
+            ui.set_dialog_confirm_text(SharedString::from("删除"));
+            ui.set_dialog_danger(true);
+            ui.set_dialog_open(true);
+        });
+    }
+
+    fn dialog_cancel(self: &Arc<Self>) {
+        *self.pending_confirm.lock().unwrap() = None;
+        self.set_ui_state(|ui| ui.set_dialog_open(false));
+    }
+
+    fn dialog_confirm(self: &Arc<Self>) {
+        let action = self.pending_confirm.lock().unwrap().take();
+        self.set_ui_state(|ui| ui.set_dialog_open(false));
+        match action {
+            Some(PendingConfirm::DeleteFiles(targets)) => self.perform_delete(targets),
+            None => {}
         }
+    }
+
+    fn perform_delete(self: &Arc<Self>, targets: Vec<FileObject>) {
         let Some(client) = self.client() else { return };
         let count = targets.len();
         let this = Arc::clone(self);
+        self.set_status(format!("正在删除 {count} 项…"));
         self.backend.spawn(move || async move {
             let mut failed = Vec::new();
             for f in targets {
@@ -1761,42 +2032,41 @@ impl Controller {
         let gen = self.search_gen.fetch_add(1, Ordering::SeqCst) + 1;
         let Some(client) = self.client() else { return };
         let this = Arc::clone(self);
+        self.set_selection(Vec::new());
         self.set_ui_state(|ui| {
             ui.set_searching(true);
-            ui.set_status_text(SharedString::from("搜索中…"));
         });
+        self.set_list_state("loading", "搜索中…");
         // 去抖已在 UI 侧完成；这里只做乱序丢弃
         self.backend.spawn(move || async move {
             if this.search_gen.load(Ordering::SeqCst) != gen {
                 return;
             }
             match client.search_files(&keyword).await {
-                Ok(files) => {
+                Ok(mut files) => {
                     if this.search_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
+                    this.sorted_rows(&mut files);
                     let count = files.len();
                     *this.visible_rows.lock().unwrap() = files.clone();
-                    let this_ui = Arc::clone(&this);
-                    this.set_ui_state(move |ui| {
-                        this_ui.push_rows(files);
+                    this.retain_selection(&files);
+                    this.push_rows(&files);
+                    this.set_ui_state(|ui| {
                         ui.set_searching(true);
-                        ui.set_status_text(SharedString::from(format!(
-                            "“{keyword}”的搜索结果：{count} 项"
-                        )));
-                        ui.set_selected_id(SharedString::default());
-                        ui.set_select_all(false);
                     });
+                    this.set_list_state(
+                        if count == 0 { "empty-search" } else { "ready" },
+                        &format!("“{keyword}”的搜索结果：{count} 项"),
+                    );
                 }
                 Err(e) => {
                     if this.search_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
                     let msg = format!("搜索失败：{e}");
-                    let msg_ui = msg.clone();
-                    this.set_ui_state(move |ui| {
-                        ui.set_status_text(SharedString::from(msg_ui));
-                    });
+                    this.set_file_error(msg.clone());
+                    this.set_list_state("error", &msg);
                     this.notice("error", msg);
                 }
             }
@@ -1809,15 +2079,17 @@ impl Controller {
         let dir = self.dir_rows.lock().unwrap().clone();
         let rows = Self::rows_for_display(&dir, None);
         *self.visible_rows.lock().unwrap() = rows.clone();
+        self.retain_selection(&rows);
         let count = rows.len();
-        self.push_rows(rows);
-        self.set_ui_state(move |ui| {
+        self.push_rows(&rows);
+        self.set_ui_state(|ui| {
             ui.set_searching(false);
             ui.set_search_keyword(SharedString::default());
-            ui.set_selected_id(SharedString::default());
-            ui.set_select_all(false);
-            ui.set_status_text(SharedString::from(format!("{count} 个项目")));
         });
+        self.set_list_state(
+            if count == 0 { "empty" } else { "ready" },
+            &format!("{count} 个项目"),
+        );
     }
 
     // ==================================================================
@@ -2516,6 +2788,13 @@ impl Controller {
 }
 
 /// 传输结果归一化
+/// 需要用户确认后才执行的动作
+///
+/// 危险操作不直接执行：先落到这里，由 UI 的对话框回传确认或取消。
+enum PendingConfirm {
+    DeleteFiles(Vec<FileObject>),
+}
+
 enum Outcome {
     Done,
     Paused,
@@ -2584,7 +2863,7 @@ fn to_transfer_entry(t: &Task) -> TransferEntry {
     }
 }
 
-fn files_to_entries(files: &[FileObject]) -> Vec<FileEntry> {
+fn files_to_entries(files: &[FileObject], selected: &HashSet<String>) -> Vec<FileEntry> {
     files
         .iter()
         .map(|f| {
@@ -2622,9 +2901,62 @@ fn files_to_entries(files: &[FileObject]) -> Vec<FileEntry> {
                 modified: file::format_datetime(&f.last_op_time).into(),
                 kind: kind.into(),
                 kind_text: kind_text.into(),
+                selected: selected.contains(&f.id),
             }
         })
         .collect()
+}
+
+/// Shift 范围选择：返回锚点到目标之间（含两端）的 id 列表，按显示顺序
+///
+/// 锚点或目标已不在当前列表中时返回 None，调用方退化为单选。
+pub fn range_selection(rows: &[FileObject], anchor: &str, target: &str) -> Option<Vec<String>> {
+    let from = rows.iter().position(|f| f.id == anchor)?;
+    let to = rows.iter().position(|f| f.id == target)?;
+    let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+    Some(rows[lo..=hi].iter().map(|f| f.id.clone()).collect())
+}
+
+/// 排序键的中文名称（状态栏提示用）
+fn sort_label(key: i32) -> &'static str {
+    match key {
+        1 => "大小",
+        2 => "修改时间",
+        _ => "名称",
+    }
+}
+
+/// 按指定列排序：文件夹始终排在文件前面，组内按列比较
+///
+/// * 名称：忽略大小写比较，完全相同再按原始字节比较，保证顺序稳定
+/// * 大小：数值比较
+/// * 修改时间：沿用接口返回的原始时间串（`yyyy-MM-dd HH:mm:ss`），空值始终排在最后
+pub fn sort_files(rows: &mut [FileObject], key: i32, asc: bool) {
+    rows.sort_by(|a, b| {
+        let dir_ord = b.is_dir.cmp(&a.is_dir); // 文件夹（true）在前
+        if dir_ord != std::cmp::Ordering::Equal {
+            return dir_ord;
+        }
+        let ord = match key {
+            1 => a.size.cmp(&b.size),
+            2 => match (a.last_op_time.is_empty(), b.last_op_time.is_empty()) {
+                (true, true) => std::cmp::Ordering::Equal,
+                (true, false) => return std::cmp::Ordering::Greater,
+                (false, true) => return std::cmp::Ordering::Less,
+                (false, false) => a.last_op_time.cmp(&b.last_op_time),
+            },
+            _ => {
+                let la = a.name.to_lowercase();
+                let lb = b.name.to_lowercase();
+                la.cmp(&lb).then_with(|| a.name.cmp(&b.name))
+            }
+        };
+        if asc {
+            ord
+        } else {
+            ord.reverse()
+        }
+    });
 }
 
 fn entries_model(entries: Vec<FileEntry>) -> slint::ModelRc<FileEntry> {
@@ -2776,6 +3108,102 @@ mod tests {
     // ---------------- 文件列表映射 ----------------
 
     #[test]
+    fn files_to_entries_marks_selection_from_authoritative_set() {
+        let rows = vec![file("1", "a.txt", 1, false), file("2", "b.txt", 2, false)];
+        let selected: HashSet<String> = ["2".to_string()].into_iter().collect();
+        let entries = files_to_entries(&rows, &selected);
+        assert!(!entries[0].selected);
+        assert!(entries[1].selected);
+        // 空选择集：全部未选中，不能因为默认值而误显示为选中
+        assert!(files_to_entries(&rows, &HashSet::new())
+            .iter()
+            .all(|e| !e.selected));
+    }
+
+    #[test]
+    fn sort_files_keeps_folders_first_and_orders_by_key() {
+        let mut rows = vec![
+            file("1", "b.txt", 300, false),
+            file("2", "a.txt", 100, false),
+            file("3", "dir_z", 0, true),
+            file("4", "dir_a", 0, true),
+        ];
+
+        // 名称升序：文件夹在前
+        sort_files(&mut rows, 0, true);
+        let names: Vec<&str> = rows.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["dir_a", "dir_z", "a.txt", "b.txt"]);
+
+        // 名称降序：文件夹仍在前面（组内反向）
+        sort_files(&mut rows, 0, false);
+        let names: Vec<&str> = rows.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, ["dir_z", "dir_a", "b.txt", "a.txt"]);
+
+        // 大小升序/降序只看文件组
+        sort_files(&mut rows, 1, true);
+        let files: Vec<i64> = rows.iter().filter(|f| !f.is_dir).map(|f| f.size).collect();
+        assert_eq!(files, [100, 300]);
+        sort_files(&mut rows, 1, false);
+        let files: Vec<i64> = rows.iter().filter(|f| !f.is_dir).map(|f| f.size).collect();
+        assert_eq!(files, [300, 100]);
+    }
+
+    #[test]
+    fn sort_files_puts_unknown_time_last_in_both_directions() {
+        let mut rows = vec![
+            FileObject {
+                id: "1".into(),
+                name: "old.bin".into(),
+                last_op_time: "2023-01-01 00:00:00".into(),
+                ..Default::default()
+            },
+            FileObject {
+                id: "2".into(),
+                name: "new.bin".into(),
+                last_op_time: "2024-12-31 23:59:59".into(),
+                ..Default::default()
+            },
+            FileObject {
+                id: "3".into(),
+                name: "unknown.bin".into(),
+                last_op_time: String::new(),
+                ..Default::default()
+            },
+        ];
+        sort_files(&mut rows, 2, true);
+        assert_eq!(rows[0].name, "old.bin");
+        assert_eq!(rows[2].name, "unknown.bin");
+        sort_files(&mut rows, 2, false);
+        assert_eq!(rows[0].name, "new.bin");
+        // 时间未知的条目在两个方向上都排在最后，避免"空时间"抢占首位
+        assert_eq!(rows[2].name, "unknown.bin");
+    }
+
+    // ---------------- 多选范围 ----------------
+
+    #[test]
+    fn range_selection_covers_both_directions() {
+        let rows = vec![
+            file("1", "a", 0, false),
+            file("2", "b", 0, false),
+            file("3", "c", 0, false),
+            file("4", "d", 0, false),
+        ];
+        assert_eq!(
+            range_selection(&rows, "2", "4").unwrap(),
+            vec!["2".to_string(), "3".to_string(), "4".to_string()]
+        );
+        // 反向拖选与正向结果一致
+        assert_eq!(
+            range_selection(&rows, "4", "2").unwrap(),
+            vec!["2".to_string(), "3".to_string(), "4".to_string()]
+        );
+        // 锚点不存在（例如刷新后行被移除）→ None，调用方退化为单选
+        assert!(range_selection(&rows, "99", "2").is_none());
+        assert!(range_selection(&rows, "2", "99").is_none());
+    }
+
+    #[test]
     fn files_to_entries_maps_kind_and_size_text() {
         let rows = vec![
             file("1", "文档", 0, true),
@@ -2784,7 +3212,7 @@ mod tests {
             file("4", "archive.7z", 100, false),
             file("5", "noext", 10, false),
         ];
-        let entries = files_to_entries(&rows);
+        let entries = files_to_entries(&rows, &HashSet::new());
         assert_eq!(entries.len(), 5);
 
         assert_eq!(entries[0].kind.as_str(), "folder");
@@ -2808,9 +3236,9 @@ mod tests {
 
     #[test]
     fn files_to_entries_handles_empty_and_long_names() {
-        assert!(files_to_entries(&[]).is_empty());
+        assert!(files_to_entries(&[], &HashSet::new()).is_empty());
         let long = "长".repeat(300) + ".txt";
-        let entries = files_to_entries(&[file("1", &long, 0, false)]);
+        let entries = files_to_entries(&[file("1", &long, 0, false)], &HashSet::new());
         // 名称不截断（由 UI 负责省略），但分类仍然正确
         assert_eq!(entries[0].name.len(), long.len());
         assert_eq!(entries[0].kind.as_str(), "text");

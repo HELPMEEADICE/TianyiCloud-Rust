@@ -75,13 +75,18 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
     window.on_winit_window_event(move |_slint_window, event| {
         match event {
             winit::event::WindowEvent::ModifiersChanged(mods) => {
-                // Shift/Alt 拖文件行 = 拖出下载；普通拖动保留为网盘内移动
+                // Shift/Alt 拖文件行 = 拖出下载；普通拖动保留为网盘内移动。
+                // 同一份修饰键状态也供列表行判定 Ctrl/Shift 多选（Slint 的点击事件不带修饰键）。
                 use winit::keyboard::ModifiersState;
                 let s = mods.state();
                 let armed = s.contains(ModifiersState::SHIFT) || s.contains(ModifiersState::ALT);
                 if let Some(app) = ui.upgrade() {
                     app.global::<crate::app::DragOutApi>()
                         .set_mod_pressed(armed);
+                    let keys = app.global::<crate::app::ModifiersApi>();
+                    keys.set_ctrl(s.contains(ModifiersState::CONTROL));
+                    keys.set_shift(s.contains(ModifiersState::SHIFT));
+                    keys.set_alt(s.contains(ModifiersState::ALT));
                 }
             }
             winit::event::WindowEvent::HoveredFile(_) => {
