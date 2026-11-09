@@ -100,3 +100,23 @@ export global DragOutApi {
     in property <string> active-id: "";
     callback drag_out(string, string);
 }
+
+/// 最近一次交互来自键盘还是鼠标。焦点环只在键盘模式下显示（对齐 WinUI）。
+///
+/// Slint 自己的 `FocusScope` 只知道"谁有焦点"，不知道焦点是 Tab 键走到这儿的、
+/// 还是鼠标点出来的；而 WinUI 规范要求鼠标点击不显示焦点环。控件里的焦点环
+/// 因此统一绑到 `fs.has-focus && InputMode.keyboard`。
+export global InputMode {
+    in-out property <bool> keyboard: false;
+
+    /// **唯一写入入口**：所有控件都通过它更新键盘模式，不得直接写 `keyboard`。
+    ///
+    /// 当前用"焦点变化的原因"近似键盘/鼠标：Tab 进入 = 键盘，其余（鼠标点击等）
+    /// = 鼠标。精确的信号其实是窗口层的原始输入事件（winit 的 `KeyboardInput` /
+    /// `MouseInput`），但那要求 Rust 侧能写这个 global —— 即 `ui/main.slint` 把
+    /// `InputMode` 加进 `export { ... } from "types.slint"` 的导出列表。
+    /// 换驱动源时只改本函数体（调用方一行都不用动）。
+    public function track-focus(reason: FocusReason) {
+        keyboard = reason == FocusReason.tab-navigation;
+    }
+}
