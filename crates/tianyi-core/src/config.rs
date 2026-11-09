@@ -8,6 +8,9 @@ use std::path::PathBuf;
 /// 全局应用配置（不含账号敏感信息）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// 配置结构版本号（字段缺失视为 0，即历史格式）
+    #[serde(default)]
+    pub version: u32,
     /// 下载目录
     pub download_dir: PathBuf,
     /// 默认并发上传线程数
@@ -31,9 +34,21 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    /// 当前配置结构版本（落盘时写入的版本号）
+    ///
+    /// 迁移链：
+    /// - **v0**（无 `version` 字段）：历史格式。字段级兼容由各字段的 `#[serde(default)]`
+    ///   与 [`AppConfig::default_config`] 的默认值承担，因此 v0 → v1 只需补版本号。
+    /// - **v1**：当前格式（`version` / `theme` / `reduce_motion`）。
+    ///
+    /// 以后新增字段时：把 `CURRENT_VERSION` +1，并在 [`AppConfig::migrate`] 的
+    /// 迁移链里补一个 `match` 分支。
+    pub const CURRENT_VERSION: u32 = 1;
+
     pub fn default_config() -> Self {
         let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
         AppConfig {
+            version: Self::CURRENT_VERSION,
             download_dir,
             upload_thread: 3,
             download_thread: 4,
@@ -44,6 +59,57 @@ impl AppConfig {
             theme: "system".to_string(),
             reduce_motion: false,
         }
+    }
+
+    /// 从 JSON 文本加载配置（自动迁移到当前版本）
+    pub fn from_json_str(data: &str) -> Result<Self> {
+        let raw: serde_json::Value =
+            serde_json::from_str(data).map_err(|e| Error::Config(format!("parse config: {e}")))?;
+        Self::migrate(raw)
+    }
+
+    /// 把任意历史/未来格式的配置对象迁移到当前版本
+    ///
+    /// - 缺 `version`（= 0）：按历史格式处理，逐级升级到 [`AppConfig::CURRENT_VERSION`]。
+    /// - 版本高于当前：记 warn 后按当前结构尽力解析（不丢用户已改的已知字段）。
+    /// - 根节点不是 JSON 对象，或字段类型不合法：返回 [`Error::Config`]。
+    pub fn migrate(raw: serde_json::Value) -> Result<Self> {
+        let serde_json::Value::Object(mut map) = raw else {
+            return Err(Error::Config("config root is not a JSON object".into()));
+        };
+
+        let raw_version = map
+            .get("version")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
+
+        if raw_version > Self::CURRENT_VERSION {
+            log::warn!(
+                "config version {raw_version} is newer than supported {}, parsing with current schema",
+                Self::CURRENT_VERSION
+            );
+        }
+
+        // 迁移链：每一步把版本 +1。v0 -> v1 只补版本号（字段兼容交给 serde 默认值），
+        // 新增版本时在这里追加分支。
+        let mut v = raw_version.min(Self::CURRENT_VERSION);
+        while v < Self::CURRENT_VERSION {
+            match v {
+                0 => {}
+                _ => break,
+            }
+            v += 1;
+        }
+
+        // 无论来源版本，最终一律按当前版本落盘
+        map.insert(
+            "version".to_string(),
+            serde_json::Value::from(Self::CURRENT_VERSION),
+        );
+
+        serde_json::from_value(serde_json::Value::Object(map))
+            .map_err(|e| Error::Config(format!("parse config: {e}")))
     }
 }
 
@@ -147,11 +213,20 @@ impl AppStore {
         }
         let data = std::fs::read_to_string(&self.config_path)
             .map_err(|e| Error::Config(format!("read config: {e}")))?;
-        serde_json::from_str(&data).map_err(|e| Error::Config(format!("parse config: {e}")))
+        AppConfig::from_json_str(&data)
     }
 
     pub fn save_config(&self, cfg: &AppConfig) -> Result<()> {
-        let data = serde_json::to_string_pretty(cfg)?;
+        // 落盘一律带当前版本号：即使调用方给的是 Default/手工构造的配置，
+        // 也要保证磁盘上的 version 与结构一致。
+        let mut value = serde_json::to_value(cfg)?;
+        if let serde_json::Value::Object(map) = &mut value {
+            map.insert(
+                "version".to_string(),
+                serde_json::Value::from(AppConfig::CURRENT_VERSION),
+            );
+        }
+        let data = serde_json::to_string_pretty(&value)?;
         std::fs::write(&self.config_path, data).map_err(|e| Error::Config(e.to_string()))
     }
 
@@ -291,5 +366,74 @@ mod tests {
         assert_eq!(back.theme, "dark");
         assert!(back.reduce_motion);
         assert_eq!(ThemeMode::parse(&back.theme), ThemeMode::Dark);
+    }
+
+    /// 缺 version 的历史配置：迁移到当前版本，其余字段逐一保持
+    #[test]
+    fn test_migrate_legacy_without_version() {
+        let old = r#"{"download_dir":"C:\\Downloads","upload_thread":7,"download_thread":5,
+            "speed_limit":1048576,"rapid_upload":false,"generate_torrent":true,
+            "last_account":"13800138000","theme":"dark","reduce_motion":true}"#;
+        let cfg = AppConfig::from_json_str(old).expect("旧配置应能加载");
+        assert_eq!(cfg.version, AppConfig::CURRENT_VERSION);
+        assert_eq!(cfg.version, 1);
+        assert_eq!(cfg.upload_thread, 7);
+        assert_eq!(cfg.download_thread, 5);
+        assert_eq!(cfg.speed_limit, 1_048_576);
+        assert!(!cfg.rapid_upload);
+        assert!(cfg.generate_torrent);
+        assert_eq!(cfg.last_account, "13800138000");
+        assert_eq!(cfg.theme, "dark");
+        assert!(cfg.reduce_motion);
+    }
+
+    /// 未来版本号：不崩、按当前结构尽力解析，并把版本号归一
+    #[test]
+    fn test_migrate_future_version_is_tolerated() {
+        let future = r#"{"version":99,"download_dir":"D:\\x","upload_thread":2,
+            "download_thread":2,"speed_limit":0,"rapid_upload":true,
+            "generate_torrent":false,"last_account":"u","theme":"light",
+            "reduce_motion":false,"unknown_future_field":{"a":1}}"#;
+        let cfg = AppConfig::from_json_str(future).expect("未来版本应尽力解析");
+        assert_eq!(cfg.version, AppConfig::CURRENT_VERSION);
+        assert_eq!(cfg.upload_thread, 2);
+        assert_eq!(cfg.theme, "light");
+    }
+
+    /// 非法 JSON / 非对象：返回 Err 而不是 panic
+    #[test]
+    fn test_invalid_json_returns_err() {
+        let err = AppConfig::from_json_str("{not json").expect_err("非法 JSON 必须报错");
+        assert!(matches!(err, Error::Config(_)), "实际错误: {err:?}");
+
+        let err = AppConfig::from_json_str("[1,2,3]").expect_err("非对象必须报错");
+        assert!(matches!(err, Error::Config(_)), "实际错误: {err:?}");
+    }
+
+    /// 落盘永远带当前版本号（即使传入的是 Default 构造的配置）
+    #[test]
+    fn test_save_config_stamps_current_version() {
+        let dir = std::env::temp_dir().join(format!(
+            "tianyi-config-ver-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AppStore::new(Some(dir.clone())).expect("store");
+
+        assert_eq!(AppConfig::default().version, 0, "Default 视为历史格式");
+        store
+            .save_config(&AppConfig::default())
+            .expect("save config");
+
+        let raw = std::fs::read_to_string(dir.join("config.json")).expect("read config.json");
+        assert!(
+            raw.contains("\"version\": 1"),
+            "磁盘上必须带版本号，实际: {raw}"
+        );
+        let loaded = store.load_config().expect("load config");
+        assert_eq!(loaded.version, AppConfig::CURRENT_VERSION);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
