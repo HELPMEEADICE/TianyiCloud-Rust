@@ -1131,9 +1131,9 @@ export component MainWindow inherits Window {
         x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
         y: Math.min(TooltipState.y, root.height - self.height - 4px);
         border-radius: Theme.radius-control;
-        background: Theme.dark ? #2F2F2F : #2B2B2B;
+        background: Theme.tooltip-bg;
         border-width: 1px;
-        border-color: Theme.dark ? #4A4A4A : #1F1F1F;
+        border-color: Theme.tooltip-stroke;
 
         tip-layout := HorizontalLayout {
             padding-left: 8px;
@@ -1145,7 +1145,7 @@ export component MainWindow inherits Window {
                 text: TooltipState.text;
                 font-family: Theme.font-family;
                 font-size: Theme.font-caption;
-                color: #FFFFFF;
+                color: Theme.tooltip-text;
                 vertical-alignment: center;
                 overflow: elide;
             }

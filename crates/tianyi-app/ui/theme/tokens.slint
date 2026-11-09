@@ -83,6 +83,14 @@ export global Theme {
     /// 登录页背景柔光起始色
     out property <color> login-glow: dark ? #1B2836 : #E9F1FA;
 
+    // ---------------------------------------------------------------- Tooltip 浮层
+    // Tooltip 是"深色底 + 白字"的独立小浮层：底色深浅两套都走深色（亮色主题下
+    // 也不换成浅底色），文字色因此固定白色、不参与 dark 切换——若按主题换成深色
+    // 文字，白字变深字会直接落在深底上，对比度反而崩掉。这是设计意图，不是漏改。
+    out property <color> tooltip-bg: dark ? #2F2F2F : #2B2B2B;
+    out property <color> tooltip-text: #FFFFFF;
+    out property <color> tooltip-stroke: dark ? #4A4A4A : #1F1F1F;
+
     // ---------------------------------------------------------------- 圆角
     out property <length> radius-control: 4px;
     out property <length> radius-card: 8px;
