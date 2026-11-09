@@ -1,0 +1,58 @@
+// Fluent 环形加载指示器
+//
+// 用 animation-tick() 驱动：只有本组件可见时才产生重绘，不额外占定时器。
+// reduce-motion 下停止旋转（保持静态圆弧，仍能表达“进行中”）。
+//
+// 说明：Path 元素不支持 rotation-angle，因此这里按弧线端点实时计算角度
+// （与 std-widgets 的 SpinnerBase 同一套算法），跨后端渲染结果一致。
+
+import { Theme } from "../theme/tokens.slint";
+
+export component FluentSpinner inherits Rectangle {
+    in property <length> size: 20px;
+    in property <length> stroke-width: 2px;
+    in property <brush> tint: Theme.accent;
+
+    width: root.size;
+    height: root.size;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    background: transparent;
+
+    arc := Path {
+        // 旋转相位 0..1：一整圈 1s
+        private property <float> phase:
+            Theme.reduce-motion ? 0.0 : 1 * mod(animation-tick(), 1000ms) / 1000ms;
+        // 固定四分之一圆弧
+        private property <float> span: 0.25;
+
+        viewbox-width: 24;
+        viewbox-height: 24;
+        width: 100%;
+        height: 100%;
+
+        MoveTo {
+            x: 12 - 9 * sin(-(arc.phase - 0.001) * 360deg);
+            y: 12 - 9 * cos(-(arc.phase - 0.001) * 360deg);
+        }
+
+        LineTo {
+            x: 12 - 9 * sin(-arc.phase * 360deg);
+            y: 12 - 9 * cos(-arc.phase * 360deg);
+        }
+
+        ArcTo {
+            radius-x: 9;
+            radius-y: 9;
+            x: 12 - 9 * sin(-(arc.phase + arc.span) * 360deg);
+            y: 12 - 9 * cos(-(arc.phase + arc.span) * 360deg);
+            sweep: true;
+            large-arc: false;
+        }
+
+        stroke: root.tint;
+        stroke-width: root.stroke-width;
+        stroke-line-cap: round;
+        fill: transparent;
+    }
+}

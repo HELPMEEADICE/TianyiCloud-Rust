@@ -1,4 +1,4 @@
-// 拖入上传遮罩：文件悬停在窗口上时显示目标目录与说明
+// Fluent 拖入上传遮罩：文件悬停在窗口上时显示目标目录与说明
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
@@ -7,24 +7,29 @@ export component DropOverlay inherits Rectangle {
     in property <string> target-name: "";
     in property <bool> active: false;
 
-    background: Theme.dark ? #332E6E9E : #220F6CBD;
+    background: Theme.dark ? #2E6E9E33 : #0F6CBD22;
     border-radius: Theme.radius-card;
     border-width: 2px;
     border-color: Theme.accent;
     opacity: root.active ? 1.0 : 0.0;
+    visible: root.active;
 
     animate opacity {
         duration: Theme.motion-normal;
         easing: ease-out;
     }
 
+    // 交叉轴（水平）居中：每个子项自身居中，文案限宽换行
     VerticalLayout {
         alignment: center;
-        spacing: 8px;
+        cross-axis-alignment: center;
+        padding: Theme.space-4;
+        spacing: Theme.space-2;
 
         Rectangle {
             width: 52px;
             height: 52px;
+            horizontal-stretch: 0;
             border-radius: 14px;
             background: Theme.accent;
 
@@ -39,20 +44,24 @@ export component DropOverlay inherits Rectangle {
         }
 
         Text {
+            width: Math.min(root.width - 64px, 420px);
             text: "松开上传到 " + (root.target-name == "" ? "当前目录" : root.target-name);
             font-family: Theme.font-family;
             font-size: Theme.font-subtitle;
-            font-weight: 600;
+            font-weight: Theme.weight-semibold;
             color: Theme.text-primary;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
 
         Text {
+            width: Math.min(root.width - 64px, 420px);
             text: "支持文件与文件夹，文件夹会自动创建同名云端目录";
             font-family: Theme.font-family;
             font-size: Theme.font-small;
             color: Theme.text-secondary;
             horizontal-alignment: center;
+            wrap: word-wrap;
         }
     }
 }

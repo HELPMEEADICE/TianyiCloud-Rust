@@ -1,0 +1,140 @@
+// Fluent 内容对话框（危险操作确认）
+//
+// 用于删除文件等不可撤销操作：遮罩 + 居中卡片 + 标题/说明 + 取消/确认。
+// 卡片宽度随窗口收缩（不超过 420px），保证窄窗口下不越界。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "button.slint";
+
+export component FluentContentDialog inherits Rectangle {
+    in property <string> title: "";
+    in property <string> message: "";
+    in property <string> confirm-text: "确定";
+    in property <string> cancel-text: "取消";
+    /// 危险操作：确认按钮使用危险配色并显示警示图标
+    in property <bool> danger: false;
+
+    callback confirm();
+    callback cancel();
+
+    background: Theme.overlay-scrim;
+
+    // 点击遮罩等同取消
+    dismiss := TouchArea {
+        clicked => {
+            root.cancel();
+        }
+    }
+
+    focus-scope := FocusScope {
+        init => {
+            self.focus();
+        }
+
+        KeyBinding {
+            keys: @keys(Escape);
+            activated => {
+                root.cancel();
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Return);
+            activated => {
+                root.confirm();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: center;
+
+        VerticalLayout {
+            alignment: center;
+
+            card := Rectangle {
+                width: Math.min(420px, root.width - 48px);
+                border-radius: Theme.radius-card;
+                background: Theme.flyout-bg;
+                border-width: 1px;
+                border-color: Theme.stroke-strong;
+
+                // 卡片自身吞掉点击，避免穿透到遮罩
+                TouchArea {
+                }
+
+                VerticalLayout {
+                    padding-left: Theme.space-6;
+                    padding-right: Theme.space-6;
+                    padding-top: Theme.space-5;
+                    padding-bottom: Theme.space-4;
+                    spacing: Theme.space-2;
+
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        cross-axis-alignment: center;
+
+                        if root.danger: Icon {
+                            glyph: Icons.warning;
+                            size: 18px;
+                            thickness: 1.7px;
+                            icon-color: Theme.danger;
+                        }
+
+                        Text {
+                            text: root.title;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-subtitle;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.text-primary;
+                            horizontal-stretch: 1;
+                            vertical-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    Text {
+                        text: root.message;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-body;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: Theme.space-4;
+                        width: 1px;
+                        background: transparent;
+                    }
+
+                    HorizontalLayout {
+                        alignment: end;
+                        cross-axis-alignment: center;
+                        spacing: Theme.space-2;
+                        height: Theme.control-height;
+
+                        FluentButton {
+                            text: root.cancel-text;
+                            min-w: 80px;
+                            clicked => {
+                                root.cancel();
+                            }
+                        }
+
+                        FluentButton {
+                            text: root.confirm-text;
+                            accent: !root.danger;
+                            danger: root.danger;
+                            min-w: 80px;
+                            clicked => {
+                                root.confirm();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

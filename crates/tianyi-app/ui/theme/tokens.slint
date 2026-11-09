@@ -1,17 +1,19 @@
 // 设计令牌（Design Tokens）
 //
-// 对齐 Windows 11 / Fluent Design 2 的取值：
-//  * 中性色 surfaces 分 window / layer / card / control 四级
+// 取值对齐 Windows 11 / WinUI 3 / Fluent Design 2：
+//  * 表面分 window / layer / card / control / flyout 五级，浅深两套
 //  * 强调色取 Win11 默认强调蓝（浅色 #0F6CBD，深色 #60CDFF）
-//  * 圆角 4px（控件）/ 8px（卡片）/ 12px（浮层）
-//  * 间距 4px 栅格
+//  * 圆角 4px（控件）/ 8px（卡片、浮层）/ 16px（药丸）
+//  * 间距严格 4px 栅格
+//  * 字号对应 Segoe UI Variable 的 Caption/Body/BodyStrong/Subtitle/Title/Display 级别
 //
-// 颜色统一用 "dark ? 深色 : 浅色" 的绑定表达，切换主题只需改 dark 一个属性。
+// 所有颜色都用 "dark ? 深色 : 浅色" 表达，切换主题只需改 dark 一个属性。
+// 组件不得直接写死颜色值，一律引用本文件的令牌。
 
 export global Theme {
     /// 是否深色主题。由 Rust 侧根据配置 + 系统主题写入。
     in-out property <bool> dark: false;
-    /// 降低动画（无障碍 / 低性能设备）
+    /// 减少动画（无障碍 / 低性能设备 / 远程桌面）
     in-out property <bool> reduce-motion: false;
     /// UI 字体族。启动时由 Rust 按平台写入（Windows: Segoe UI Variable Text）。
     in-out property <string> font-family: "Segoe UI Variable Text";
@@ -21,10 +23,14 @@ export global Theme {
     // ---------------------------------------------------------------- 表面
     /// 窗口底色（Mica 不可用时的回退）
     out property <color> window-bg: dark ? #202020 : #F3F3F3;
-    /// 次级层（导航栏、面板）
+    /// 次级层（导航栏、面板、表头）
     out property <color> layer-bg: dark ? #272727 : #F7F7F7;
     /// 卡片 / 列表行容器
     out property <color> card-bg: dark ? #2B2B2B : #FFFFFF;
+    /// 卡片内的次级块（嵌套信息块）
+    out property <color> card-bg-alt: dark ? #232323 : #FAFAFA;
+    /// 浮层（菜单、对话框、Tooltip）
+    out property <color> flyout-bg: dark ? #2C2C2C : #FBFBFB;
     /// 输入框、次级控件底
     out property <color> control-bg: dark ? #323232 : #FBFBFB;
     out property <color> control-bg-hover: dark ? #3A3A3A : #F0F0F0;
@@ -32,6 +38,8 @@ export global Theme {
     out property <color> control-bg-disabled: dark ? #262626 : #F5F5F5;
     /// 悬停高亮（列表行 / 导航项）
     out property <color> hover-bg: dark ? #333333 : #EDEDED;
+    /// 按下态（比 hover 更深一档）
+    out property <color> pressed-bg: dark ? #2A2A2A : #E3E3E3;
     /// 选中态
     out property <color> selected-bg: dark ? #1F3A4D : #E8F1FB;
     out property <color> selected-bg-hover: dark ? #24475E : #DCEAF9;
@@ -39,6 +47,8 @@ export global Theme {
     // ---------------------------------------------------------------- 描边
     out property <color> stroke: dark ? #3D3D3D : #E1E1E1;
     out property <color> stroke-strong: dark ? #4A4A4A : #D0D0D0;
+    /// 输入类控件的描边（Fluent 控制描边比普通分隔线深）
+    out property <color> stroke-control: dark ? #5A5A5A : #B8B8B8;
     out property <color> divider: dark ? #303030 : #EDEDED;
     out property <color> focus-ring: dark ? #60CDFF : #0F6CBD;
 
@@ -53,7 +63,7 @@ export global Theme {
     out property <color> accent: dark ? #60CDFF : #0F6CBD;
     out property <color> accent-hover: dark ? #4CC2FF : #115EA3;
     out property <color> accent-pressed: dark ? #3A9BC7 : #0C3B5E;
-    /// 强调色淡底（选中标签、徽章）
+    /// 强调色淡底（选中标签、徽章、信息条）
     out property <color> accent-soft: dark ? #163B4D : #EFF6FC;
     out property <color> accent-soft-hover: dark ? #1D485E : #E1EEFB;
 
@@ -68,8 +78,8 @@ export global Theme {
     out property <color> warning: dark ? #FCE100 : #9D5D00;
     out property <color> warning-soft: dark ? #433B10 : #FFF4CE;
     /// 遮罩 / 阴影
-    out property <color> shadow: dark ? #66000000 : #1F000000;
-    out property <color> overlay-scrim: #33000000;
+    out property <color> shadow: dark ? #00000066 : #0000001F;
+    out property <color> overlay-scrim: dark ? #00000073 : #00000033;
     /// 登录页背景柔光起始色
     out property <color> login-glow: dark ? #1B2836 : #E9F1FA;
 
@@ -79,32 +89,54 @@ export global Theme {
     out property <length> radius-flyout: 8px;
     out property <length> radius-pill: 16px;
 
-    // ---------------------------------------------------------------- 间距
+    // ---------------------------------------------------------------- 间距（4px 栅格）
+    out property <length> space-05: 2px;
     out property <length> space-1: 4px;
     out property <length> space-2: 8px;
     out property <length> space-3: 12px;
     out property <length> space-4: 16px;
-    out property <length> space-5: 24px;
-    out property <length> space-6: 32px;
+    out property <length> space-5: 20px;
+    out property <length> space-6: 24px;
+    out property <length> space-7: 32px;
+    out property <length> space-8: 40px;
 
     // ---------------------------------------------------------------- 字号
+    out property <length> font-caption-2: 10px;
     out property <length> font-caption: 11px;
     out property <length> font-small: 12px;
     out property <length> font-body: 13px;
     out property <length> font-body-large: 14px;
     out property <length> font-subtitle: 16px;
     out property <length> font-title: 20px;
+    out property <length> font-title-large: 24px;
     out property <length> font-display: 28px;
+
+    // ---------------------------------------------------------------- 字重
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+    out property <int> weight-semibold: 600;
 
     // ---------------------------------------------------------------- 尺寸
     /// Fluent 标准控件高度
     out property <length> control-height: 32px;
+    out property <length> control-height-sm: 26px;
     out property <length> control-height-large: 36px;
+    /// 列表行高（表头 / 文件行 / 设置行共享节奏）
     out property <length> row-height: 40px;
     out property <length> header-height: 44px;
-    out property <length> nav-width: 264px;
-    out property <length> nav-width-compact: 60px;
-    out property <length> nav-item-height: 38px;
+    out property <length> statusbar-height: 28px;
+    /// 导航栏宽度（WinUI NavigationView 展开态；紧凑态 56px）
+    out property <length> nav-width: 248px;
+    out property <length> nav-width-compact: 56px;
+    out property <length> nav-item-height: 36px;
+    /// 内容区最大宽度（超宽窗口下避免行被拉成一条线）
+    out property <length> content-max-width: 1040px;
+    /// 设置页单列最大宽度（对齐 Win11 设置应用）
+    out property <length> settings-max-width: 880px;
+    /// 空 / 加载 / 错误状态的文字组最大宽度
+    out property <length> state-text-max-width: 380px;
+    /// 焦点框宽度
+    out property <length> focus-width: 2px;
 
     // ---------------------------------------------------------------- 动效
     /// 快速（悬停、按下）

@@ -1,7 +1,6 @@
 // Fluent 分段控件（Segmented Control）
 //
-// 用于登录方式切换（密码 / 二维码）与传输任务筛选（全部 / 进行中 / 已完成 / 失败）。
-// Win11 样式：浅色沟槽 + 选中段浮起的浅色药丸。
+// 用于登录方式切换与传输任务筛选。Win11 样式：浅色沟槽 + 选中段浮起的浅色药丸。
 
 import { Theme } from "../theme/tokens.slint";
 
@@ -9,9 +8,10 @@ export component FluentSegmented inherits Rectangle {
     in property <[string]> items: [];
     in-out property <int> current: 0;
     in property <bool> enabled: true;
+
     callback changed(int);
 
-    height: 34px;
+    height: Theme.control-height;
     border-radius: Theme.radius-control;
     background: Theme.dark ? #2A2A2A : #F0F0F0;
     opacity: root.enabled ? 1.0 : 0.5;
@@ -23,7 +23,9 @@ export component FluentSegmented inherits Rectangle {
         for item[idx] in root.items : Rectangle {
             horizontal-stretch: 1;
             border-radius: Theme.radius-control - 1px;
-            background: root.current == idx ? (root.enabled ? Theme.card-bg : transparent) : transparent;
+            background: root.current == idx ? (root.enabled ? Theme.card-bg : transparent)
+                : seg-ta.has-hover && root.enabled ? Theme.control-bg-hover
+                : transparent;
 
             animate background {
                 duration: Theme.motion-fast;
@@ -34,14 +36,14 @@ export component FluentSegmented inherits Rectangle {
                 text: item;
                 font-family: Theme.font-family;
                 font-size: Theme.font-body;
-                font-weight: root.current == idx ? 600 : 400;
+                font-weight: root.current == idx ? Theme.weight-semibold : Theme.weight-regular;
                 color: root.current == idx ? Theme.text-primary : Theme.text-secondary;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;
             }
 
-            TouchArea {
+            seg-ta := TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: pointer;
                 clicked => {

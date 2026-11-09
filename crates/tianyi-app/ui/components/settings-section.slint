@@ -1,0 +1,97 @@
+// 设置页版式原语
+//
+// SettingsSection：分组卡片（标题 + 说明 + 子项）
+// SettingsRow：一行设置项（左侧名称/说明，右侧控件），高度与分隔线节奏统一
+//
+// 这两个组件只在设置页使用，但抽出来是为了让“标题—说明—控件”的对齐规则
+// 只有一处实现：任何新增设置项都必须复用它们，不允许再手写一遍间距。
+
+import { Theme } from "../theme/tokens.slint";
+
+/// 分组卡片
+export component SettingsSection inherits Rectangle {
+    in property <string> title: "";
+    in property <string> description: "";
+
+    border-radius: Theme.radius-card;
+    background: Theme.card-bg;
+    border-width: 1px;
+    border-color: Theme.stroke;
+
+    VerticalLayout {
+        padding: Theme.space-4;
+        spacing: Theme.space-1;
+
+        Text {
+            text: root.title;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body-large;
+            font-weight: Theme.weight-semibold;
+            color: Theme.text-primary;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            font-family: Theme.font-family;
+            font-size: Theme.font-small;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+
+        Rectangle {
+            height: Theme.space-2;
+            width: 1px;
+            background: transparent;
+        }
+
+        @children
+    }
+}
+
+/// 设置行：左名称/说明，右控件
+///
+/// 用 space-between 而不是靠一个可拉伸的空块：Slint 的 LinearLayout 在
+/// `alignment: start` 下（默认值）只要总首选宽度装得下，就会把所有子项压到左侧，
+/// 右侧控件于是跑到标签旁边。space-between 让"首项贴左、末项贴右"成为确定行为。
+export component SettingsRow inherits HorizontalLayout {
+    in property <string> label: "";
+    in property <string> description: "";
+
+    alignment: space-between;
+    spacing: Theme.space-4;
+    min-height: 48px;
+    padding-top: Theme.space-1;
+    padding-bottom: Theme.space-1;
+    cross-axis-alignment: center;
+
+    VerticalLayout {
+        // 限宽：说明文字才能真正换行，而不是把整行撑开
+        max-width: 560px;
+        spacing: Theme.space-05;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body-large;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+        }
+
+        if root.description != "": Text {
+            text: root.description;
+            font-family: Theme.font-family;
+            font-size: Theme.font-small;
+            color: Theme.text-tertiary;
+            wrap: word-wrap;
+        }
+    }
+
+    @children
+}
+
+/// 行间分隔线（与 SettingsRow 的高/边距配合）
+export component SettingsDivider inherits Rectangle {
+    height: 1px;
+    background: Theme.divider;
+}

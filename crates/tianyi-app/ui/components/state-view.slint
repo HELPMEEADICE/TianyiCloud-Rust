@@ -1,0 +1,230 @@
+// 空状态 / 加载状态 / 错误状态
+//
+// 三者共用同一套版式（StateScaffold）：图标或进度环 → 标题 → 说明 → 操作按钮，
+// 组成一个垂直居中的内容组。历史上这里出现过两个真实的布局缺陷，根因记录在此，
+// 修改时不要退回旧写法：
+//
+//  1) Slint 的 LinearLayout 里 `alignment` 是**主轴**对齐，`cross-axis-alignment` 才是
+//     交叉轴。旧实现写的是 `VerticalLayout { alignment: center }`，那只让内容组在垂直
+//     方向居中，而横向每个子项仍被拉伸成父容器全宽 —— 于是图标被固定在左侧、文字铺满
+//     整行、按钮被拉成一条横幅。现在统一用 `cross-axis-alignment: center` 让每个子项
+//     自身水平居中，并给文字/按钮显式的宽度约束。
+//  2) 文本必须显式限宽才能真正换行（word-wrap 需要宽度约束），否则会在窄窗口里溢出。
+//
+// 因此：图标盒固定尺寸、文字限宽居中换行、按钮按内容自适应宽度，整体最大内容宽度由
+// Theme.state-text-max-width 约束，任何窗口尺寸下都保持同一视觉重心。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, Icons } from "../theme/icons.slint";
+import { FluentButton } from "button.slint";
+import { FluentSpinner } from "spinner.slint";
+
+/// 三种状态共享的内容组骨架
+component StateScaffold inherits Rectangle {
+    in property <string> glyph: "";
+    in property <bool> busy: false;
+    in property <brush> tint: Theme.text-tertiary;
+    in property <string> title: "";
+    in property <string> description: "";
+    in property <string> action-text: "";
+    in property <string> secondary-text: "";
+    in property <bool> action-enabled: true;
+
+    callback action();
+    callback secondary();
+
+    background: transparent;
+
+    // 文字组的实际宽度：随窗口收缩，但不超过可读上限
+    property <length> text-width:
+        Math.max(120px, Math.min(root.width - 48px, Theme.state-text-max-width));
+
+    VerticalLayout {
+        // 主轴 = 垂直：内容组在整块区域里垂直居中
+        alignment: center;
+        // 交叉轴 = 水平：每个子项自身水平居中（关键修复点）
+        cross-axis-alignment: center;
+        // 只留水平内边距：垂直方向的 padding 会让 Slint 的居中出现固定偏移
+        // （内容在 (size - pref)/2 + padding.begin 处开始），窄窗口下就会明显偏低。
+        padding-left: 24px;
+        padding-right: 24px;
+
+        // ---- 图标 / 进度环 ----
+        Rectangle {
+            width: 64px;
+            height: 64px;
+            border-radius: 20px;
+            horizontal-stretch: 0;
+            background: root.busy ? (Theme.dark ? #2A3A44 : #EAF3FB)
+                : (Theme.dark ? #303030 : #F1F1F1);
+
+            if !root.busy: Icon {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                glyph: root.glyph;
+                size: 28px;
+                thickness: 1.5px;
+                icon-color: root.tint;
+            }
+
+            if root.busy: FluentSpinner {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: 28px;
+                stroke-width: 2.4px;
+                tint: Theme.accent;
+            }
+        }
+
+        Rectangle {
+            height: Theme.space-4;
+            width: 1px;
+            background: transparent;
+        }
+
+        // ---- 标题 ----
+        Text {
+            width: root.text-width;
+            text: root.title;
+            font-family: Theme.font-family;
+            font-size: Theme.font-subtitle;
+            font-weight: Theme.weight-semibold;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            wrap: word-wrap;
+        }
+
+        // ---- 说明 ----
+        if root.description != "": VerticalLayout {
+            width: root.text-width;
+            alignment: center;
+            cross-axis-alignment: center;
+
+            Rectangle {
+                height: Theme.space-05;
+                width: 1px;
+                background: transparent;
+            }
+
+            Text {
+                width: root.text-width;
+                text: root.description;
+                font-family: Theme.font-family;
+                font-size: Theme.font-body;
+                color: Theme.text-tertiary;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+
+        // 操作区与说明之间的留白（用显式间隔块，避免把 padding 算进按钮高度）
+        if root.action-text != "" || root.secondary-text != "": Rectangle {
+            height: Theme.space-4;
+            width: 1px;
+            background: transparent;
+        }
+
+        // ---- 操作 ----
+        if root.action-text != "" || root.secondary-text != "": HorizontalLayout {
+            // 主轴 = 水平：按钮组在内容宽度内水平居中
+            alignment: center;
+            cross-axis-alignment: center;
+            spacing: Theme.space-2;
+            height: Theme.control-height;
+
+            if root.action-text != "": FluentButton {
+                text: root.action-text;
+                accent: true;
+                enabled: root.action-enabled;
+                min-w: 96px;
+                clicked => {
+                    root.action();
+                }
+            }
+
+            if root.secondary-text != "": FluentButton {
+                text: root.secondary-text;
+                subtle: true;
+                clicked => {
+                    root.secondary();
+                }
+            }
+        }
+    }
+}
+
+/// 空状态：没有内容，但一切正常（空目录 / 无搜索结果 / 无直链 / 无传输任务）
+export component FluentEmptyState inherits Rectangle {
+    in property <string> glyph: Icons.folder;
+    in property <string> title: "";
+    in property <string> description: "";
+    in property <string> action-text: "";
+    in property <string> secondary-text: "";
+    /// 图标着色（错误场景由外部传入 Theme.danger）
+    in property <brush> tint: Theme.text-tertiary;
+
+    callback action();
+    callback secondary();
+
+    StateScaffold {
+        glyph: root.glyph;
+        tint: root.tint;
+        title: root.title;
+        description: root.description;
+        action-text: root.action-text;
+        secondary-text: root.secondary-text;
+        action => {
+            root.action();
+        }
+        secondary => {
+            root.secondary();
+        }
+    }
+}
+
+/// 加载状态：内容尚未就绪。可提供取消入口。
+export component FluentLoadingState inherits Rectangle {
+    in property <string> title: "正在加载…";
+    in property <string> description: "";
+    in property <string> cancel-text: "";
+
+    callback cancel();
+
+    StateScaffold {
+        busy: true;
+        title: root.title;
+        description: root.description;
+        secondary-text: root.cancel-text;
+        secondary => {
+            root.cancel();
+        }
+    }
+}
+
+/// 错误状态：加载或操作失败，给出可理解的原因与恢复入口
+export component FluentErrorState inherits Rectangle {
+    in property <string> title: "出错了";
+    in property <string> description: "";
+    in property <string> retry-text: "重试";
+    in property <string> secondary-text: "";
+
+    callback retry();
+    callback secondary();
+
+    StateScaffold {
+        glyph: Icons.error-circle;
+        tint: Theme.danger;
+        title: root.title;
+        description: root.description;
+        action-text: root.retry-text;
+        secondary-text: root.secondary-text;
+        action => {
+            root.retry();
+        }
+        secondary => {
+            root.secondary();
+        }
+    }
+}

@@ -7,6 +7,7 @@ export component FluentCheckBox inherits Rectangle {
     in property <string> text: "";
     in-out property <bool> checked: false;
     in property <bool> enabled: true;
+
     callback toggled();
 
     height: 24px;
@@ -21,10 +22,11 @@ export component FluentCheckBox inherits Rectangle {
         Rectangle {
             width: 18px;
             height: 18px;
+            horizontal-stretch: 0;
             border-radius: 4px;
             background: root.checked ? Theme.accent : (touch.has-hover ? Theme.control-bg-hover : Theme.control-bg);
             border-width: 1px;
-            border-color: root.checked ? Theme.accent : Theme.stroke-strong;
+            border-color: root.checked ? Theme.accent : (touch.has-hover ? Theme.accent : Theme.stroke-control);
 
             animate background {
                 duration: Theme.motion-fast;

@@ -1,13 +1,15 @@
 // 传输任务中心：筛选 + 虚拟化列表 + 暂停/继续/取消/重试/移除
+//
+// 任务状态完全由 Rust 侧状态机给出（status 字段），本页只做展示与派发，
+// 不自行推断"能不能暂停"，避免界面与真实任务状态不一致。
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
-import { FluentIconButton } from "../components/icon-button.slint";
 import { FluentSegmented } from "../components/segmented.slint";
 import { TransferRow } from "../components/transfer-row.slint";
-import { FluentEmptyState } from "../components/empty-state.slint";
+import { FluentEmptyState } from "../components/state-view.slint";
 import { TransferEntry } from "../types.slint";
 
 export component TransfersPage inherits Rectangle {
@@ -30,32 +32,29 @@ export component TransfersPage inherits Rectangle {
     background: Theme.window-bg;
 
     VerticalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 12px;
-        padding-bottom: 8px;
-        spacing: 10px;
+        padding-left: Theme.space-4;
+        padding-right: Theme.space-4;
+        padding-top: Theme.space-3;
+        padding-bottom: Theme.space-2;
+        spacing: Theme.space-2;
 
+        // ---------------- 标题栏 ----------------
         HorizontalLayout {
             height: Theme.header-height;
-            spacing: 10px;
+            spacing: Theme.space-3;
             cross-axis-alignment: center;
 
             Text {
                 text: "传输任务";
                 font-family: Theme.font-family;
                 font-size: Theme.font-subtitle;
-                font-weight: 600;
+                font-weight: Theme.weight-semibold;
                 color: Theme.text-primary;
                 vertical-alignment: center;
             }
 
-            Rectangle {
-                width: 240px;
-            }
-
             FluentSegmented {
-                width: 320px;
+                width: 300px;
                 items: ["全部", "进行中", "已完成", "失败/取消"];
                 current: root.filter;
                 changed(idx) => {
@@ -66,13 +65,14 @@ export component TransfersPage inherits Rectangle {
 
             Rectangle {
                 horizontal-stretch: 1;
+                height: 1px;
+                background: transparent;
             }
 
             FluentButton {
                 text: "打开下载目录";
-                glyph: Icons.folder;
+                glyph: Icons.folder-open;
                 subtle: true;
-                min-w: 132px;
                 clicked => {
                     root.open-download-dir();
                 }
@@ -82,7 +82,6 @@ export component TransfersPage inherits Rectangle {
                 text: "清理已完成";
                 glyph: Icons.trash;
                 subtle: true;
-                min-w: 124px;
                 enabled: root.finished-count > 0;
                 clicked => {
                     root.clear-finished();
@@ -90,76 +89,72 @@ export component TransfersPage inherits Rectangle {
             }
         }
 
-        Rectangle {
+        // ---------------- 列表（超宽窗口下限制内容宽度并居中） ----------------
+        HorizontalLayout {
             vertical-stretch: 1;
-            border-radius: Theme.radius-card;
-            background: Theme.layer-bg;
-            border-width: 1px;
-            border-color: Theme.stroke;
+            alignment: center;
 
-            VerticalLayout {
-                padding: 8px;
+            Rectangle {
+                width: Math.min(parent.width, Theme.content-max-width);
+                vertical-stretch: 1;
+                border-radius: Theme.radius-card;
+                background: Theme.layer-bg;
+                border-width: 1px;
+                border-color: Theme.stroke;
+                clip: true;
 
-                Rectangle {
-                    vertical-stretch: 1;
-                    background: transparent;
+                ListView {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
 
-                    ListView {
-                        x: 0;
-                        y: 0;
-                        width: parent.width;
-                        height: parent.height;
-
-                        for task in root.rows : TransferRow {
-                            entry: task;
-                            pause-clicked => {
-                                root.pause-task(task.id);
-                            }
-                            resume-clicked => {
-                                root.resume-task(task.id);
-                            }
-                            cancel-clicked => {
-                                root.cancel-task(task.id);
-                            }
-                            retry-clicked => {
-                                root.retry-task(task.id);
-                            }
-                            remove-clicked => {
-                                root.remove-task(task.id);
-                            }
-                            reveal-clicked => {
-                                root.reveal-task(task.id);
-                            }
+                    for task in root.rows : TransferRow {
+                        entry: task;
+                        pause-clicked => {
+                            root.pause-task(task.id);
+                        }
+                        resume-clicked => {
+                            root.resume-task(task.id);
+                        }
+                        cancel-clicked => {
+                            root.cancel-task(task.id);
+                        }
+                        retry-clicked => {
+                            root.retry-task(task.id);
+                        }
+                        remove-clicked => {
+                            root.remove-task(task.id);
+                        }
+                        reveal-clicked => {
+                            root.reveal-task(task.id);
                         }
                     }
+                }
 
-                    if root.rows.length == 0: Rectangle {
-                        x: 0;
-                        y: 0;
-                        width: parent.width;
-                        height: parent.height;
-                        background: Theme.layer-bg;
-
-                        FluentEmptyState {
-                            glyph: Icons.transfer;
-                            title: root.filter == 0 ? "还没有传输任务" : "该分类下没有任务";
-                            description: root.filter == 0
-                                ? "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
-                                : "切换到“全部”查看其他任务";
-                            action-text: root.filter == 0 ? "" : "查看全部";
-                            action => {
-                                root.filter = 0;
-                                root.filter-changed(0);
-                            }
-                        }
+                if root.rows.length == 0: FluentEmptyState {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    glyph: Icons.transfer;
+                    title: root.filter == 0 ? "还没有传输任务" : "该分类下没有任务";
+                    description: root.filter == 0
+                        ? "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
+                        : "切换到“全部”查看其他任务";
+                    action-text: root.filter == 0 ? "" : "查看全部";
+                    action => {
+                        root.filter = 0;
+                        root.filter-changed(0);
                     }
                 }
             }
         }
 
+        // ---------------- 状态栏 ----------------
         HorizontalLayout {
-            height: 24px;
-            spacing: 12px;
+            height: Theme.statusbar-height;
+            spacing: Theme.space-3;
             cross-axis-alignment: center;
 
             Text {

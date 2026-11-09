@@ -3,10 +3,12 @@
 // 结构：
 //   未登录 → LoginPage（整窗认证界面）
 //   已登录 → NavigationView（可折叠）+ 内容区（个人云/家庭云/传输/直链/设置）
-//            + 可展开的传输抽屉 + 上下文菜单 + 账号菜单 + 全局提示条
+//            + 传输抽屉 + 上下文菜单 + 账号菜单 + 确认对话框 + Toast + Tooltip
 //
 // 保留系统原生标题栏：不自绘标题栏，确保窗口拖动、贴边、双击最大化、DPI 缩放
 // 与系统快捷键完全由操作系统负责，避免自绘窗控带来的不可靠行为。
+//
+// 页面常驻 + visible 切换：切换页面不重建组件，滚动位置、搜索框输入、列表状态都不丢失。
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme/tokens.slint";
@@ -16,8 +18,8 @@ import { FluentButton } from "components/button.slint";
 import { FluentIconButton } from "components/icon-button.slint";
 import { FluentNavItem } from "components/nav-item.slint";
 import { FluentProgressBar } from "components/progress-bar.slint";
-import { FluentInfoBar } from "components/info-bar.slint";
 import { FluentMenuItem, FluentMenuDivider } from "components/menu.slint";
+import { FluentContentDialog } from "components/dialog.slint";
 import { TransferRow } from "components/transfer-row.slint";
 import { LoginPage } from "pages/login.slint";
 import { CloudPage } from "pages/cloud.slint";
@@ -27,7 +29,7 @@ import { SettingsPage } from "pages/settings.slint";
 
 // 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
 export { Theme } from "theme/tokens.slint";
-export { DragOutApi } from "types.slint";
+export { DragOutApi, ModifiersApi } from "types.slint";
 
 export component MainWindow inherits Window {
     title: "天翼云盘";
@@ -61,13 +63,16 @@ export component MainWindow inherits Window {
     in property <[FileEntry]> file-list: [];
     in property <[CrumbEntry]> crumbs: [];
     in property <bool> searching: false;
-    in property <bool> search-loading: false;
     in-out property <string> search-keyword: "";
-    in property <string> selected-id: "";
-    in-out property <bool> select-all: false;
     in property <string> renaming-id: "";
-    in property <bool> file-loading: false;
+    /// 列表状态：loading / refreshing / ready / empty / empty-search / error / idle
+    in property <string> list-state: "idle";
     in property <string> file-error: "";
+    /// 当前选中项数量（选择模型的唯一事实来源在 Rust 侧）
+    in property <int> selected-count: 0;
+    /// 排序：0=名称 1=大小 2=修改时间
+    in property <int> sort-key: 0;
+    in property <bool> sort-asc: true;
 
     // ==================== 容量 ====================
     in property <string> total-space: "";
@@ -99,6 +104,13 @@ export component MainWindow inherits Window {
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
 
+    // ==================== 确认对话框 ====================
+    in-out property <bool> dialog-open: false;
+    in property <string> dialog-title: "";
+    in property <string> dialog-message: "";
+    in property <string> dialog-confirm-text: "确定";
+    in property <bool> dialog-danger: false;
+
     // ==================== 登录回调 ====================
     callback login_request(string, string, string, bool);
     callback qr_refresh();
@@ -107,7 +119,9 @@ export component MainWindow inherits Window {
 
     // ==================== 文件回调 ====================
     callback open_item(string, string, bool);
-    callback select_item(string);
+    callback select_item(string, bool, bool);
+    callback select_all();
+    callback clear_selection();
     callback context_requested(string, string, bool, length, length);
     callback refresh_files();
     callback navigate_up();
@@ -125,8 +139,8 @@ export component MainWindow inherits Window {
     callback search_changed(string);
     callback search_submitted(string);
     callback clear_search();
+    callback sort_changed(int);
     callback notice_closed();
-    callback transfer_filter_changed(int);
 
     // ==================== 传输回调 ====================
     callback pause_task(int);
@@ -138,23 +152,36 @@ export component MainWindow inherits Window {
     callback clear_finished_tasks();
     callback toggle_transfer_panel();
     callback open_download_dir();
+    callback transfer_filter_changed(int);
 
-    // ==================== 其它 ====================
+    // ==================== 设置 / 其它 ====================
     callback copy_link(string);
     callback clear_links();
     callback theme_changed(int);
     callback reduce_motion_changed(bool);
     callback choose_download_dir();
     callback open_config_dir();
+    callback copy_text(string);
     callback logout();
+
+    // ==================== 确认对话框 ====================
+    callback dialog_confirm();
+    callback dialog_cancel();
+
+    // ==================== 拖拽 ====================
     callback files_dropped(string);
     pure callback make_drag_data(string, string, bool) -> data-transfer;
     callback drop_can_accept(DropEvent, string) -> DragAction;
     callback drop_requested(DropEvent, string) -> DragAction;
 
     // ==================== 布局状态 ====================
-    property <bool> nav-compact: root.width < 1040px;
-    property <bool> list-compact: root.width < 1000px;
+    // 折叠断点：导航栏折叠后内容区仍有足够宽度显示文件名
+    property <bool> nav-compact: root.width < 960px;
+    // 文件列表次要列分级，保证任何窗口宽度下列都对齐且不互相挤压
+    property <int> detail-level: root.width < 980px ? 0
+        : root.width < 1120px ? 1
+        : root.width < 1300px ? 2
+        : 3;
     property <bool> account-menu-open: false;
     // 右键菜单状态（由控制器写入，菜单面板按此定位）
     in-out property <bool> context-open: false;
@@ -163,8 +190,8 @@ export component MainWindow inherits Window {
     in-out property <string> context-item-id: "";
     in-out property <string> context-item-name: "";
     in-out property <bool> context-is-dir: false;
-    property <int> context-item-count: root.context-is-dir ? 5 : 7;
-    property <string> capacity-text: root.total-space == "" ? "" : ("容量 " + root.used-space + " / " + root.total-space);
+    property <string> capacity-text: root.total-space == "" ? "" : (root.used-space + " / " + root.total-space);
+    property <int> capacity-percent: Math.round(Math.min(1.0, Math.max(0.0, root.capacity-ratio)) * 100.0);
 
     // ==================== 未登录 ====================
     if !root.logged-in: LoginPage {
@@ -208,48 +235,55 @@ export component MainWindow inherits Window {
             }
 
             VerticalLayout {
-                padding-left: root.nav-compact ? 8px : 10px;
-                padding-right: root.nav-compact ? 8px : 10px;
-                padding-top: 12px;
-                padding-bottom: 10px;
-                spacing: 4px;
+                padding-left: root.nav-compact ? Theme.space-1 : Theme.space-2;
+                padding-right: root.nav-compact ? Theme.space-1 : Theme.space-2;
+                padding-top: Theme.space-3;
+                padding-bottom: Theme.space-2;
+                spacing: Theme.space-05;
 
                 // 品牌
-                HorizontalLayout {
+                brand-row := Rectangle {
                     height: 40px;
-                    spacing: 10px;
-                    cross-axis-alignment: center;
+                    border-radius: Theme.radius-control;
+                    background: transparent;
 
                     Rectangle {
-                        width: 30px;
-                        height: 30px;
-                        border-radius: 9px;
+                        x: root.nav-compact ? (parent.width - self.width) / 2 : 4px;
+                        y: (parent.height - self.height) / 2;
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 8px;
                         background: Theme.accent;
 
                         Icon {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             glyph: Icons.cloud;
-                            size: 17px;
+                            size: 16px;
                             thickness: 1.7px;
                             icon-color: Theme.text-on-accent;
                         }
                     }
 
                     if !root.nav-compact: Text {
+                        x: 40px;
+                        y: 0;
+                        width: parent.width - 48px;
+                        height: parent.height;
                         text: "天翼云盘";
                         font-family: Theme.font-family;
                         font-size: Theme.font-subtitle;
-                        font-weight: 600;
+                        font-weight: Theme.weight-semibold;
                         color: Theme.text-primary;
                         vertical-alignment: center;
-                        horizontal-stretch: 1;
                         overflow: elide;
                     }
                 }
 
                 Rectangle {
-                    height: 8px;
+                    height: Theme.space-2;
+                    width: 1px;
+                    background: transparent;
                 }
 
                 FluentNavItem {
@@ -308,61 +342,99 @@ export component MainWindow inherits Window {
 
                 Rectangle {
                     vertical-stretch: 1;
+                    width: 1px;
+                    background: transparent;
                 }
 
-                // 存储卡片
-                if !root.nav-compact: Rectangle {
+                // 存储：紧凑信息块（已用 / 总量 / 进度），不再占用大量垂直空间
+                if !root.nav-compact: storage-card := Rectangle {
+                    height: 62px;
                     border-radius: Theme.radius-card;
                     background: Theme.card-bg;
                     border-width: 1px;
                     border-color: Theme.stroke;
 
                     VerticalLayout {
-                        padding: 10px;
-                        spacing: 6px;
+                        padding-left: Theme.space-2;
+                        padding-right: Theme.space-2;
+                        padding-top: Theme.space-1;
+                        padding-bottom: Theme.space-2;
+                        spacing: Theme.space-1;
+                        alignment: center;
 
                         HorizontalLayout {
-                            spacing: 6px;
+                            spacing: Theme.space-1;
                             cross-axis-alignment: center;
 
                             Icon {
                                 glyph: Icons.storage;
-                                size: 14px;
+                                size: 13px;
                                 thickness: 1.6px;
-                                icon-color: Theme.text-secondary;
+                                icon-color: Theme.text-tertiary;
                             }
 
                             Text {
-                                text: "存储空间";
+                                text: "存储";
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
-                                color: Theme.text-secondary;
+                                color: Theme.text-tertiary;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
                             }
 
                             Text {
-                                text: root.total-space == "" ? "—" : Math.round(Math.min(1.0, Math.max(0.0, root.capacity-ratio)) * 100.0) + "%";
+                                text: root.total-space == "" ? "—" : root.capacity-percent + "%";
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
-                                font-weight: 600;
-                                color: Theme.text-secondary;
+                                font-weight: Theme.weight-semibold;
+                                color: root.capacity-ratio > 0.9 ? Theme.danger : Theme.text-secondary;
                                 vertical-alignment: center;
                             }
                         }
 
                         FluentProgressBar {
                             value: root.capacity-ratio * 100.0;
-                            bar-height: 4px;
+                            bar-height: 3px;
                             bar-color: root.capacity-ratio > 0.9 ? Theme.danger : Theme.accent;
                         }
 
                         Text {
-                            text: root.total-space == "" ? "未获取到容量信息" : (root.used-space + " / " + root.total-space);
+                            text: root.total-space == "" ? "未获取到容量信息" : root.capacity-text;
                             font-family: Theme.font-family;
                             font-size: Theme.font-caption;
                             color: Theme.text-tertiary;
                             overflow: elide;
+                        }
+                    }
+                }
+
+                // 折叠态：只保留一个可悬停查看的存储指示，不做成"点了没反应"的假按钮
+                if root.nav-compact: storage-compact := Rectangle {
+                    height: 36px;
+                    border-radius: Theme.radius-control;
+                    background: storage-ta.has-hover ? Theme.hover-bg : transparent;
+
+                    Icon {
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        glyph: Icons.storage;
+                        size: 16px;
+                        thickness: 1.6px;
+                        icon-color: root.capacity-ratio > 0.9 ? Theme.danger : Theme.text-secondary;
+                    }
+
+                    storage-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        changed has-hover => {
+                            if (self.has-hover) {
+                                TooltipState.text = root.total-space == "" ? "未获取到容量信息"
+                                    : ("存储 " + root.capacity-percent + "% · " + root.capacity-text);
+                                TooltipState.x = self.absolute-position.x + self.width + 8px;
+                                TooltipState.y = self.absolute-position.y;
+                                TooltipState.visible = true;
+                            } else {
+                                TooltipState.visible = false;
+                            }
                         }
                     }
                 }
@@ -373,45 +445,45 @@ export component MainWindow inherits Window {
                     border-radius: Theme.radius-control;
                     background: account-ta.has-hover || root.account-menu-open ? Theme.hover-bg : transparent;
 
-                    HorizontalLayout {
-                        padding-left: root.nav-compact ? 0px : 6px;
-                        spacing: 10px;
+                    Rectangle {
+                        x: root.nav-compact ? (parent.width - self.width) / 2 : 6px;
+                        y: (parent.height - self.height) / 2;
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 14px;
+                        background: Theme.accent-soft;
 
-                        cross-axis-alignment: center;
-
-                        Rectangle {
-                            width: 28px;
-                            height: 28px;
-                            border-radius: 14px;
-                            background: Theme.accent-soft;
-
-                            Text {
-                                text: root.account-initial;
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-body;
-                                font-weight: 600;
-                                color: Theme.accent;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
-                        }
-
-                        if !root.nav-compact: Text {
-                            text: root.account-name;
+                        Text {
+                            text: root.account-initial;
                             font-family: Theme.font-family;
                             font-size: Theme.font-body;
-                            color: Theme.text-primary;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.accent;
+                            horizontal-alignment: center;
                             vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
                         }
+                    }
 
-                        if !root.nav-compact: Icon {
-                            glyph: Icons.more;
-                            filled: true;
-                            size: 14px;
-                            icon-color: Theme.text-tertiary;
-                        }
+                    if !root.nav-compact: Text {
+                        x: 42px;
+                        y: 0;
+                        width: parent.width - 72px;
+                        height: parent.height;
+                        text: root.account-name;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-body;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    if !root.nav-compact: Icon {
+                        x: parent.width - 26px;
+                        y: (parent.height - self.height) / 2;
+                        glyph: Icons.more;
+                        filled: true;
+                        size: 14px;
+                        icon-color: Theme.text-tertiary;
                     }
 
                     account-ta := TouchArea {
@@ -429,25 +501,6 @@ export component MainWindow inherits Window {
             horizontal-stretch: 1;
             spacing: 0px;
 
-            // 全局提示条
-            if root.notice-text != "": Rectangle {
-                background: Theme.window-bg;
-
-                VerticalLayout {
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    padding-top: 10px;
-
-                    FluentInfoBar {
-                        message: root.notice-text;
-                        kind: root.notice-kind;
-                        closed => {
-                            root.notice_closed();
-                        }
-                    }
-                }
-            }
-
             // 传输抽屉
             if root.transfer-panel-open: Rectangle {
                 height: 260px;
@@ -456,15 +509,15 @@ export component MainWindow inherits Window {
                 border-color: Theme.divider;
 
                 VerticalLayout {
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    padding-top: 10px;
-                    padding-bottom: 10px;
-                    spacing: 8px;
+                    padding-left: Theme.space-4;
+                    padding-right: Theme.space-4;
+                    padding-top: Theme.space-2;
+                    padding-bottom: Theme.space-2;
+                    spacing: Theme.space-2;
 
                     HorizontalLayout {
                         height: 28px;
-                        spacing: 8px;
+                        spacing: Theme.space-2;
                         cross-axis-alignment: center;
 
                         Icon {
@@ -475,16 +528,18 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: "传输任务 " + root.active-transfers;
+                            text: "进行中的传输 " + root.active-transfers;
                             font-family: Theme.font-family;
                             font-size: Theme.font-body;
-                            font-weight: 600;
+                            font-weight: Theme.weight-semibold;
                             color: Theme.text-primary;
                             vertical-alignment: center;
                         }
 
                         Rectangle {
                             horizontal-stretch: 1;
+                            height: 1px;
+                            background: transparent;
                         }
 
                         FluentButton {
@@ -566,12 +621,13 @@ export component MainWindow inherits Window {
                     space-label: root.current-page == 1 ? "家庭云" : "个人云";
                     crumbs: root.crumbs;
                     rows: root.file-list;
-                    selected-id: root.selected-id;
-                    select-all: root.select-all;
                     renaming-id: root.renaming-id;
                     searching: root.searching;
-                    loading: root.file-loading;
-                    compact: root.list-compact;
+                    list-state: root.list-state;
+                    detail-level: root.detail-level;
+                    selected-count: root.selected-count;
+                    sort-key: root.sort-key;
+                    sort-asc: root.sort-asc;
                     status-text: root.status-text;
                     capacity-text: root.capacity-text;
                     active-transfers: root.active-transfers;
@@ -580,8 +636,14 @@ export component MainWindow inherits Window {
                     drop-target-name: root.drop-target-name;
                     search-text <=> root.search-keyword;
 
-                    select-item(id) => {
-                        root.select_item(id);
+                    select-item(id, ctrl, shift) => {
+                        root.select_item(id, ctrl, shift);
+                    }
+                    select-all => {
+                        root.select_all();
+                    }
+                    clear-selection => {
+                        root.clear_selection();
                     }
                     open-item(id, name, is-dir) => {
                         root.open_item(id, name, is-dir);
@@ -603,6 +665,9 @@ export component MainWindow inherits Window {
                     }
                     create-folder => {
                         root.create_folder();
+                    }
+                    sort-changed(key) => {
+                        root.sort_changed(key);
                     }
                     search-changed(kw) => {
                         root.search_changed(kw);
@@ -736,11 +801,89 @@ export component MainWindow inherits Window {
                     open-config-dir => {
                         root.open_config_dir();
                     }
+                    copy-text(text) => {
+                        root.copy_text(text);
+                    }
                     logout => {
                         root.logout();
                     }
                 }
             }
+        }
+    }
+
+    // ==================== Toast（不参与布局，避免页面跳动） ====================
+    if root.notice-text != "": toast := Rectangle {
+        width: Math.min(420px, root.width - 32px);
+        height: toast-layout.preferred-height;
+        x: root.width - self.width - 16px;
+        y: root.height - self.height - 16px;
+        border-radius: Theme.radius-card;
+        background: Theme.flyout-bg;
+        border-width: 1px;
+        border-color: root.notice-kind == "error" ? Theme.danger
+            : root.notice-kind == "success" ? Theme.success
+            : root.notice-kind == "warning" ? Theme.warning
+            : Theme.stroke-strong;
+
+        toast-layout := HorizontalLayout {
+            padding-left: Theme.space-3;
+            padding-right: Theme.space-1;
+            padding-top: Theme.space-2;
+            padding-bottom: Theme.space-2;
+            spacing: Theme.space-2;
+            cross-axis-alignment: center;
+
+            Icon {
+                glyph: root.notice-kind == "error" || root.notice-kind == "warning" ? Icons.warning
+                    : root.notice-kind == "success" ? Icons.check-circle
+                    : Icons.info;
+                size: 16px;
+                thickness: 1.7px;
+                icon-color: root.notice-kind == "error" ? Theme.danger
+                    : root.notice-kind == "success" ? Theme.success
+                    : root.notice-kind == "warning" ? Theme.warning
+                    : Theme.accent;
+            }
+
+            Text {
+                text: root.notice-text;
+                font-family: Theme.font-family;
+                font-size: Theme.font-small;
+                color: Theme.text-primary;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            FluentIconButton {
+                glyph: Icons.close;
+                tooltip: "关闭提示";
+                size: 24px;
+                icon-size: 10px;
+                clicked => {
+                    root.notice_closed();
+                }
+            }
+        }
+    }
+
+    // ==================== 确认对话框 ====================
+    if root.dialog-open: FluentContentDialog {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        title: root.dialog-title;
+        message: root.dialog-message;
+        confirm-text: root.dialog-confirm-text;
+        danger: root.dialog-danger;
+
+        confirm => {
+            root.dialog_confirm();
+        }
+        cancel => {
+            root.dialog_cancel();
         }
     }
 
@@ -765,9 +908,9 @@ export component MainWindow inherits Window {
         width: 232px;
         height: menu-layout.preferred-height;
         border-radius: Theme.radius-flyout;
-        background: Theme.card-bg;
+        background: Theme.flyout-bg;
         border-width: 1px;
-        border-color: Theme.stroke;
+        border-color: Theme.stroke-strong;
 
         menu-layout := VerticalLayout {
             padding: 6px;
@@ -786,7 +929,7 @@ export component MainWindow inherits Window {
                         text: root.account-name;
                         font-family: Theme.font-family;
                         font-size: Theme.font-body;
-                        font-weight: 600;
+                        font-weight: Theme.weight-semibold;
                         color: Theme.text-primary;
                         vertical-alignment: center;
                         horizontal-stretch: 1;
@@ -808,7 +951,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.folder;
+                glyph: Icons.folder-open;
                 label: "下载目录";
                 triggered => {
                     root.account-menu-open = false;
@@ -852,9 +995,9 @@ export component MainWindow inherits Window {
         width: 236px;
         height: ctx-layout.preferred-height;
         border-radius: Theme.radius-flyout;
-        background: Theme.card-bg;
+        background: Theme.flyout-bg;
         border-width: 1px;
-        border-color: Theme.stroke;
+        border-color: Theme.stroke-strong;
 
         ctx-layout := VerticalLayout {
             padding: 6px;
@@ -881,7 +1024,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.file;
+                glyph: root.context-is-dir ? Icons.folder-open : Icons.file;
                 label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
                 triggered => {
                     root.context-open = false;
@@ -905,6 +1048,7 @@ export component MainWindow inherits Window {
                 glyph: Icons.pencil;
                 label: "重命名";
                 shortcut: "F2";
+                enabled: root.selected-count == 1;
                 triggered => {
                     root.context-open = false;
                     root.rename_selected();
@@ -943,6 +1087,30 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                glyph: Icons.select-all;
+                label: "全选";
+                shortcut: "Ctrl+A";
+                triggered => {
+                    root.context-open = false;
+                    root.select_all();
+                }
+            }
+
+            FluentMenuItem {
+                glyph: Icons.close;
+                label: "取消选择";
+                shortcut: "Esc";
+                enabled: root.selected-count > 0;
+                triggered => {
+                    root.context-open = false;
+                    root.clear_selection();
+                }
+            }
+
+            FluentMenuDivider {
+            }
+
+            FluentMenuItem {
                 glyph: Icons.trash;
                 label: "删除";
                 shortcut: "Del";
@@ -954,9 +1122,10 @@ export component MainWindow inherits Window {
             }
         }
     }
+
     // ==================== 顶层：轻量 Tooltip 浮层 ====================
     if TooltipState.visible && TooltipState.text != "": tooltip := Rectangle {
-        width: Math.min(tip-layout.preferred-width, 320px);
+        width: Math.min(tip-layout.preferred-width, 420px);
         height: tip-layout.preferred-height;
         x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
         y: Math.min(TooltipState.y, root.height - self.height - 4px);
@@ -977,6 +1146,7 @@ export component MainWindow inherits Window {
                 font-size: Theme.font-caption;
                 color: #FFFFFF;
                 vertical-alignment: center;
+                overflow: elide;
             }
         }
     }

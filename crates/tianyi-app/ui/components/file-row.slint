@@ -1,34 +1,37 @@
 // 文件列表行（Details View 行）
 //
 // 列宽由 FileColumns 统一提供，表头与数据行共用，保证列对齐。
-// 交互：单击选中、双击打开、右键上下文菜单、拖拽（网盘内移动 / 修饰键拖出下载）、
-// 作为文件夹时可接收拖入、原地重命名。
+// 交互：单击选中、Ctrl+单击切换、Shift+单击范围选择、双击打开、右键上下文菜单、
+// 拖拽（网盘内移动 / 修饰键拖出下载）、作为文件夹时可接收拖入、原地重命名。
+//
+// detail-level 控制次要列：0=仅名称 1=+大小 2=+修改时间 3=+类型。
+// 由页面按窗口宽度给出，避免窄窗口下四列互相挤压。
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
-import { DragOutApi, FileEntry } from "../types.slint";
+import { DragOutApi, FileEntry, ModifiersApi } from "../types.slint";
 
 /// 文件列表列宽（表头与行共享）
 export global FileColumns {
     out property <length> icon: 20px;
     out property <length> size: 96px;
-    out property <length> time: 168px;
-    out property <length> kind: 92px;
+    out property <length> time: 156px;
+    out property <length> kind: 88px;
     out property <length> gap: 12px;
-    out property <length> pad-left: 10px;
+    out property <length> pad-left: 12px;
     out property <length> pad-right: 12px;
+    out property <length> header-height: 32px;
 }
 
 export component FileRow inherits Rectangle {
     in property <FileEntry> entry;
-    in property <bool> selected: false;
     in property <bool> renaming: false;
-    /// 窄窗口下隐藏次要列
-    in property <bool> compact: false;
+    /// 次要列显示级别：0=仅名称 1=+大小 2=+修改时间 3=+类型
+    in property <int> detail-level: 3;
     in property <bool> is-drop-target: false;
     in property <data-transfer> drag-data;
 
-    callback item-clicked();
+    callback item-clicked(bool, bool);
     callback item-double-clicked();
     callback context-requested(string, string, bool, length, length);
     callback rename-submitted(string);
@@ -57,7 +60,7 @@ export component FileRow inherits Rectangle {
     border-radius: Theme.radius-control;
     opacity: DragOutApi.active && DragOutApi.active-id == entry.id ? 0.4 : 1.0;
 
-    background: root.selected ? (touch.has-hover ? Theme.selected-bg-hover : Theme.selected-bg)
+    background: entry.selected ? (touch.has-hover ? Theme.selected-bg-hover : Theme.selected-bg)
         : touch.has-hover ? Theme.hover-bg
         : root.is-drop-target && da.has-drag ? Theme.accent-soft
         : transparent;
@@ -75,7 +78,7 @@ export component FileRow inherits Rectangle {
         height: 18px;
         border-radius: 1px;
         background: Theme.accent;
-        opacity: root.selected ? 1.0 : 0.0;
+        opacity: entry.selected ? 1.0 : 0.0;
 
         animate opacity {
             duration: Theme.motion-fast;
@@ -97,6 +100,7 @@ export component FileRow inherits Rectangle {
             Rectangle {
                 width: FileColumns.icon;
                 height: FileColumns.icon;
+                horizontal-stretch: 0;
                 background: transparent;
 
                 Icon {
@@ -105,7 +109,7 @@ export component FileRow inherits Rectangle {
                     glyph: root.row-glyph;
                     size: FileColumns.icon;
                     thickness: 1.6px;
-                    icon-color: root.selected ? Theme.accent : root.row-tint;
+                    icon-color: entry.selected ? Theme.accent : root.row-tint;
                 }
             }
 
@@ -145,7 +149,7 @@ export component FileRow inherits Rectangle {
                 }
             }
 
-            if !root.compact: Text {
+            if root.detail-level >= 1: Text {
                 width: FileColumns.size;
                 text: root.entry.size_text;
                 font-family: Theme.font-family;
@@ -156,7 +160,7 @@ export component FileRow inherits Rectangle {
                 overflow: elide;
             }
 
-            if !root.compact: Text {
+            if root.detail-level >= 2: Text {
                 width: FileColumns.time;
                 text: root.entry.modified;
                 font-family: Theme.font-family;
@@ -166,7 +170,7 @@ export component FileRow inherits Rectangle {
                 overflow: elide;
             }
 
-            if !root.compact: Text {
+            if root.detail-level >= 3: Text {
                 width: FileColumns.kind;
                 text: root.entry.kind_text;
                 font-family: Theme.font-family;
@@ -182,7 +186,7 @@ export component FileRow inherits Rectangle {
             mouse-cursor: pointer;
 
             clicked => {
-                root.item-clicked();
+                root.item-clicked(ModifiersApi.ctrl, ModifiersApi.shift);
             }
             double-clicked => {
                 root.item-double-clicked();

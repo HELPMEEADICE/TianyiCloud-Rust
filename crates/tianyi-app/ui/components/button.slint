@@ -1,9 +1,11 @@
 // Fluent 按钮：标准 / 强调 / 次要（无边框）/ 危险 四种外观
 //
 // 尺寸与 Win11 一致：高 32px、圆角 4px、左右内边距 12px、正文 14px。
+// 四种视觉状态（hover / pressed / disabled / busy）都由令牌驱动，不允许页面本地覆盖颜色。
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon } from "../theme/icons.slint";
+import { FluentSpinner } from "spinner.slint";
 
 export component FluentButton inherits Rectangle {
     in property <string> text: "";
@@ -14,24 +16,26 @@ export component FluentButton inherits Rectangle {
     /// 无边框、无底色，仅悬停时出现底色
     in property <bool> subtle: false;
     in property <bool> enabled: true;
-    /// 处理中：显示额外文案并禁用点击
+    /// 处理中：显示进度环并禁用点击
     in property <bool> busy: false;
     /// 前置图标路径（可选）
     in property <string> glyph: "";
+    /// 最小宽度（主操作按钮用它保持视觉节奏，不应设置成"铺满父容器"）
     in property <length> min-w: 0px;
+
     callback clicked();
 
     height: Theme.control-height;
     min-width: root.min-w;
     border-radius: Theme.radius-control;
     border-width: root.subtle || root.accent || root.danger ? 0px : 1px;
-    border-color: root.enabled ? Theme.stroke : Theme.control-bg-disabled;
+    border-color: root.enabled ? Theme.stroke-control : Theme.control-bg-disabled;
     opacity: root.enabled ? 1.0 : 0.45;
 
     background: !root.enabled ? Theme.control-bg-disabled
         : root.accent ? (touch.pressed ? Theme.accent-pressed : touch.has-hover ? Theme.accent-hover : Theme.accent)
         : root.danger ? (touch.pressed ? Theme.danger-pressed : touch.has-hover ? Theme.danger-hover : Theme.danger-soft)
-        : root.subtle ? (touch.pressed ? Theme.control-bg-pressed : touch.has-hover ? Theme.control-bg-hover : transparent)
+        : root.subtle ? (touch.pressed ? Theme.pressed-bg : touch.has-hover ? Theme.control-bg-hover : transparent)
         : (touch.pressed ? Theme.control-bg-pressed : touch.has-hover ? Theme.control-bg-hover : Theme.control-bg);
 
     animate background {
@@ -46,7 +50,13 @@ export component FluentButton inherits Rectangle {
         alignment: center;
         cross-axis-alignment: center;
 
-        if root.glyph != "": Icon {
+        if root.busy: FluentSpinner {
+            size: 14px;
+            stroke-width: 1.8px;
+            tint: root.accent ? Theme.text-on-accent : Theme.accent;
+        }
+
+        if !root.busy && root.glyph != "": Icon {
             glyph: root.glyph;
             size: 16px;
             thickness: 1.7px;
@@ -57,7 +67,7 @@ export component FluentButton inherits Rectangle {
             text: root.text;
             font-family: Theme.font-family;
             font-size: Theme.font-body-large;
-            font-weight: 400;
+            font-weight: root.accent ? Theme.weight-medium : Theme.weight-regular;
             color: root.accent ? Theme.text-on-accent : (root.danger ? Theme.danger : (root.enabled ? Theme.text-primary : Theme.text-disabled));
             vertical-alignment: center;
             overflow: elide;

@@ -17,15 +17,18 @@ export component FluentIconButton inherits Rectangle {
     in property <bool> filled: false;
     in property <length> icon-size: 16px;
     in property <length> size: 32px;
+
     callback clicked();
 
     width: root.size;
     height: root.size;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
     border-radius: Theme.radius-control;
     opacity: root.enabled ? 1.0 : 0.4;
 
     background: !root.enabled ? transparent
-        : touch.pressed ? Theme.control-bg-pressed
+        : touch.pressed ? Theme.pressed-bg
         : touch.has-hover ? Theme.control-bg-hover
         : root.checked ? Theme.accent-soft : transparent;
 

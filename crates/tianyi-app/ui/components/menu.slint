@@ -12,6 +12,7 @@ export component FluentMenuItem inherits Rectangle {
     in property <string> shortcut: "";
     in property <bool> danger: false;
     in property <bool> enabled: true;
+
     callback triggered();
 
     height: 32px;
@@ -19,7 +20,7 @@ export component FluentMenuItem inherits Rectangle {
     opacity: root.enabled ? 1.0 : 0.4;
 
     background: !root.enabled ? transparent
-        : ta.pressed ? Theme.control-bg-pressed
+        : ta.pressed ? Theme.pressed-bg
         : ta.has-hover ? (root.danger ? Theme.danger-soft : Theme.control-bg-hover)
         : transparent;
 

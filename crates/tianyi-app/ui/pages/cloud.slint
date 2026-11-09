@@ -1,7 +1,14 @@
 // 云盘工作区（个人云 / 家庭云共用）
 //
-// 结构：命令栏（面包屑 + 搜索 + 主操作）→ 选中态命令栏 → 文件明细列表 → 状态栏。
-// 列表使用 ListView 虚拟化，只实例化可见行，避免大目录卡顿。
+// 结构（自上而下）：
+//   命令栏（返回 + 面包屑 + 搜索 + 刷新 + 新建 + 上传）
+//   → 操作栏（固定高度：无选中时显示统计/全选，有选中时切换为批量操作，避免布局跳动）
+//   → 提示条（错误 / 搜索态）
+//   → 文件明细列表（ListView 虚拟化）
+//   → 状态栏
+//
+// 列表状态由 Rust 侧的单一 list-state 派生，不再用多个布尔变量互相组合：
+//   loading=首次加载、refreshing=已有数据的静默刷新、ready、empty、empty-search、error
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
@@ -9,29 +16,35 @@ import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
 import { FluentSearchBox } from "../components/search-box.slint";
 import { FileRow, FileColumns } from "../components/file-row.slint";
-import { FluentEmptyState } from "../components/empty-state.slint";
+import { FluentEmptyState, FluentLoadingState, FluentErrorState } from "../components/state-view.slint";
 import { DropOverlay } from "../components/drop-overlay.slint";
 import { ListView } from "std-widgets.slint";
 import { FileEntry, CrumbEntry } from "../types.slint";
 
 export component CloudPage inherits Rectangle {
     in property <string> space-label: "个人云";
-    in property <string> space-subtitle: "";
     in property <[CrumbEntry]> crumbs: [];
     in property <[FileEntry]> rows: [];
-    in property <string> selected-id: "";
     in property <string> renaming-id: "";
     in property <bool> searching: false;
-    in property <bool> loading: false;
-    in property <bool> compact: false;
+    /// 列表状态：loading / refreshing / ready / empty / empty-search / error / idle
+    in property <string> list-state: "idle";
+    /// 次要列级别：0=仅名称 1=+大小 2=+时间 3=+类型
+    in property <int> detail-level: 3;
     in property <string> status-text: "";
     in property <string> capacity-text: "";
     in property <int> active-transfers: 0;
+    in property <int> selected-count: 0;
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
     in property <string> error-text: "";
+    /// 排序：0=名称 1=大小 2=修改时间
+    in property <int> sort-key: 0;
+    in property <bool> sort-asc: true;
 
-    callback select-item(string);
+    callback select-item(string, bool, bool);
+    callback select-all();
+    callback clear-selection();
     callback open-item(string, string, bool);
     callback context-requested(string, string, bool, length, length);
     callback navigate-crumb(int);
@@ -50,31 +63,39 @@ export component CloudPage inherits Rectangle {
     callback link-selected();
     callback rename-submitted(string, string);
     callback toggle-transfers();
+    callback sort-changed(int);
     pure callback make-drag-data(string, string, bool) -> data-transfer;
     callback drop-can-accept(DropEvent, string) -> DragAction;
     callback drop-requested(DropEvent, string) -> DragAction;
 
     in-out property <string> search-text: "";
-    /// Ctrl+A 全选（单点选择与全选两种模式）
-    in-out property <bool> select-all: false;
-    property <bool> has-selection: root.selected-id != "" || root.select-all;
+
+    property <bool> has-selection: root.selected-count > 0;
+    property <bool> narrow: root.width < 760px;
+    property <bool> show-loading: root.list-state == "loading" && root.rows.length == 0;
+    property <bool> show-error: root.list-state == "error" && root.rows.length == 0;
+    property <bool> show-empty: root.rows.length == 0 && !root.show-loading && !root.show-error;
+    property <bool> refreshing: root.list-state == "refreshing";
+    /// 有行数据时的错误提示（占一行 InfoBar，不接管整页）
+    property <bool> inline-error: root.list-state == "error" && root.rows.length > 0;
 
     background: Theme.window-bg;
 
     VerticalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 12px;
-        padding-bottom: 8px;
-        spacing: 8px;
+        padding-left: Theme.space-4;
+        padding-right: Theme.space-4;
+        padding-top: Theme.space-3;
+        padding-bottom: Theme.space-2;
+        spacing: Theme.space-2;
 
         // ---------------- 主命令栏 ----------------
         HorizontalLayout {
             height: Theme.header-height;
-            spacing: 8px;
+            spacing: Theme.space-2;
+            // 明确用 Stretch：由面包屑吸收剩余宽度，其余控件保持自身首选宽度
+            alignment: stretch;
             cross-axis-alignment: center;
 
-            // 返回上级（图标按钮放在最左，和资源管理器一致）
             FluentIconButton {
                 glyph: Icons.back;
                 tooltip: "返回上级目录 (Alt+←)";
@@ -84,64 +105,70 @@ export component CloudPage inherits Rectangle {
                 }
             }
 
-            // 面包屑（第一项就是当前云空间名，因此不再重复标题）
-            HorizontalLayout {
-                spacing: 2px;
-                vertical-stretch: 1;
-                cross-axis-alignment: center;
+            // 面包屑：占据剩余宽度并在超长时裁剪，保证右侧搜索框永不被挤出窗口
+            Rectangle {
                 horizontal-stretch: 1;
+                height: Theme.control-height;
+                clip: true;
+                background: transparent;
 
-                for crumb[idx] in root.crumbs : HorizontalLayout {
+                HorizontalLayout {
                     spacing: 2px;
                     cross-axis-alignment: center;
 
-                    crumb-btn := Rectangle {
-                        height: 26px;
-                        border-radius: Theme.radius-control;
-                        background: crumb-ta.has-hover ? Theme.control-bg-hover : transparent;
+                    for crumb[idx] in root.crumbs : HorizontalLayout {
+                        spacing: 2px;
+                        cross-axis-alignment: center;
 
-                        HorizontalLayout {
-                            padding-left: 6px;
-                            padding-right: 6px;
+                        crumb-btn := Rectangle {
+                            height: 26px;
+                            max-width: 200px;
+                            border-radius: Theme.radius-control;
+                            background: crumb-ta.has-hover ? Theme.control-bg-hover : transparent;
 
-                            Text {
-                                text: crumb.name;
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-body;
-                                color: idx == root.crumbs.length - 1 ? Theme.text-primary : Theme.text-secondary;
-                                font-weight: idx == root.crumbs.length - 1 ? 600 : 400;
-                                vertical-alignment: center;
-                                overflow: elide;
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 6px;
+
+                                Text {
+                                    text: crumb.name;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-body;
+                                    color: idx == root.crumbs.length - 1 ? Theme.text-primary : Theme.text-secondary;
+                                    font-weight: idx == root.crumbs.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            crumb-ta := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.navigate-crumb(idx);
+                                }
                             }
                         }
 
-                        crumb-ta := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.navigate-crumb(idx);
-                            }
+                        if idx < root.crumbs.length - 1: Icon {
+                            glyph: Icons.chevron-right;
+                            size: 11px;
+                            thickness: 1.8px;
+                            icon-color: Theme.text-tertiary;
                         }
                     }
 
-                    if idx < root.crumbs.length - 1: Icon {
-                        glyph: Icons.chevron-right;
-                        size: 11px;
-                        thickness: 1.8px;
-                        icon-color: Theme.text-tertiary;
+                    if root.crumbs.length == 0: Text {
+                        text: "根目录";
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-body;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
                     }
-                }
-
-                if root.crumbs.length == 0: Text {
-                    text: "根目录";
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-body;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
                 }
             }
 
             search := FluentSearchBox {
-                width: root.compact ? 180px : 240px;
+                width: root.narrow ? 172px : 232px;
                 text <=> root.search-text;
                 placeholder: "搜索云盘文件";
                 search(t) => {
@@ -158,16 +185,26 @@ export component CloudPage inherits Rectangle {
             FluentIconButton {
                 glyph: Icons.refresh;
                 tooltip: "刷新 (F5)";
-                enabled: !root.loading;
+                enabled: root.list-state != "loading" && !root.refreshing;
                 clicked => {
                     root.refresh();
                 }
             }
 
-            FluentButton {
+            // 窄窗口：次要操作折叠为图标按钮，核心操作（上传）始终可见
+            if root.narrow: FluentIconButton {
+                glyph: Icons.folder;
+                tooltip: "新建文件夹";
+                enabled: root.list-state != "loading";
+                clicked => {
+                    root.create-folder();
+                }
+            }
+
+            if !root.narrow: FluentButton {
                 text: "新建文件夹";
                 glyph: Icons.plus;
-                enabled: !root.loading;
+                enabled: root.list-state != "loading";
                 clicked => {
                     root.create-folder();
                 }
@@ -177,102 +214,152 @@ export component CloudPage inherits Rectangle {
                 text: "上传";
                 glyph: Icons.upload;
                 accent: true;
-                enabled: !root.loading;
+                enabled: root.list-state != "loading";
                 clicked => {
                     root.upload();
                 }
             }
         }
 
-        // ---------------- 选中态命令栏 ----------------
-        if root.has-selection && !root.searching: HorizontalLayout {
+        // ---------------- 操作栏（高度固定，内容随选中态切换） ----------------
+        // 高度固定 + space-between 两端对齐：切换选中态时不会引起整页布局跳动，
+        // 也不会出现"按钮被拉伸到整行"的异常宽度。
+        Rectangle {
             height: 36px;
-            spacing: 6px;
-            cross-axis-alignment: center;
+            border-radius: Theme.radius-control;
+            background: root.has-selection ? Theme.accent-soft : transparent;
 
-            Text {
-                text: root.select-all ? ("已选择 " + root.rows.length + " 项") : "已选择 1 项";
-                font-family: Theme.font-family;
-                font-size: Theme.font-small;
-                color: Theme.text-secondary;
-                vertical-alignment: center;
-            }
+            HorizontalLayout {
+                padding-left: root.has-selection ? Theme.space-3 : 0px;
+                padding-right: Theme.space-1;
+                spacing: Theme.space-2;
+                alignment: space-between;
+                cross-axis-alignment: center;
 
-            Rectangle {
-                width: 8px;
-            }
+                // ---- 左组：选择状态与批量操作 ----
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: Theme.space-2;
+                    cross-axis-alignment: center;
 
-            FluentButton {
-                text: "下载";
-                glyph: Icons.download;
-                subtle: true;
-                clicked => {
-                    root.download-selected();
+                    if root.has-selection: Text {
+                        text: "已选择 " + root.selected-count + " 项";
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-small;
+                        font-weight: Theme.weight-semibold;
+                        color: Theme.accent;
+                        vertical-alignment: center;
+                    }
+
+                    if !root.has-selection: Text {
+                        text: root.rows.length > 0 ? ("共 " + root.rows.length + " 个项目") : "";
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-small;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: "下载";
+                        glyph: Icons.download;
+                        subtle: true;
+                        clicked => {
+                            root.download-selected();
+                        }
+                    }
+
+                    if root.has-selection && root.selected-count == 1: FluentButton {
+                        text: "重命名";
+                        glyph: Icons.pencil;
+                        subtle: true;
+                        clicked => {
+                            root.rename-selected();
+                        }
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: root.narrow ? "" : "复制";
+                        glyph: Icons.copy;
+                        subtle: true;
+                        clicked => {
+                            root.copy-selected();
+                        }
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: root.narrow ? "" : "移动到上级";
+                        glyph: Icons.folder;
+                        subtle: true;
+                        enabled: root.crumbs.length > 1;
+                        clicked => {
+                            root.move-selected-up();
+                        }
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: root.narrow ? "" : "提取直链";
+                        glyph: Icons.link;
+                        subtle: true;
+                        clicked => {
+                            root.link-selected();
+                        }
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: root.narrow ? "" : "删除";
+                        glyph: Icons.trash;
+                        danger: true;
+                        subtle: true;
+                        clicked => {
+                            root.delete-selected();
+                        }
+                    }
+
+                    if root.has-selection: FluentButton {
+                        text: root.narrow ? "" : "取消选择";
+                        subtle: true;
+                        clicked => {
+                            root.clear-selection();
+                        }
+                    }
                 }
-            }
 
-            FluentButton {
-                text: "重命名";
-                glyph: Icons.pencil;
-                subtle: true;
-                clicked => {
-                    root.rename-selected();
+                // ---- 右组：提示与全选 ----
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: Theme.space-2;
+                    cross-axis-alignment: center;
+
+                    if !root.has-selection: Text {
+                        text: root.narrow ? "" : "Ctrl+单击多选 · Shift+单击范围选择";
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-caption;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+
+                    if !root.has-selection: FluentButton {
+                        text: "全选";
+                        subtle: true;
+                        enabled: root.rows.length > 0;
+                        clicked => {
+                            root.select-all();
+                        }
+                    }
                 }
-            }
-
-            FluentButton {
-                text: "复制";
-                glyph: Icons.copy;
-                subtle: true;
-                clicked => {
-                    root.copy-selected();
-                }
-            }
-
-            FluentButton {
-                text: "移动到上级";
-                glyph: Icons.folder;
-                subtle: true;
-                enabled: root.crumbs.length > 1;
-                clicked => {
-                    root.move-selected-up();
-                }
-            }
-
-            FluentButton {
-                text: "提取直链";
-                glyph: Icons.link;
-                subtle: true;
-                clicked => {
-                    root.link-selected();
-                }
-            }
-
-            FluentButton {
-                text: "删除";
-                glyph: Icons.trash;
-                danger: true;
-                subtle: true;
-                clicked => {
-                    root.delete-selected();
-                }
-            }
-
-            Rectangle {
-                horizontal-stretch: 1;
             }
         }
 
-        // ---------------- 搜索结果提示 ----------------
+        // ---------------- 搜索提示条 ----------------
         if root.searching: Rectangle {
-            height: 34px;
+            height: 32px;
             border-radius: Theme.radius-card;
             background: Theme.accent-soft;
 
             HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 6px;
-                spacing: 8px;
+                padding-left: Theme.space-3;
+                padding-right: Theme.space-1;
+                spacing: Theme.space-2;
                 cross-axis-alignment: center;
 
                 Icon {
@@ -302,17 +389,18 @@ export component CloudPage inherits Rectangle {
             }
         }
 
-        if root.error-text != "": Rectangle {
-            height: 36px;
+        // ---------------- 行内错误提示（有数据时不清空列表） ----------------
+        if root.inline-error: Rectangle {
+            height: 40px;
             border-radius: Theme.radius-card;
             background: Theme.danger-soft;
             border-width: 1px;
             border-color: Theme.danger;
 
             HorizontalLayout {
-                padding-left: 12px;
-                padding-right: 12px;
-                spacing: 8px;
+                padding-left: Theme.space-3;
+                padding-right: Theme.space-2;
+                spacing: Theme.space-2;
                 cross-axis-alignment: center;
 
                 Icon {
@@ -331,6 +419,14 @@ export component CloudPage inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                 }
+
+                FluentButton {
+                    text: "重试";
+                    subtle: true;
+                    clicked => {
+                        root.refresh();
+                    }
+                }
             }
         }
 
@@ -346,7 +442,7 @@ export component CloudPage inherits Rectangle {
             KeyBinding {
                 keys: @keys(F2);
                 activated => {
-                    if (root.has-selection) {
+                    if (root.selected-count == 1) {
                         root.rename-selected();
                     }
                 }
@@ -374,7 +470,13 @@ export component CloudPage inherits Rectangle {
             KeyBinding {
                 keys: @keys(Control+A);
                 activated => {
-                    root.select-all = true;
+                    root.select-all();
+                }
+            }
+            KeyBinding {
+                keys: @keys(Escape);
+                activated => {
+                    root.clear-selection();
                 }
             }
             KeyBinding {
@@ -393,55 +495,158 @@ export component CloudPage inherits Rectangle {
                 background: Theme.card-bg;
                 border-width: 1px;
                 border-color: Theme.stroke;
+                clip: true;
 
                 VerticalLayout {
+                    spacing: 0px;
+
+                    // 刷新指示：只占 2px，不清空列表（非侵入式加载反馈）
+                    if root.refreshing: Rectangle {
+                        height: 2px;
+                        background: transparent;
+
+                        Rectangle {
+                            x: 0;
+                            y: 0;
+                            width: parent.width * min(1.0, 1 * mod(animation-tick(), 1200ms) / 1200ms);
+                            height: 2px;
+                            background: Theme.accent;
+                        }
+                    }
+
                     // 表头
                     Rectangle {
-                        height: 32px;
+                        height: FileColumns.header-height;
                         background: Theme.layer-bg;
-                        border-radius: Theme.radius-card;
-                        border-width: 1px;
-                        border-color: Theme.divider;
 
                         HorizontalLayout {
                             padding-left: FileColumns.pad-left;
                             padding-right: FileColumns.pad-right;
                             spacing: FileColumns.gap;
+                            // 名称列吸收剩余宽度，其余列保持固定宽度并逐个对齐
+                            alignment: stretch;
                             cross-axis-alignment: center;
 
                             Rectangle {
                                 width: FileColumns.icon;
+                                horizontal-stretch: 0;
+                                background: transparent;
                             }
 
-                            Text {
-                                text: "名称";
+                            // 名称（可排序）
+                            name-header := Rectangle {
                                 horizontal-stretch: 1;
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-caption;
-                                color: Theme.text-tertiary;
-                                vertical-alignment: center;
+                                height: parent.height;
+                                background: name-ta.has-hover ? Theme.hover-bg : transparent;
+                                border-radius: Theme.radius-control;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: start;
+                                    cross-axis-alignment: center;
+
+                                    // 指示器放在标签前面：不受横向布局剩余空间分配的影响
+                                    if root.sort-key == 0: Icon {
+                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
+                                        size: 13px;
+                                        thickness: 1.7px;
+                                        icon-color: Theme.accent;
+                                    }
+
+                                    Text {
+                                        text: "名称";
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-caption;
+                                        font-weight: root.sort-key == 0 ? Theme.weight-semibold : Theme.weight-regular;
+                                        color: root.sort-key == 0 ? Theme.text-secondary : Theme.text-tertiary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                name-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.sort-changed(0);
+                                    }
+                                }
                             }
 
-                            if !root.compact: Text {
+                            // 大小（可排序）
+                            if root.detail-level >= 1: size-header := Rectangle {
                                 width: FileColumns.size;
-                                text: "大小";
-                                horizontal-alignment: right;
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-caption;
-                                color: Theme.text-tertiary;
-                                vertical-alignment: center;
+                                horizontal-stretch: 0;
+                                height: parent.height;
+                                background: size-ta.has-hover ? Theme.hover-bg : transparent;
+                                border-radius: Theme.radius-control;
+
+                                HorizontalLayout {
+                                    alignment: end;
+                                    cross-axis-alignment: center;
+                                    spacing: 4px;
+
+                                    if root.sort-key == 1: Icon {
+                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
+                                        size: 13px;
+                                        thickness: 1.7px;
+                                        icon-color: Theme.accent;
+                                    }
+
+                                    Text {
+                                        text: "大小";
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-caption;
+                                        font-weight: root.sort-key == 1 ? Theme.weight-semibold : Theme.weight-regular;
+                                        color: root.sort-key == 1 ? Theme.text-secondary : Theme.text-tertiary;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                size-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.sort-changed(1);
+                                    }
+                                }
                             }
 
-                            if !root.compact: Text {
+                            // 修改时间（可排序）
+                            if root.detail-level >= 2: time-header := Rectangle {
                                 width: FileColumns.time;
-                                text: "修改时间";
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-caption;
-                                color: Theme.text-tertiary;
-                                vertical-alignment: center;
+                                horizontal-stretch: 0;
+                                height: parent.height;
+                                background: time-ta.has-hover ? Theme.hover-bg : transparent;
+                                border-radius: Theme.radius-control;
+
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    cross-axis-alignment: center;
+
+                                    Text {
+                                        text: "修改时间";
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-caption;
+                                        font-weight: root.sort-key == 2 ? Theme.weight-semibold : Theme.weight-regular;
+                                        color: root.sort-key == 2 ? Theme.text-secondary : Theme.text-tertiary;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if root.sort-key == 2: Icon {
+                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
+                                        size: 13px;
+                                        thickness: 1.7px;
+                                        icon-color: Theme.accent;
+                                    }
+                                }
+
+                                time-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.sort-changed(2);
+                                    }
+                                }
                             }
 
-                            if !root.compact: Text {
+                            if root.detail-level >= 3: Text {
                                 width: FileColumns.kind;
                                 text: "类型";
                                 font-family: Theme.font-family;
@@ -452,12 +657,17 @@ export component CloudPage inherits Rectangle {
                         }
                     }
 
+                    Rectangle {
+                        height: 1px;
+                        background: Theme.divider;
+                    }
+
                     // 列表主体
                     Rectangle {
                         vertical-stretch: 1;
                         background: transparent;
 
-                        ListView {
+                        if root.rows.length > 0: ListView {
                             x: 0;
                             y: 0;
                             width: parent.width;
@@ -465,15 +675,14 @@ export component CloudPage inherits Rectangle {
 
                             for row in root.rows : FileRow {
                                 entry: row;
-                                selected: root.select-all || row.id == root.selected-id;
                                 renaming: row.id == root.renaming-id;
-                                compact: root.compact;
+                                detail-level: root.detail-level;
                                 is-drop-target: row.is_dir && !root.searching;
                                 drag-data: root.make-drag-data(row.id, row.name, row.is_dir);
 
-                                item-clicked => {
+                                item-clicked(ctrl, shift) => {
                                     list-area.focus();
-                                    root.select-item(row.id);
+                                    root.select-item(row.id, ctrl, shift);
                                 }
                                 item-double-clicked => {
                                     root.open-item(row.id, row.name, row.is_dir);
@@ -494,38 +703,64 @@ export component CloudPage inherits Rectangle {
                             }
                         }
 
-                        if root.rows.length == 0: Rectangle {
+                        // ---- 状态：首次加载 / 加载失败 / 空 ----
+                        if root.show-loading: FluentLoadingState {
                             x: 0;
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            background: Theme.card-bg;
-
-                            FluentEmptyState {
-                                glyph: root.searching ? Icons.search : root.loading ? Icons.refresh : Icons.folder;
-                                title: root.loading ? "正在加载…"
-                                    : root.searching ? "没有找到匹配的文件"
-                                    : "这里还没有文件";
-                                description: root.loading ? "正在从云端读取目录内容"
-                                    : root.searching ? "换个关键词，或退出搜索回到当前目录"
-                                    : "把文件拖到这里即可上传，或点击右上角“上传”";
-                                action-text: root.searching ? "退出搜索" : "";
-                                action => {
-                                    root.search-cleared();
-                                }
-                            }
+                            title: root.searching ? "正在搜索…" : "正在加载目录…";
+                            description: root.searching ? "正在云端检索匹配的文件" : "正在从云端读取目录内容";
                         }
 
-                        if root.loading && root.rows.length > 0: Rectangle {
+                        if root.show-error: FluentErrorState {
                             x: 0;
                             y: 0;
                             width: parent.width;
-                            height: 2px;
-                            background: Theme.accent;
+                            height: parent.height;
+                            title: "加载失败";
+                            description: root.error-text;
+                            retry-text: "重试";
+                            retry => {
+                                root.refresh();
+                            }
+                        }
+
+                        if root.show-empty && !root.searching: FluentEmptyState {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            glyph: Icons.folder;
+                            title: "这里还没有文件";
+                            description: "把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”";
+                            action-text: "上传文件";
+                            secondary-text: "新建文件夹";
+                            action => {
+                                root.upload();
+                            }
+                            secondary => {
+                                root.create-folder();
+                            }
+                        }
+
+                        if root.show-empty && root.searching: FluentEmptyState {
+                            x: 0;
+                            y: 0;
+                            width: parent.width;
+                            height: parent.height;
+                            glyph: Icons.search;
+                            title: "没有找到匹配的文件";
+                            description: "换个关键词试试，或退出搜索回到当前目录";
+                            action-text: "退出搜索";
+                            action => {
+                                root.search-cleared();
+                            }
                         }
                     }
                 }
             }
+
             // 拖入上传遮罩
             DropOverlay {
                 x: 0;
@@ -539,8 +774,8 @@ export component CloudPage inherits Rectangle {
 
         // ---------------- 状态栏 ----------------
         HorizontalLayout {
-            height: 28px;
-            spacing: 12px;
+            height: Theme.statusbar-height;
+            spacing: Theme.space-3;
             cross-axis-alignment: center;
 
             Text {
@@ -555,10 +790,11 @@ export component CloudPage inherits Rectangle {
 
             task-chip := Rectangle {
                 height: 24px;
+                horizontal-stretch: 0;
                 border-radius: 12px;
                 background: chip-ta.has-hover ? Theme.control-bg-hover : Theme.control-bg;
                 border-width: 1px;
-                border-color: Theme.stroke;
+                border-color: chip-ta.has-hover ? Theme.stroke-strong : Theme.stroke;
 
                 HorizontalLayout {
                     padding-left: 8px;
@@ -590,7 +826,7 @@ export component CloudPage inherits Rectangle {
                 }
             }
 
-            if root.capacity-text != "": Text {
+            if root.capacity-text != "" && !root.narrow: Text {
                 text: root.capacity-text;
                 font-family: Theme.font-family;
                 font-size: Theme.font-caption;

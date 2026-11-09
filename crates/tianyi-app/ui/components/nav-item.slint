@@ -1,6 +1,6 @@
 // Fluent 导航项（NavigationView item）
 //
-// 展开态：图标 + 文本 + 可选徽章；折叠态：仅图标（Tooltip 补充说明）。
+// 展开态：图标 + 文本 + 可选徽章；折叠态：仅图标（悬停显示 Tooltip）。
 // 选中态：柔和强调底 + 左侧 3px 强调指示条 + 强调色文字。
 //
 // 布局说明：所有子元素都显式定位（不混用布局与自由子元素），
@@ -18,13 +18,14 @@ export component FluentNavItem inherits Rectangle {
     in property <bool> enabled: true;
     /// 徽章数字（0 表示不显示）
     in property <int> badge: 0;
+
     callback clicked();
 
     height: Theme.nav-item-height;
     border-radius: Theme.radius-control;
     opacity: root.enabled ? 1.0 : 0.4;
 
-    background: touch.pressed ? Theme.control-bg-pressed
+    background: touch.pressed ? Theme.pressed-bg
         : touch.has-hover && root.enabled ? Theme.hover-bg
         : root.selected ? Theme.accent-soft
         : transparent;
@@ -57,19 +58,19 @@ export component FluentNavItem inherits Rectangle {
         glyph: root.glyph;
         size: 17px;
         thickness: 1.6px;
-        icon-color: root.selected ? Theme.accent : Theme.text-primary;
+        icon-color: root.selected ? Theme.accent : (root.enabled ? Theme.text-primary : Theme.text-disabled);
     }
 
     // 文本
     if !root.compact: Text {
         x: 41px;
         y: 0;
-        width: root.width - 41px - (root.badge > 0 ? 36px : 12px);
+        width: root.width - 41px - (root.badge > 0 ? 40px : 12px);
         height: root.height;
         text: root.label;
         font-family: Theme.font-family;
         font-size: Theme.font-body-large;
-        font-weight: root.selected ? 600 : 400;
+        font-weight: root.selected ? Theme.weight-semibold : Theme.weight-regular;
         color: root.selected ? Theme.accent : Theme.text-primary;
         vertical-alignment: center;
         overflow: elide;
@@ -88,7 +89,7 @@ export component FluentNavItem inherits Rectangle {
             text: root.badge > 99 ? "99+" : root.badge;
             font-family: Theme.font-family;
             font-size: Theme.font-caption;
-            font-weight: 600;
+            font-weight: Theme.weight-semibold;
             color: root.selected ? Theme.text-on-accent : Theme.text-secondary;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -116,6 +117,16 @@ export component FluentNavItem inherits Rectangle {
             root.clicked();
         }
 
-
+        // 折叠态没有文字，用 Tooltip 补回可读名称
+        changed has-hover => {
+            if (self.has-hover && root.compact && root.label != "") {
+                TooltipState.text = root.label;
+                TooltipState.x = self.absolute-position.x + self.width + 8px;
+                TooltipState.y = self.absolute-position.y + (self.height - 24px) / 2;
+                TooltipState.visible = true;
+            } else {
+                TooltipState.visible = false;
+            }
+        }
     }
 }

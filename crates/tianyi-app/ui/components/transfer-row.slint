@@ -1,7 +1,8 @@
 // 传输任务行：方向 + 名称 + 状态 + 进度 + 速度/剩余 + 操作按钮
 //
-// 操作按钮按状态切换：进行中 → 暂停/取消；已暂停 → 继续/取消；失败/已取消 → 重试/移除；
-// 已完成 → 移除。按钮均有 Tooltip。
+// 操作按钮按真实任务状态切换（状态是 Rust 侧的状态机，UI 不自行推断）：
+//   进行中 → 暂停/取消；已暂停 → 继续/取消；失败/已取消 → 重试/移除；
+//   已完成 → 打开文件夹/移除。所有按钮均有 Tooltip。
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
@@ -11,6 +12,7 @@ import { TransferEntry } from "../types.slint";
 
 export component TransferRow inherits Rectangle {
     in property <TransferEntry> entry;
+
     callback pause-clicked();
     callback resume-clicked();
     callback cancel-clicked();
@@ -21,16 +23,25 @@ export component TransferRow inherits Rectangle {
     property <bool> uploading: entry.direction == "upload";
     property <bool> running: entry.status == "running" || entry.status == "pending";
     property <bool> paused: entry.status == "paused";
-    property <bool> failed: entry.status == "failed" || entry.status == "canceled";
+    property <bool> failed: entry.status == "failed";
+    property <bool> canceled: entry.status == "canceled";
     property <bool> done: entry.status == "completed";
 
     property <color> status-color: root.running ? Theme.accent
         : root.paused ? Theme.warning
         : root.failed ? Theme.danger
+        : root.canceled ? Theme.text-tertiary
         : root.done ? Theme.success
         : Theme.text-tertiary;
 
-    height: 60px;
+    property <color> status-bg: root.running ? Theme.accent-soft
+        : root.paused ? Theme.warning-soft
+        : root.failed ? Theme.danger-soft
+        : root.canceled ? Theme.control-bg
+        : root.done ? Theme.success-soft
+        : Theme.control-bg;
+
+    height: 72px;
     border-radius: Theme.radius-card;
     background: ta.has-hover ? Theme.control-bg-hover : Theme.card-bg;
     border-width: 1px;
@@ -43,17 +54,19 @@ export component TransferRow inherits Rectangle {
 
     ta := TouchArea {
         mouse-cursor: pointer;
+    }
 
     HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 8px;
-        spacing: 12px;
+        padding-left: Theme.space-3;
+        padding-right: Theme.space-2;
+        spacing: Theme.space-3;
         cross-axis-alignment: center;
 
         // 方向图标
         Rectangle {
-            width: 32px;
-            height: 32px;
+            width: 34px;
+            height: 34px;
+            horizontal-stretch: 0;
             border-radius: Theme.radius-card;
             background: root.uploading ? Theme.success-soft : Theme.accent-soft;
 
@@ -61,40 +74,55 @@ export component TransferRow inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 glyph: root.uploading ? Icons.upload : Icons.download;
-                size: 16px;
+                size: 17px;
                 thickness: 1.7px;
                 icon-color: root.uploading ? Theme.success : Theme.accent;
             }
         }
 
-        // 名称 / 进度 / 明细
+        // 名称 / 状态 / 进度 / 明细
         VerticalLayout {
             horizontal-stretch: 1;
-            spacing: 4px;
+            spacing: Theme.space-1;
             alignment: center;
 
             HorizontalLayout {
-                spacing: 8px;
+                spacing: Theme.space-2;
                 cross-axis-alignment: center;
 
                 Text {
                     text: root.entry.name;
                     font-family: Theme.font-family;
                     font-size: Theme.font-body;
-                    font-weight: 600;
+                    font-weight: Theme.weight-semibold;
                     color: Theme.text-primary;
                     horizontal-stretch: 1;
                     overflow: elide;
                     vertical-alignment: center;
                 }
 
-                Text {
-                    text: root.entry.status_text;
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-caption;
-                    font-weight: 600;
-                    color: root.status-color;
-                    vertical-alignment: center;
+                // 状态徽章
+                Rectangle {
+                    height: 20px;
+                    horizontal-stretch: 0;
+                    border-radius: 10px;
+                    background: root.status-bg;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: root.entry.status_text;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            font-weight: Theme.weight-semibold;
+                            color: root.status-color;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
 
                 if root.entry.speed != "" && root.running: Text {
@@ -106,18 +134,22 @@ export component TransferRow inherits Rectangle {
                 }
             }
 
-            FluentProgressBar {
+            // 进度条只在进行中/已暂停时才有意义：失败、取消、完成的任务显示进度条
+            // 只会让用户误以为还在传输
+            if root.running || root.paused: FluentProgressBar {
                 value: root.entry.progress;
                 indeterminate: root.entry.status == "pending" || (root.running && root.entry.progress <= 0.0);
-                bar-color: root.failed ? Theme.danger : root.paused ? Theme.warning : root.done ? Theme.success : Theme.accent;
+                bar-color: root.failed || root.canceled ? Theme.danger : root.paused ? Theme.warning : Theme.accent;
+                bar-height: 3px;
             }
 
             Text {
                 text: root.entry.error != "" ? root.entry.error : root.entry.detail;
                 font-family: Theme.font-family;
                 font-size: Theme.font-caption;
-                color: root.failed ? Theme.danger : Theme.text-tertiary;
+                color: root.failed ? Theme.danger : root.canceled ? Theme.text-tertiary : Theme.text-tertiary;
                 overflow: elide;
+                vertical-alignment: center;
             }
         }
 
@@ -126,6 +158,7 @@ export component TransferRow inherits Rectangle {
             spacing: 2px;
             alignment: end;
             cross-axis-alignment: center;
+            horizontal-stretch: 0;
 
             if root.running: FluentIconButton {
                 glyph: Icons.pause;
@@ -145,7 +178,7 @@ export component TransferRow inherits Rectangle {
                 }
             }
 
-            if root.failed: FluentIconButton {
+            if root.failed || root.canceled: FluentIconButton {
                 glyph: Icons.refresh;
                 tooltip: "重试任务";
                 clicked => {
@@ -154,7 +187,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.done: FluentIconButton {
-                glyph: Icons.folder;
+                glyph: Icons.folder-open;
                 tooltip: "打开所在文件夹";
                 clicked => {
                     root.reveal-clicked();
@@ -170,7 +203,7 @@ export component TransferRow inherits Rectangle {
                 }
             }
 
-            if root.failed || root.done: FluentIconButton {
+            if root.failed || root.canceled || root.done: FluentIconButton {
                 glyph: Icons.trash;
                 tooltip: "从列表中移除";
                 clicked => {
@@ -178,7 +211,5 @@ export component TransferRow inherits Rectangle {
                 }
             }
         }
-    }
-
     }
 }

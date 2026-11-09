@@ -1,14 +1,20 @@
 // 登录页：独立的整窗认证界面（不复用登录后的侧边栏）
 //
-// 版式：居中卡片，高度由内容决定（不写死），窗口变小时整体收缩；
-// 卡片宽度上限 432px，最小 320px，保证 900x620 与 1600x945 都不溢出。
+// 版式：居中卡片，高度由内容决定（不写死）。
+// 卡片宽度上限 432px、最小 320px；整页可滚动，保证 900x620 这种最矮窗口下
+// 出现验证码或多账号时不会被裁掉登录按钮。
+//
+// 状态：登录失败在卡片内就地提示；扫码的 loading / waiting / scanned / expired / error
+// 都有明确反馈，过期后可直接刷新二维码。
 
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentTextField } from "../components/text-field.slint";
 import { FluentSegmented } from "../components/segmented.slint";
 import { FluentCheckBox } from "../components/check-box.slint";
+import { FluentSpinner } from "../components/spinner.slint";
 
 export component LoginPage inherits Rectangle {
     in property <string> login-error: "";
@@ -39,362 +45,405 @@ export component LoginPage inherits Rectangle {
         background: @linear-gradient(135deg, Theme.login-glow 0%, Theme.window-bg 60%);
     }
 
-    // 水平 + 垂直居中：卡片是固定宽度，必须由外层横向布局负责居中
-    HorizontalLayout {
-        alignment: center;
-
+    ScrollView {
+        // 卡片在竖直方向居中；内容超出窗口时整页滚动。
+        // cross-axis-alignment 必须显式设为 center：VerticalLayout 的交叉轴默认是
+        // Stretch/Start，只写 alignment 会让固定宽度的卡片被贴到左边。
         VerticalLayout {
             alignment: center;
-            padding-left: 16px;
-            padding-right: 16px;
-            padding-top: 20px;
-            padding-bottom: 20px;
+            cross-axis-alignment: center;
+            padding-left: Theme.space-4;
+            padding-right: Theme.space-4;
+            padding-top: Theme.space-5;
+            padding-bottom: Theme.space-5;
 
             card := Rectangle {
-            width: Math.min(432px, root.width - 32px);
-            border-radius: 12px;
-            background: Theme.card-bg;
-            border-width: 1px;
-            border-color: Theme.stroke;
+                width: Math.min(432px, root.width - 48px);
+                border-radius: Theme.radius-card;
+                background: Theme.card-bg;
+                border-width: 1px;
+                border-color: Theme.stroke;
 
-            VerticalLayout {
-                padding-left: 32px;
-                padding-right: 32px;
-                padding-top: 28px;
-                padding-bottom: 24px;
-                spacing: 14px;
-
-                // ---------------- 品牌 ----------------
                 VerticalLayout {
-                    spacing: 6px;
-                    alignment: center;
+                    padding-left: Theme.space-6;
+                    padding-right: Theme.space-6;
+                    padding-top: Theme.space-5;
+                    padding-bottom: Theme.space-4;
+                    spacing: Theme.space-3;
 
-                    HorizontalLayout {
-                        alignment: center;
+                    // ---------------- 品牌 ----------------
+                    VerticalLayout {
+                        spacing: Theme.space-1;
+                        cross-axis-alignment: center;
 
-                    Rectangle {
-                        width: 52px;
-                        height: 52px;
-                        border-radius: 14px;
-                        background: Theme.accent;
+                        Rectangle {
+                            width: 52px;
+                            height: 52px;
+                            horizontal-stretch: 0;
+                            border-radius: 14px;
+                            background: Theme.accent;
 
-                        Icon {
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            glyph: Icons.cloud;
-                            size: 28px;
-                            thickness: 1.7px;
-                            icon-color: Theme.text-on-accent;
+                            Icon {
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                glyph: Icons.cloud;
+                                size: 28px;
+                                thickness: 1.7px;
+                                icon-color: Theme.text-on-accent;
+                            }
                         }
-                    }
 
-                    }
-
-                    Text {
-                        text: "天翼云盘";
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-title;
-                        font-weight: 600;
-                        color: Theme.text-primary;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: "登录以同步和管理您的云端文件";
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-small;
-                        color: Theme.text-tertiary;
-                        horizontal-alignment: center;
-                    }
-                }
-
-                // ---------------- 登录方式 ----------------
-                FluentSegmented {
-                    items: ["密码登录", "扫码登录"];
-                    current: root.qr-mode ? 1 : 0;
-                    enabled: !root.login-loading;
-                    changed(idx) => {
-                        root.do-switch-mode(idx == 1);
-                    }
-                }
-
-                // ---------------- 密码登录 ----------------
-                if !root.qr-mode: VerticalLayout {
-                    spacing: 12px;
-
-                    if root.saved-accounts.length > 0: VerticalLayout {
-                        spacing: 6px;
+                        Rectangle {
+                            height: Theme.space-1;
+                            width: 1px;
+                            background: transparent;
+                        }
 
                         Text {
-                            text: "已保存的账号";
+                            text: "天翼云盘";
                             font-family: Theme.font-family;
-                            font-size: Theme.font-caption;
-                            color: Theme.text-tertiary;
+                            font-size: Theme.font-title;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
                         }
 
-                        for name in root.saved-accounts : Rectangle {
-                            height: 34px;
+                        Text {
+                            text: "登录以同步和管理您的云端文件";
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-small;
+                            color: Theme.text-tertiary;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    // ---------------- 登录方式 ----------------
+                    FluentSegmented {
+                        items: ["密码登录", "扫码登录"];
+                        current: root.qr-mode ? 1 : 0;
+                        enabled: !root.login-loading;
+                        changed(idx) => {
+                            root.do-switch-mode(idx == 1);
+                        }
+                    }
+
+                    // ---------------- 密码登录 ----------------
+                    if !root.qr-mode: VerticalLayout {
+                        spacing: Theme.space-3;
+
+                        // 已保存账号：明确的账号选择区，与手动输入区分开
+                        if root.saved-accounts.length > 0: VerticalLayout {
+                            spacing: Theme.space-1;
+
+                            Text {
+                                text: "已保存的账号";
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                            }
+
+                            for name in root.saved-accounts : Rectangle {
+                                height: 40px;
+                                border-radius: Theme.radius-control;
+                                background: quick.has-hover ? Theme.control-bg-hover : Theme.control-bg;
+                                border-width: 1px;
+                                border-color: quick.has-hover ? Theme.stroke-control : Theme.stroke;
+
+                                HorizontalLayout {
+                                    padding-left: Theme.space-2;
+                                    padding-right: Theme.space-1;
+                                    spacing: Theme.space-2;
+                                    cross-axis-alignment: center;
+
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        horizontal-stretch: 0;
+                                        border-radius: 12px;
+                                        background: Theme.accent-soft;
+
+                                        Icon {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            glyph: Icons.person;
+                                            size: 14px;
+                                            thickness: 1.7px;
+                                            icon-color: Theme.accent;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: name;
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-body;
+                                        color: Theme.text-primary;
+                                        horizontal-stretch: 1;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        text: root.login-loading ? "…" : "继续登录";
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-caption;
+                                        color: Theme.accent;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                quick := TouchArea {
+                                    enabled: !root.login-loading;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.do-quick-login(name);
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: Theme.space-1;
+                                width: 1px;
+                                background: transparent;
+                            }
+                        }
+
+                        user-field := FluentTextField {
+                            placeholder: "手机号 / 邮箱";
+                            glyph: Icons.person;
+                            clearable: true;
+                            enabled: !root.login-loading;
+                        }
+
+                        pass-field := FluentTextField {
+                            placeholder: "密码";
+                            password: true;
+                            enabled: !root.login-loading;
+                            accepted => {
+                                root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
+                            }
+                        }
+
+                        // 验证码区域使用条件元素：未出现时不占用任何布局空间
+                        if root.show-captcha: VerticalLayout {
+                            spacing: Theme.space-2;
+
+                            Rectangle {
+                                height: 64px;
+                                border-radius: Theme.radius-control;
+                                background: Theme.control-bg;
+                                border-width: 1px;
+                                border-color: Theme.stroke;
+
+                                Image {
+                                    source: root.captcha-image;
+                                    height: 56px;
+                                    width: parent.width - 8px;
+                                    x: 4px;
+                                    y: 4px;
+                                }
+                            }
+
+                            captcha-field := FluentTextField {
+                                placeholder: "请输入图片验证码";
+                                enabled: !root.login-loading;
+                                text <=> root.captcha-text;
+                                accepted => {
+                                    root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
+                                }
+                            }
+                        }
+
+                        FluentCheckBox {
+                            text: "保存账号";
+                            checked: root.save-account;
+                            enabled: !root.login-loading;
+                            toggled => {
+                                root.save-account = !root.save-account;
+                            }
+                        }
+
+                        // 登录失败：就地提示，包含可理解的失败原因
+                        if root.login-error != "": Rectangle {
                             border-radius: Theme.radius-control;
-                            background: quick.has-hover ? Theme.control-bg-hover : Theme.control-bg;
+                            background: Theme.danger-soft;
                             border-width: 1px;
-                            border-color: Theme.stroke;
+                            border-color: Theme.danger;
 
                             HorizontalLayout {
-                                padding-left: 10px;
-                                padding-right: 10px;
-                                spacing: 8px;
+                                padding: Theme.space-2;
+                                spacing: Theme.space-2;
                                 cross-axis-alignment: center;
 
                                 Icon {
-                                    glyph: Icons.person;
-                                    size: 15px;
-                                    thickness: 1.6px;
-                                    icon-color: Theme.text-secondary;
+                                    glyph: Icons.error-circle;
+                                    size: 16px;
+                                    thickness: 1.7px;
+                                    icon-color: Theme.danger;
                                 }
 
                                 Text {
-                                    text: name;
+                                    text: root.login-error;
                                     font-family: Theme.font-family;
-                                    font-size: Theme.font-body;
+                                    font-size: Theme.font-small;
                                     color: Theme.text-primary;
                                     horizontal-stretch: 1;
                                     vertical-alignment: center;
-                                    overflow: elide;
-                                }
-
-                                Text {
-                                    text: root.login-loading ? "…" : "继续登录";
-                                    font-family: Theme.font-family;
-                                    font-size: Theme.font-caption;
-                                    color: Theme.accent;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            quick := TouchArea {
-                                enabled: !root.login-loading;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.do-quick-login(name);
+                                    wrap: word-wrap;
                                 }
                             }
                         }
-                    }
 
-                    user-field := FluentTextField {
-                        placeholder: "手机号 / 邮箱";
-                        glyph: Icons.person;
-                        clearable: true;
-                        enabled: !root.login-loading;
-                    }
-
-                    pass-field := FluentTextField {
-                        placeholder: "密码";
-                        password: true;
-                        enabled: !root.login-loading;
-                        accepted => {
-                            root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
-                        }
-                    }
-
-                    // 验证码区域使用条件元素：未出现时不占用任何布局空间
-                    if root.show-captcha: VerticalLayout {
-                        spacing: 8px;
-
-                        Rectangle {
-                            height: 56px;
-                            border-radius: Theme.radius-control;
-                            background: Theme.control-bg;
-                            border-width: 1px;
-                            border-color: Theme.stroke;
-
-                            Image {
-                                source: root.captcha-image;
-                                height: 48px;
-                                width: parent.width - 8px;
-                                x: 4px;
-                                y: 4px;
-                            }
-                        }
-
-                        captcha-field := FluentTextField {
-                            placeholder: "请输入图片验证码";
+                        FluentButton {
+                            text: root.login-loading ? "正在登录…" : "登录";
+                            accent: true;
+                            busy: root.login-loading;
                             enabled: !root.login-loading;
-                            text <=> root.captcha-text;
-                            accepted => {
+                            height: Theme.control-height-large;
+                            clicked => {
                                 root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
                             }
                         }
                     }
 
-                    FluentCheckBox {
-                        text: "保存账号";
-                        checked: root.save-account;
-                        toggled => {
-                            root.save-account = !root.save-account;
+                    // ---------------- 扫码登录 ----------------
+                    if root.qr-mode: VerticalLayout {
+                        spacing: Theme.space-3;
+                        cross-axis-alignment: center;
+
+                        qr-box := Rectangle {
+                            width: 200px;
+                            height: 200px;
+                            horizontal-stretch: 0;
+                            border-radius: Theme.radius-card;
+                            background: #FFFFFF;
+                            border-width: 1px;
+                            border-color: Theme.stroke;
+
+                            Image {
+                                x: 8px;
+                                y: 8px;
+                                width: 184px;
+                                height: 184px;
+                                source: root.qr-image;
+                            }
+
+                            // 过期 / 失败遮罩：给出可操作入口
+                            if root.qr-state == "expired" || root.qr-state == "error": Rectangle {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+                                border-radius: Theme.radius-card;
+                                background: Theme.dark ? #1A1A1ACC : #FFFFFFD9;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+                                    spacing: Theme.space-1;
+                                    padding: Theme.space-3;
+
+                                    Icon {
+                                        glyph: Icons.refresh;
+                                        size: 24px;
+                                        thickness: 1.6px;
+                                        icon-color: Theme.text-secondary;
+                                    }
+
+                                    Text {
+                                        width: 160px;
+                                        text: root.qr-state == "expired" ? "二维码已过期" : "二维码获取失败";
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-small;
+                                        color: Theme.text-secondary;
+                                        horizontal-alignment: center;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
                         }
-                    }
 
-                    if root.login-error != "": Rectangle {
-                        border-radius: Theme.radius-control;
-                        background: Theme.danger-soft;
-                        border-width: 1px;
-                        border-color: Theme.danger;
-
-                        HorizontalLayout {
-                            padding: 8px;
-                            spacing: 8px;
+                        // 扫码过程用进度环明确表达"正在进行"
+                        if root.qr-state == "loading" || root.qr-state == "waiting": HorizontalLayout {
+                            alignment: center;
+                            height: 20px;
+                            spacing: Theme.space-2;
                             cross-axis-alignment: center;
 
-                            Icon {
-                                glyph: Icons.warning;
-                                size: 15px;
-                                thickness: 1.7px;
-                                icon-color: Theme.danger;
+                            FluentSpinner {
+                                size: 14px;
+                                stroke-width: 1.8px;
+                                tint: Theme.text-tertiary;
                             }
 
                             Text {
-                                text: root.login-error;
+                                text: root.qr-state == "loading" ? "正在获取二维码…" : "等待扫码…";
                                 font-family: Theme.font-family;
-                                font-size: Theme.font-small;
-                                color: Theme.text-primary;
-                                horizontal-stretch: 1;
-                                wrap: word-wrap;
+                                font-size: Theme.font-caption;
+                                color: Theme.text-tertiary;
+                                vertical-alignment: center;
                             }
                         }
-                    }
 
-                    FluentButton {
-                        text: root.login-loading ? "正在登录…" : "登录";
-                        accent: true;
-                        busy: root.login-loading;
-                        enabled: !root.login-loading;
-                        height: Theme.control-height-large;
-                        clicked => {
-                            root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
+                        Text {
+                            width: Math.min(320px, root.width - 96px);
+                            text: root.qr-status;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-small;
+                            color: root.qr-state == "error" ? Theme.danger
+                                : (root.qr-state == "scanned" || root.qr-state == "confirmed" || root.qr-state == "success") ? Theme.success
+                                : Theme.text-secondary;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                            min-height: 18px;
+                        }
+
+                        HorizontalLayout {
+                            alignment: center;
+
+                            FluentButton {
+                                text: "刷新二维码";
+                                glyph: Icons.refresh;
+                                enabled: !root.login-loading;
+                                min-w: 132px;
+                                clicked => {
+                                    root.do-qr-refresh();
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: "打开天翼云盘 App → 扫一扫";
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            color: Theme.text-tertiary;
+                            horizontal-alignment: center;
                         }
                     }
-                }
 
-                // ---------------- 扫码登录 ----------------
-                if root.qr-mode: VerticalLayout {
-                    spacing: 12px;
-
-                    HorizontalLayout {
+                    // ---------------- 底部状态 ----------------
+                    if root.login-loading && root.qr-mode: HorizontalLayout {
+                        spacing: Theme.space-2;
                         alignment: center;
 
-                    Rectangle {
-                        width: 200px;
-                        height: 200px;
-                        border-radius: Theme.radius-card;
-                        background: #FFFFFF;
-                        border-width: 1px;
-                        border-color: Theme.stroke;
-
-                        Image {
-                            x: 8px;
-                            y: 8px;
-                            width: 184px;
-                            height: 184px;
-                            source: root.qr-image;
-                        }
-
-                        // 过期 / 失败遮罩
-                        if root.qr-state == "expired" || root.qr-state == "error": Rectangle {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            border-radius: Theme.radius-card;
-                            background: Theme.dark ? #CC1A1A1A : #D9FFFFFF;
-
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: 6px;
-                                padding: 12px;
-
-                                Icon {
-                                    glyph: Icons.refresh;
-                                    size: 22px;
-                                    thickness: 1.6px;
-                                    icon-color: Theme.text-secondary;
-                                }
-
-                                Text {
-                                    text: root.qr-state == "expired" ? "二维码已过期" : "二维码获取失败";
-                                    font-family: Theme.font-family;
-                                    font-size: Theme.font-small;
-                                    color: Theme.text-secondary;
-                                    horizontal-alignment: center;
-                                }
-                            }
+                        Text {
+                            text: "正在与天翼云盘通信…";
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            color: Theme.text-tertiary;
                         }
                     }
 
-                    }
-
-                    Text {
-                        text: root.qr-status;
+                    if root.status-hint != "": Text {
+                        text: root.status-hint;
                         font-family: Theme.font-family;
-                        font-size: Theme.font-small;
-                        color: root.qr-state == "error" ? Theme.danger
-                            : (root.qr-state == "scanned" || root.qr-state == "confirmed") ? Theme.success
-                            : Theme.text-secondary;
+                        font-size: Theme.font-caption;
+                        color: Theme.text-tertiary;
                         horizontal-alignment: center;
                         wrap: word-wrap;
-                        min-height: 18px;
                     }
-
-                    HorizontalLayout {
-                        alignment: center;
-
-                        FluentButton {
-                            text: "刷新二维码";
-                            glyph: Icons.refresh;
-                            enabled: !root.login-loading;
-                            min-w: 132px;
-                            clicked => {
-                                root.do-qr-refresh();
-                            }
-                        }
-                    }
-
-                    Text {
-                        text: "打开天翼云盘 App → 扫一扫";
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-caption;
-                        color: Theme.text-tertiary;
-                        horizontal-alignment: center;
-                    }
-                    Rectangle {
-                        height: 2px;
-                        background: transparent;
-                    }
-                }
-
-                if root.login-loading: HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
-
-                    Text {
-                        text: "请稍候，正在与天翼云盘通信…";
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-caption;
-                        color: Theme.text-tertiary;
-                    }
-                }
-
-                // 状态提示（自动恢复登录态等）固定贴在卡片底部
-                if root.status-hint != "": Text {
-                    text: root.status-hint;
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-caption;
-                    color: Theme.text-tertiary;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
                 }
             }
         }
     }
-}
 }

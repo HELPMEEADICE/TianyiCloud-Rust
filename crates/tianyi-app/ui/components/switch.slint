@@ -1,0 +1,69 @@
+// Fluent 开关（ToggleSwitch）
+//
+// 语义：用于"立即生效的布尔设置"（如减少动画）。
+// 轨道 40x20，滑块 12px，开启态使用强调色；关闭态使用中性描边。
+
+import { Theme } from "../theme/tokens.slint";
+
+export component FluentSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <bool> enabled: true;
+    in property <string> text: "";
+
+    callback toggled();
+
+    height: 24px;
+    background: transparent;
+    opacity: root.enabled ? 1.0 : 0.45;
+
+    HorizontalLayout {
+        alignment: end;
+        cross-axis-alignment: center;
+        spacing: Theme.space-2;
+
+        if root.text != "": Text {
+            text: root.text;
+            font-family: Theme.font-family;
+            font-size: Theme.font-body;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        track := Rectangle {
+            width: 40px;
+            height: 20px;
+            horizontal-stretch: 0;
+            border-radius: 10px;
+            background: root.checked ? (touch.has-hover ? Theme.accent-hover : Theme.accent)
+                : (touch.has-hover ? Theme.stroke-strong : Theme.stroke-control);
+
+            animate background {
+                duration: Theme.motion-fast;
+                easing: ease-out;
+            }
+
+            Rectangle {
+                y: 3px;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                background: root.checked ? Theme.text-on-accent : (Theme.dark ? #C8C8C8 : #FFFFFF);
+                x: root.checked ? track.width - self.width - 3px : 3px;
+
+                animate x {
+                    duration: Theme.motion-fast;
+                    easing: ease-out;
+                }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled();
+        }
+    }
+}

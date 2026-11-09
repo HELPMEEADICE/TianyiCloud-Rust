@@ -9,7 +9,7 @@ import { Theme } from "../theme/tokens.slint";
 import { Icon, Icons } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
-import { FluentEmptyState } from "../components/empty-state.slint";
+import { FluentEmptyState } from "../components/state-view.slint";
 
 export struct DirectLink {
     name: string,
@@ -27,22 +27,22 @@ export component LinksPage inherits Rectangle {
     background: Theme.window-bg;
 
     VerticalLayout {
-        padding-left: 16px;
-        padding-right: 16px;
-        padding-top: 12px;
-        padding-bottom: 8px;
-        spacing: 10px;
+        padding-left: Theme.space-4;
+        padding-right: Theme.space-4;
+        padding-top: Theme.space-3;
+        padding-bottom: Theme.space-2;
+        spacing: Theme.space-2;
 
         HorizontalLayout {
             height: Theme.header-height;
-            spacing: 10px;
+            spacing: Theme.space-3;
             cross-axis-alignment: center;
 
             Text {
                 text: "下载直链";
                 font-family: Theme.font-family;
                 font-size: Theme.font-subtitle;
-                font-weight: 600;
+                font-weight: Theme.weight-semibold;
                 color: Theme.text-primary;
                 vertical-alignment: center;
             }
@@ -76,19 +76,18 @@ export component LinksPage inherits Rectangle {
             }
         }
 
-        Rectangle {
+        HorizontalLayout {
             vertical-stretch: 1;
-            border-radius: Theme.radius-card;
-            background: Theme.card-bg;
-            border-width: 1px;
-            border-color: Theme.stroke;
+            alignment: center;
 
             Rectangle {
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: parent.height;
-                background: transparent;
+                width: Math.min(parent.width, Theme.content-max-width);
+                vertical-stretch: 1;
+                border-radius: Theme.radius-card;
+                background: Theme.card-bg;
+                border-width: 1px;
+                border-color: Theme.stroke;
+                clip: true;
 
                 ListView {
                     x: 0;
@@ -97,8 +96,8 @@ export component LinksPage inherits Rectangle {
                     height: parent.height;
 
                     for item in root.links : Rectangle {
-                        height: 54px;
-                        background: link-ta.has-hover ? Theme.control-bg-hover : transparent;
+                        height: 56px;
+                        background: link-ta.has-hover ? Theme.hover-bg : transparent;
 
                         link-ta := TouchArea {
                             mouse-cursor: pointer;
@@ -108,16 +107,26 @@ export component LinksPage inherits Rectangle {
                             }
 
                             HorizontalLayout {
-                                padding-left: 12px;
-                                padding-right: 8px;
-                                spacing: 10px;
+                                padding-left: Theme.space-3;
+                                padding-right: Theme.space-2;
+                                spacing: Theme.space-3;
                                 cross-axis-alignment: center;
 
-                                Icon {
-                                    glyph: Icons.link;
-                                    size: 16px;
-                                    thickness: 1.7px;
-                                    icon-color: Theme.accent;
+                                Rectangle {
+                                    width: 28px;
+                                    height: 28px;
+                                    horizontal-stretch: 0;
+                                    border-radius: 8px;
+                                    background: Theme.accent-soft;
+
+                                    Icon {
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        glyph: Icons.link;
+                                        size: 15px;
+                                        thickness: 1.7px;
+                                        icon-color: Theme.accent;
+                                    }
                                 }
 
                                 VerticalLayout {
@@ -129,7 +138,7 @@ export component LinksPage inherits Rectangle {
                                         text: item.name;
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-body;
-                                        font-weight: 600;
+                                        font-weight: Theme.weight-semibold;
                                         color: Theme.text-primary;
                                         overflow: elide;
                                     }
@@ -155,28 +164,24 @@ export component LinksPage inherits Rectangle {
                     }
                 }
 
-                if root.links.length == 0: Rectangle {
+                if root.links.length == 0: FluentEmptyState {
                     x: 0;
                     y: 0;
                     width: parent.width;
                     height: parent.height;
-                    background: Theme.card-bg;
-
-                    FluentEmptyState {
-                        glyph: Icons.link;
-                        title: "还没有提取过直链";
-                        description: "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果";
-                        action-text: "去个人云";
-                        action => {
-                            root.go-personal();
-                        }
+                    glyph: Icons.link;
+                    title: "还没有提取过直链";
+                    description: "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果";
+                    action-text: "去个人云";
+                    action => {
+                        root.go-personal();
                     }
                 }
             }
         }
 
         HorizontalLayout {
-            height: 24px;
+            height: Theme.statusbar-height;
             cross-axis-alignment: center;
 
             Text {
