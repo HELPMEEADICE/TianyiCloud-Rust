@@ -264,6 +264,18 @@ impl Controller {
         }
     }
 
+    /// 打开日志目录（设置页「关于」分组里的那一行）
+    ///
+    /// 目录由 `crate::logging` 解析（与日志初始化用的是同一个路径），用户可能一次都
+    /// 没产生过日志文件，所以打开前先补建目录，避免系统弹“找不到路径”。
+    pub(super) fn open_log_dir(self: &Arc<Self>) {
+        let dir = crate::logging::log_dir();
+        let _ = std::fs::create_dir_all(dir.as_path());
+        if let Err(e) = file::open_with_system(dir.as_path()) {
+            self.notice("error", format!("无法打开日志目录：{e}"));
+        }
+    }
+
     pub(super) fn open_download_dir(self: &Arc<Self>) {
         let dir = self
             .store

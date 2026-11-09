@@ -100,6 +100,8 @@ export component MainWindow inherits Window {
     in property <int> upload-thread-count: 3;
     in property <int> download-thread-count: 4;
     in property <string> config-dir: "";
+    /// 日志目录（= 配置目录下的 logs/）：设置页「关于」分组里的只读路径行
+    in property <string> log-dir: "";
 
     // ==================== 提示与拖拽 ====================
     in property <string> notice-text: "";
@@ -170,12 +172,17 @@ export component MainWindow inherits Window {
     // ==================== 设置 / 其它 ====================
     callback copy_link(string);
     callback clear_links();
+    /// 用系统默认浏览器打开某条直链
+    callback open_link(string);
+    /// 复制全部直链（每行一条）
+    callback copy_all_links();
     callback theme_changed(int);
     callback reduce_motion_changed(bool);
     /// (下载分片数, 上传分片数)：越界值由控制器钳制到 1..=8
     callback thread_count_changed(int, int);
     callback choose_download_dir();
     callback open_config_dir();
+    callback open_log_dir();
     callback copy_text(string);
     callback logout();
 
@@ -791,6 +798,12 @@ export component MainWindow inherits Window {
                     clear-links => {
                         root.clear_links();
                     }
+                    open-link(url) => {
+                        root.open_link(url);
+                    }
+                    copy-all-links => {
+                        root.copy_all_links();
+                    }
                 }
 
                 SettingsPage {
@@ -809,6 +822,7 @@ export component MainWindow inherits Window {
                     download-thread-count: root.download-thread-count;
                     version-text: root.version-text;
                     config-dir: root.config-dir;
+                    log-dir: root.log-dir;
 
                     theme-changed(idx) => {
                         root.theme_changed(idx);
@@ -824,6 +838,9 @@ export component MainWindow inherits Window {
                     }
                     open-config-dir => {
                         root.open_config_dir();
+                    }
+                    open-log-dir => {
+                        root.open_log_dir();
                     }
                     copy-text(text) => {
                         root.copy_text(text);

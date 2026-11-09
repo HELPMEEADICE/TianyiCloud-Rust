@@ -5,6 +5,7 @@ mod backend;
 mod controller;
 #[cfg(windows)]
 mod dragout;
+mod logging;
 
 #[cfg(test)]
 mod ui_tests;
@@ -176,8 +177,13 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    log::info!("tianyi-cloud-rust starting");
+    // 日志：stderr（沿用 RUST_LOG，默认 info）+ 配置目录下按天滚动的日志文件。
+    // 落盘失败时自动退化为“仅 stderr”，不会影响启动（见 logging.rs）。
+    let log_dir = logging::init();
+    log::info!(
+        "tianyi-cloud-rust starting（日志目录：{}）",
+        log_dir.display()
+    );
 
     let ui = MainWindow::new()?;
     let ui_handle = ui.as_weak();

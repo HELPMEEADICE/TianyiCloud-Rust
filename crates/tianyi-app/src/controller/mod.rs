@@ -208,6 +208,7 @@ impl Controller {
         } else {
             MEMORY_CONFIG_LABEL.to_string()
         };
+        let log_dir = crate::logging::log_dir().display().to_string();
         let font = platform_ui_font();
         let mono = platform_mono_font();
         self.apply_theme();
@@ -224,6 +225,7 @@ impl Controller {
         self.set_ui_state(move |ui| {
             ui.set_version_text(SharedString::from(version));
             ui.set_config_dir(SharedString::from(config_dir));
+            ui.set_log_dir(SharedString::from(log_dir));
             ui.set_upload_thread(SharedString::from(upload_thread));
             ui.set_download_thread(SharedString::from(download_thread));
             ui.set_upload_thread_count(upload_count);
@@ -578,6 +580,22 @@ impl Controller {
             });
         });
 
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_open_link(move |url| {
+                let c = c.clone();
+                c.open_link(url.as_str());
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_copy_all_links(move || {
+                let c = c.clone();
+                c.copy_all_links();
+            });
+        });
+
         // ---------------- 设置 ----------------
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
@@ -618,6 +636,14 @@ impl Controller {
             ui.on_open_config_dir(move || {
                 let c = c.clone();
                 c.open_config_dir();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_open_log_dir(move || {
+                let c = c.clone();
+                c.open_log_dir();
             });
         });
 

@@ -21,6 +21,10 @@ export component LinksPage inherits Rectangle {
     in property <string> status-text: "";
 
     callback copy-link(string);
+    /// 用系统默认浏览器打开某条直链
+    callback open-link(string);
+    /// 把列表里的全部直链按行拼起来复制到剪贴板
+    callback copy-all-links();
     callback go-personal();
     callback clear-links();
 
@@ -55,6 +59,16 @@ export component LinksPage inherits Rectangle {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
                 overflow: elide;
+            }
+
+            FluentButton {
+                text: "复制全部";
+                icon: IconName.copy;
+                subtle: true;
+                enabled: root.links.length > 0;
+                clicked => {
+                    root.copy-all-links();
+                }
             }
 
             FluentButton {
@@ -102,8 +116,11 @@ export component LinksPage inherits Rectangle {
                         link-ta := TouchArea {
                             mouse-cursor: pointer;
 
+                            // 行单击 = 在浏览器中打开（不可用时由控制器弹 error 提示）。
+                            // 复制仍是显式动作：行尾复制按钮 + 顶部“复制全部”，
+                            // 不存在双击/长按这类隐式手势。
                             clicked => {
-                                root.copy-link(item.url);
+                                root.open-link(item.url);
                             }
 
                             HorizontalLayout {

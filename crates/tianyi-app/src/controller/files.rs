@@ -818,6 +818,28 @@ impl Controller {
         self.notice("info", "已清空直链列表");
     }
 
+    /// 用系统默认浏览器打开一条直链
+    pub(super) fn open_link(&self, url: &str) {
+        match open_url_in_browser(url) {
+            Ok(()) => self.set_status(format!("已在浏览器中打开：{url}")),
+            Err(e) => self.notice("error", format!("无法在浏览器中打开：{e}")),
+        }
+    }
+
+    /// 把直链列表的全部链接按行拼起来复制到剪贴板
+    pub(super) fn copy_all_links(self: &Arc<Self>) {
+        let links = lock_or_recover(&self.links).clone();
+        let text = join_links(&links);
+        if links.is_empty() {
+            self.notice("info", "还没有可复制的直链");
+            return;
+        }
+        match copy_to_clipboard(&text) {
+            Ok(()) => self.notice("success", format!("已复制 {} 条直链", links.len())),
+            Err(e) => self.notice("error", format!("复制失败：{e}")),
+        }
+    }
+
     pub(super) fn find_visible(&self, id: &str) -> Option<FileObject> {
         lock_or_recover(&self.visible_rows)
             .iter()
@@ -1085,4 +1107,119 @@ pub(super) fn sanitize_file_name(name: &str) -> String {
 /// 重命名输入框原本只有 accepted 一个出口，Esc 必须走同一条清空路径。
 pub(super) fn rename_cancelled_state() -> (SharedString, &'static str) {
     (SharedString::default(), "已取消重命名")
+}
+
+/// 把直链列表拼成一段多行文本（每行一条，无尾随换行）
+///
+/// 0 条 → 空串；N 条 → 用 `\n` 连接。`\n` 而不是 `\r\n`：粘贴到下载工具
+/// （IDM / aria2 / Motrix 等）时两种都认，而 `\r` 在部分工具里会被当成链接的一部分。
+pub(super) fn join_links(links: &[DirectLink]) -> String {
+    links
+        .iter()
+        .map(|link| link.url.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 只放行 http(s)：直链一定是这两者，其它 scheme 交给系统打开只会扩大攻击面
+fn is_openable_url(url: &str) -> bool {
+    let url = url.trim();
+    url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// 用系统默认浏览器打开一个 URL
+///
+/// 不能复用 `tianyi_core::file::open_with_system`：它按“文件路径”处理参数，Windows 上
+/// 会把 `/` 换成 `\`（`https://host/a/b` → `https:\\host\a\b`），URL 会打不开。这里按
+/// “URL 交给系统打开程序”单独实现，且刻意放在本层，不去改 core 的既有行为。
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    if !is_openable_url(url) {
+        return Err(format!("不是可用的直链：{url}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // 直链普遍带 `&`（查询串），cmd 会把它当成命令分隔符，所以整条 URL 必须显式
+        // 加引号；`start` 又会把第一个带引号的参数当作窗口标题，因此先给一个空标题。
+        let quoted = format!("\"{}\"", url.trim().replace('"', "%22"));
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", ""]).raw_arg(quoted);
+        cmd.spawn()
+            .map(|_| ())
+            .map_err(|e| format!("launch browser: {e}"))
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("launch browser: {e}"))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("launch browser: {e}"))
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        Err("unsupported platform".to_string())
+    }
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    fn link(name: &str, url: &str) -> DirectLink {
+        DirectLink {
+            name: name.into(),
+            url: url.into(),
+        }
+    }
+
+    #[test]
+    fn join_links_is_empty_when_there_is_nothing_to_copy() {
+        assert_eq!(join_links(&[]), "");
+    }
+
+    #[test]
+    fn join_links_joins_with_single_newline_and_no_trailing_break() {
+        let links = [
+            link("a.bin", "https://x.test/1?a=1&b=2"),
+            link("b.bin", "https://x.test/2"),
+        ];
+        assert_eq!(
+            join_links(&links),
+            "https://x.test/1?a=1&b=2\nhttps://x.test/2"
+        );
+        assert!(!join_links(&links).ends_with('\n'), "不能有尾随换行");
+        assert!(!join_links(&links).contains('\r'), "不能用 CRLF");
+    }
+
+    #[test]
+    fn is_openable_url_accepts_only_http_and_https() {
+        assert!(is_openable_url("https://x.test/a"));
+        assert!(is_openable_url("http://x.test/a?b=1&c=2"));
+        // 前后空白被忽略（从剪贴板/配置里粘贴回来的常见形态）
+        assert!(is_openable_url("  https://x.test/a  "));
+        assert!(!is_openable_url(""));
+        assert!(!is_openable_url("   "));
+        assert!(!is_openable_url("file:///C:/Windows/win.ini"));
+        assert!(!is_openable_url("javascript:alert(1)"));
+        assert!(!is_openable_url("ftp://x.test/a"));
+    }
+
+    #[test]
+    fn open_link_rejects_non_http_url_without_touching_the_system() {
+        // 非法 scheme 必须在启动任何进程之前就被拦下（这里能返回 Err 即为证明）
+        assert!(open_url_in_browser("javascript:alert(1)").is_err());
+    }
 }

@@ -184,6 +184,8 @@ export component SettingsPage inherits Rectangle {
     in property <int> download-thread-count: 4;
     in property <string> version-text: "";
     in property <string> config-dir: "";
+    /// 日志目录（配置目录下的 logs/），由控制器在初始化时回填
+    in property <string> log-dir: "";
 
     callback theme-changed(int);
     callback reduce-motion-changed(bool);
@@ -191,6 +193,7 @@ export component SettingsPage inherits Rectangle {
     /// (下载分片数, 上传分片数)：值可能越界，钳制由控制器负责
     callback thread-count-changed(int, int);
     callback open-config-dir();
+    callback open-log-dir();
     callback copy-text(string);
     callback logout();
 
@@ -386,6 +389,24 @@ export component SettingsPage inherits Rectangle {
                             }
                             action => {
                                 root.open-config-dir();
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        // 用户报问题时需要拿到日志文件：这里给出真实路径，并提供
+                        // “打开”与“复制”，省掉“日志到底在哪”的来回确认。
+                        PathRow {
+                            label: "日志目录";
+                            value: root.log-dir;
+                            hint: "运行日志按天滚动保存，只保留最近 7 天";
+                            action-text: "打开";
+                            copy => {
+                                root.copy-text(root.log-dir);
+                            }
+                            action => {
+                                root.open-log-dir();
                             }
                         }
                     }
