@@ -311,16 +311,20 @@ Slint 的 `TouchArea` 点击事件不带修饰键。用 winit `ModifiersChanged`
 ## 8. Git 提交记录
 
 ```
+1c5f893 fix(ui): 校准登录页居中结论并补 150% DPI 真机截图
+638ad83 docs: 新增 UI/UX 重构报告（问题根因/改动/Bug/测试/限制/截图）
 0d0d6fd test(ui): 无窗口渲染器 + 前后视觉基线截图
 edbe425 refactor(app): 选择模型/列表状态机/排序与危险操作确认
 7ad22fb refactor(ui): 重建 Fluent 令牌/基础组件并修复空态与加载态布局
 ```
 
 未提交（按约定不做）：远程推送、PR 创建。工作分支沿用 `main`，未使用 `git reset --hard`，
-未覆盖任何用户未提交修改（重构开始时工作区为 clean）。
+未覆盖任何用户未提交修改（重构开始时工作区为 clean，结束时同样 clean）。
 
 > 说明：`7ad22fb` 与 `edbe425` 存在依赖关系——UI 树先引入新的属性/回调接口，控制器随后对接。
-> 单独检出 `7ad22fb` 时 Rust 侧尚不能编译；两者合并后才是一个可构建状态。
+> 单独检出 `7ad22fb` 时 Rust 侧尚不能编译；两者合并后才是一个可构建状态。之后的三个提交
+> （tooling / docs / fix）彼此独立且各自可构建。
+
 
 ---
 
