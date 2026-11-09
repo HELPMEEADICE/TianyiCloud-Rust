@@ -235,10 +235,14 @@ export component LoginPage inherits Rectangle {
                                 border-width: 1px;
                                 border-color: Theme.stroke;
 
+                                // 位图默认 fill 会把验证码横向拉伸到不可读：
+                                // 容器尺寸与 4px 边距保持不变，只让位图按原始宽高比缩放并居中，
+                                // 多出来的空间留白（contain）。
                                 Image {
                                     source: root.captcha-image;
                                     height: 56px;
                                     width: parent.width - 8px;
+                                    image-fit: contain;
                                     x: 4px;
                                     y: 4px;
                                 }
