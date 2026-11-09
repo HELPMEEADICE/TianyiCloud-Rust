@@ -1,152 +1,330 @@
-// 图标系统
+// 图标系统 —— Microsoft Fluent UI System Icons（微软官方开源图标库）
+// =============================================================================
+// 设计约束（本文件是整个应用唯一的图标入口，禁止绕过它自绘图标）：
 //
-// 使用矢量路径（24x24 viewbox）而不是图标字体：
-//  * 与 Fluent 线条风格一致，不依赖额外字体文件，删除 MaterialIcons-Regular.ttf 的 348KB 体积
-//  * 单色、可着色、任意 DPI 下清晰
-//  * 线宽在 viewbox 坐标系中给定，随尺寸等比缩放
+//  * 所有图标都是微软官方仓库的**原始 SVG 静态资源**，逐文件从
+//    github.com/microsoft/fluentui-system-icons 下载，保存于 ui/assets/icons/。
+//    来源、提交号与逐图标映射见 ui/assets/icons/SOURCES.md，许可证见同目录 LICENSE。
+//  * 禁止：手写 SVG PathData、Slint Path、多矩形/线段拼装、Unicode/Emoji 冒充图标、
+//    自制图标字体、为了微调而改官方路径。语义不够就换官方图标，不改路径。
+//  * @image-url 是**编译期**构造，路径必须是字面量，不能运行期拼文件名。
+//    因此「图标名 → 资源」的映射只能是静态表：下面的 IconAssets 就是那张表，
+//    它由 tools/fetch-fluent-icons.ps1 依据真实存在的文件生成并回填，
+//    保证 enum 成员、image 属性、磁盘文件三者永远一致（缺一个都编译不过）。
+//  * 着色用 Slint 原生 Image.colorize：它把图像当作 alpha 蒙版并按给定颜色绘制
+//    （见 i-slint-compiler builtins.slint 中 Image.colorize 的说明），
+//    所以官方 SVG 保持微软原始字节，深浅色/选中/禁用全部在 Slint 侧着色，
+//    不需要为每种颜色复制一份图标，也不存在彩色图标被染坏的情况。
+//  * 风格规范（Fluent Design 2）：默认 Regular，选中态用 Filled。
+//    两者 canvas 一致（24×24），切换时不会改变尺寸或位置。
 //
-// 所有图标默认按“描边线条”渲染；少数实心图标（播放、更多）通过 filled 开关填充。
+// 修改图标清单：改 tools/fetch-fluent-icons.ps1 里的 $manifest，重跑该脚本，
+// 它会下载缺失资源、更新 SOURCES.md，并回填下面两个 generated 区块。
+// =============================================================================
 
 import { Theme } from "tokens.slint";
 
-/// 图标字形表：24x24 坐标系下的 SVG path 数据
-export global Icons {
-    // 文件夹
-    out property <string> folder: "M3 7.5 A2.5 2.5 0 0 1 5.5 5 L9 5 L11.5 7.5 L18.5 7.5 A2.5 2.5 0 0 1 21 10 L21 17.5 A2.5 2.5 0 0 1 18.5 20 L5.5 20 A2.5 2.5 0 0 1 3 17.5 Z";
-    // 通用文件
-    out property <string> file: "M6 3 L13 3 L19 9 L19 20 A1 1 0 0 1 18 21 L6 21 A1 1 0 0 1 5 20 L5 4 A1 1 0 0 1 6 3 Z M13 3 L13 9 L19 9";
-    // 图片
-    out property <string> image: "M4 4 L20 4 A1 1 0 0 1 21 5 L21 19 A1 1 0 0 1 20 20 L4 20 A1 1 0 0 1 3 19 L3 5 A1 1 0 0 1 4 4 Z M3.5 16.5 L9 10.5 L14 16.5 M13.5 14.5 L16.5 11.5 L20.5 15.5";
-    // 视频
-    out property <string> video: "M3 6 A2 2 0 0 1 5 4 L15 4 A2 2 0 0 1 17 6 L17 18 A2 2 0 0 1 15 20 L5 20 A2 2 0 0 1 3 18 Z M17 10 L21 7 L21 17 L17 14";
-    // 音频
-    out property <string> audio: "M9 18 A3 3 0 1 1 3 18 A3 3 0 1 1 9 18 Z M9 18 L9 5 L20 3 L20 15 M20 15 A3 3 0 1 1 14 15 A3 3 0 1 1 20 15 Z";
-    // PDF / 文档
-    out property <string> pdf: "M6 3 L13 3 L19 9 L19 20 A1 1 0 0 1 18 21 L6 21 A1 1 0 0 1 5 20 L5 4 A1 1 0 0 1 6 3 Z M13 3 L13 9 L19 9 M8.5 13 L15.5 13 M8.5 16.5 L13.5 16.5";
-    // 压缩包
-    out property <string> archive: "M6 3 L13 3 L19 9 L19 20 A1 1 0 0 1 18 21 L6 21 A1 1 0 0 1 5 20 L5 4 A1 1 0 0 1 6 3 Z M13 3 L13 9 L19 9 M9 6 L11 6 M9 9 L11 9 M9 12 L11 12 M9 15.5 L11 15.5 M10 15.5 L10 18.5";
-    // 文本 / 代码
-    out property <string> text-file: "M6 3 L13 3 L19 9 L19 20 A1 1 0 0 1 18 21 L6 21 A1 1 0 0 1 5 20 L5 4 A1 1 0 0 1 6 3 Z M13 3 L13 9 L19 9 M8 12.5 L12 12.5 M8 16 L14 16";
-    // 上传
-    out property <string> upload: "M12 16 L12 3 M7.5 7.5 L12 3 L16.5 7.5 M4 20 L20 20";
-    // 下载
-    out property <string> download: "M12 3 L12 16 M7.5 11.5 L12 16 L16.5 11.5 M4 20 L20 20";
-    // 刷新
-    out property <string> refresh: "M20.5 12 A8.5 8.5 0 1 1 17.6 5.6 M17.6 3 L17.6 6.4 L21 6.4";
-    // 搜索
-    out property <string> search: "M4 10.5 A6.5 6.5 0 1 0 17 10.5 A6.5 6.5 0 1 0 4 10.5 Z M15.5 15.5 L21 21";
-    // 关闭
-    out property <string> close: "M5.5 5.5 L18.5 18.5 M18.5 5.5 L5.5 18.5";
-    // 加号
-    out property <string> plus: "M12 4.5 L12 19.5 M4.5 12 L19.5 12";
-    // 返回
-    out property <string> back: "M15 4.5 L7.5 12 L15 19.5";
-    // 右箭头（面包屑分隔/进入）
-    out property <string> chevron-right: "M9 4.5 L16.5 12 L9 19.5";
-    // 下箭头（下拉）
-    out property <string> chevron-down: "M4.5 8.5 L12 16 L19.5 8.5";
-    // 上折叠
-    out property <string> chevron-up: "M4.5 15.5 L12 8 L19.5 15.5";
-    // 首页
-    out property <string> home: "M3 11 L12 3 L21 11 M5.5 9.5 L5.5 20 L18.5 20 L18.5 9.5 M10 20 L10 14.5 L14 14.5 L14 20";
-    // 家庭 / 多人
-    out property <string> people: "M9 4 A3.4 3.4 0 1 0 9 10.8 A3.4 3.4 0 1 0 9 4 Z M2.5 20.5 A6.8 6.8 0 0 1 15.5 20.5 M16 4.6 A3.2 3.2 0 0 1 16 10.4 M17.2 14.2 A5.6 5.6 0 0 1 21.5 19.6";
-    // 传输
-    out property <string> transfer: "M7 3 L7 17 M3.5 13.5 L7 17 L10.5 13.5 M17 21 L17 7 M13.5 10.5 L17 7 L20.5 10.5";
-    // 分享链接
-    out property <string> link: "M14 8 L16.6 5.4 A3.5 3.5 0 0 1 21.6 10.4 L19 13 M10 16 L7.4 18.6 A3.5 3.5 0 0 1 2.4 13.6 L5 11 M8.5 15.5 L15.5 8.5";
-    // 设置（滑杆）
-    out property <string> settings: "M4 7 L9 7 M15 7 L20 7 M4 12 L13 12 M19 12 L20 12 M4 17 L11 17 M17 17 L20 17 M10 5.5 A1.8 1.8 0 1 0 14 5.5 A1.8 1.8 0 1 0 10 5.5 Z M13 10.5 A1.8 1.8 0 1 0 17 10.5 A1.8 1.8 0 1 0 13 10.5 Z M11 15.5 A1.8 1.8 0 1 0 15 15.5 A1.8 1.8 0 1 0 11 15.5 Z";
-    // 暂停
-    out property <string> pause: "M9 5 L9 19 M15 5 L15 19";
-    // 继续（实心三角）
-    out property <string> play: "M8 4.8 L19 12 L8 19.2 Z";
-    // 取消 / 停止
-    out property <string> cancel: "M6.5 6.5 L17.5 17.5 M17.5 6.5 L6.5 17.5";
-    // 删除垃圾桶
-    out property <string> trash: "M4.5 7 L19.5 7 M9.5 7 L9.5 4.6 A1.6 1.6 0 0 1 11.1 3 L12.9 3 A1.6 1.6 0 0 1 14.5 4.6 L14.5 7 M6.3 7 L7.3 19.6 A1.6 1.6 0 0 0 8.9 21 L15.1 21 A1.6 1.6 0 0 0 16.7 19.6 L17.7 7 M10 11 L10 17 M14 11 L14 17";
-    // 重命名（铅笔）
-    out property <string> pencil: "M4 20 L4.6 15.8 L15.8 4.6 A2.2 2.2 0 0 1 19.4 8.2 L8.2 19.4 Z M14 6.4 L17.6 10";
-    // 复制
-    out property <string> copy: "M8.5 3.5 L18.5 3.5 L18.5 15.5 M5.5 7.5 L14.5 7.5 L14.5 20.5 L5.5 20.5 Z";
-    // 更多（三个实心点）
-    out property <string> more: "M5 10.6 A1.4 1.4 0 1 0 5 13.4 A1.4 1.4 0 1 0 5 10.6 Z M12 10.6 A1.4 1.4 0 1 0 12 13.4 A1.4 1.4 0 1 0 12 10.6 Z M19 10.6 A1.4 1.4 0 1 0 19 13.4 A1.4 1.4 0 1 0 19 10.6 Z";
-    // 勾
-    out property <string> check: "M4.5 12.5 L9.5 17.5 L19.5 6.5";
-    // 警告
-    out property <string> warning: "M12 3.5 L21.5 20.5 L2.5 20.5 Z M12 9 L12 14 M12 17 L12 17.6";
-    // 信息
-    out property <string> info: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M12 10.8 L12 16.8 M12 7.4 L12 8";
-    // 云
-    out property <string> cloud: "M7 18.5 A4.6 4.6 0 0 1 7 9.3 A5.6 5.6 0 0 1 17.4 8.8 A4.3 4.3 0 0 1 17 18.5 Z";
-    // 存储
-    out property <string> storage: "M3 7.5 A2 2 0 0 1 5 5.5 L19 5.5 A2 2 0 0 1 21 7.5 L21 16.5 A2 2 0 0 1 19 18.5 L5 18.5 A2 2 0 0 1 3 16.5 Z M3 12 L21 12 M6.5 15.2 L8.5 15.2";
-    // 退出登录
-    out property <string> logout: "M13 4 L6 4 A1 1 0 0 0 5 5 L5 19 A1 1 0 0 0 6 20 L13 20 M17 8 L21 12 L17 16 M10.5 12 L21 12";
-    // 用户
-    out property <string> person: "M12 4 A4 4 0 1 0 12 12 A4 4 0 1 0 12 4 Z M4 21 A8 8 0 0 1 20 21";
-    // 显示密码
-    out property <string> eye: "M12 5.5 C6 5.5 2 12 2 12 C2 12 6 18.5 12 18.5 C18 18.5 22 12 22 12 C22 12 18 5.5 12 5.5 Z M12 9.2 A2.8 2.8 0 1 0 12 14.8 A2.8 2.8 0 1 0 12 9.2 Z";
-    // 隐藏密码
-    out property <string> eye-off: "M3 3 L21 21 M12 5.5 C6 5.5 2 12 2 12 C2 12 3.4 14.2 5.7 16 M12 18.5 C18 18.5 22 12 22 12 C22 12 20.7 9.9 18.4 8 M10 10 A2.8 2.8 0 0 0 14 14";
-    // 浅色
-    out property <string> sun: "M12 7.5 A4.5 4.5 0 1 0 12 16.5 A4.5 4.5 0 1 0 12 7.5 Z M12 2 L12 4.2 M12 19.8 L12 22 M2 12 L4.2 12 M19.8 12 L22 12 M4.9 4.9 L6.5 6.5 M17.5 17.5 L19.1 19.1 M19.1 4.9 L17.5 6.5 M6.5 17.5 L4.9 19.1";
-    // 深色
-    out property <string> moon: "M20 15.2 A9 9 0 0 1 8.8 4 A9 9 0 1 0 20 15.2 Z";
-    // 二维码
-    out property <string> qr: "M4 4 L9 4 L9 9 L4 9 Z M15 4 L20 4 L20 9 L15 9 Z M4 15 L9 15 L9 20 L4 20 Z M14.5 14.5 L18 14.5 L18 18.5 L14.5 18.5 Z M20.5 14.5 L20.5 16 M14.5 20.5 L16.5 20.5 M20.5 19 L20.5 20.5";
-    // 面向上箭头（展开）
-    out property <string> arrow-up: "M12 20 L12 5 M6.5 10.5 L12 5 L17.5 10.5";
-    // 排序
-    out property <string> sort: "M4 6.5 L20 6.5 M7 12 L17 12 M10 17.5 L14 17.5";
-    // 升序（箭头向上 + 横线）
-    out property <string> sort-asc: "M4 6.5 L10 6.5 M4 12 L8 12 M4 17.5 L6 17.5 M17 20 L17 6 M13 10 L17 6 L21 10";
-    // 降序（箭头向下 + 横线）
-    out property <string> sort-desc: "M4 6.5 L10 6.5 M4 12 L8 12 M4 17.5 L6 17.5 M17 4 L17 18 M13 14 L17 18 L21 14";
-    // 筛选
-    out property <string> filter: "M3.5 5.5 L20.5 5.5 L13.5 13 L13.5 20 L10.5 18 L10.5 13 Z";
-    // 成功圆环
-    out property <string> check-circle: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M8 12.2 L11 15.2 L16.2 9.4";
-    // 错误圆环
-    out property <string> error-circle: "M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 Z M9 9 L15 15 M15 9 L9 15";
-    // 离线 / 云端不可用
-    out property <string> cloud-off: "M7 18.5 A4.6 4.6 0 0 1 7 9.3 A5.6 5.6 0 0 1 17 8.9 M3 3 L21 21";
-    // 打开文件夹
-    out property <string> folder-open: "M3 8 A2 2 0 0 1 5 6 L9.5 6 L12 8.5 L19 8.5 A2 2 0 0 1 21 10.5 L21 11.5 L5.6 19.5 L3 11.5 Z";
-    // 时钟（修改时间列）
-    out property <string> clock: "M12 3.5 A8.5 8.5 0 1 0 12 20.5 A8.5 8.5 0 1 0 12 3.5 Z M12 7.5 L12 12.4 L15.6 14.6";
-    // 全选（方框 + 勾）
-    out property <string> select-all: "M4.5 4.5 L15 4.5 L15 15 L4.5 15 Z M8 18.5 L19.5 18.5 L19.5 7 M7 9.6 L9.8 12.4 L13.6 7.4";
-    // 上传到云端
-    out property <string> upload-cloud: "M6.5 16.5 L6.5 8 M3 11.5 L6.5 8 L10 11.5 M13.5 19.5 L13.5 12.5 A3 3 0 0 1 19.5 12.5 L19.5 19.5 M13.5 16 L16.5 19.5 L19.5 16";
+/// 图标语义名。
+///
+/// 成员名 = 语义，不是形状：`settings` 表示「设置」这个含义，
+/// 而不是「齿轮画法」。改名请同步 tools/fetch-fluent-icons.ps1 的清单。
+// <generated:enum>
+export enum IconName {
+    none,
+    home,
+    people,
+    transfer,
+    link,
+    settings,
+    folder,
+    file,
+    image,
+    video,
+    audio,
+    archive,
+    pdf,
+    text,
+    search,
+    refresh,
+    upload,
+    download,
+    folder-add,
+    delete,
+    rename,
+    copy,
+    move,
+    folder-open,
+    select-all,
+    back,
+    chevron-right,
+    chevron-down,
+    chevron-up,
+    more,
+    close,
+    check,
+    add,
+    filter,
+    sort,
+    sort-asc,
+    sort-desc,
+    pause,
+    play,
+    cancel,
+    retry,
+    success,
+    error,
+    warning,
+    account,
+    password-show,
+    password-hide,
+    login,
+    logout,
+    info,
+    cloud,
+    cloud-off,
+    storage,
+    clock,
+    light,
+    dark,
+    qr,
+}
+// </generated:enum>
+
+/// 图标资源注册表：图标语义名 → 编译期内嵌的官方 SVG。
+///
+/// 本 global 由脚本生成，不要手改 generated 区块。
+export global IconAssets {
+    /// 图标名为 none 时的占位（配合 Icon.visible 使用，永远不会被画出来）
+    out property <image> placeholder: @image-url("../assets/icons/ic_fluent_dismiss_24_regular.svg");
+
+    // <generated:assets>
+    out property <image> home-regular: @image-url("../assets/icons/ic_fluent_home_24_regular.svg");
+    out property <image> home-filled: @image-url("../assets/icons/ic_fluent_home_24_filled.svg");
+    out property <image> people-regular: @image-url("../assets/icons/ic_fluent_people_24_regular.svg");
+    out property <image> people-filled: @image-url("../assets/icons/ic_fluent_people_24_filled.svg");
+    out property <image> transfer-regular: @image-url("../assets/icons/ic_fluent_arrow_swap_24_regular.svg");
+    out property <image> transfer-filled: @image-url("../assets/icons/ic_fluent_arrow_swap_24_filled.svg");
+    out property <image> link-regular: @image-url("../assets/icons/ic_fluent_link_24_regular.svg");
+    out property <image> link-filled: @image-url("../assets/icons/ic_fluent_link_24_filled.svg");
+    out property <image> settings-regular: @image-url("../assets/icons/ic_fluent_settings_24_regular.svg");
+    out property <image> settings-filled: @image-url("../assets/icons/ic_fluent_settings_24_filled.svg");
+    out property <image> folder-regular: @image-url("../assets/icons/ic_fluent_folder_24_regular.svg");
+    out property <image> folder-filled: @image-url("../assets/icons/ic_fluent_folder_24_filled.svg");
+    out property <image> file-regular: @image-url("../assets/icons/ic_fluent_document_24_regular.svg");
+    out property <image> file-filled: @image-url("../assets/icons/ic_fluent_document_24_filled.svg");
+    out property <image> image-regular: @image-url("../assets/icons/ic_fluent_image_24_regular.svg");
+    out property <image> image-filled: @image-url("../assets/icons/ic_fluent_image_24_filled.svg");
+    out property <image> video-regular: @image-url("../assets/icons/ic_fluent_video_24_regular.svg");
+    out property <image> video-filled: @image-url("../assets/icons/ic_fluent_video_24_filled.svg");
+    out property <image> audio-regular: @image-url("../assets/icons/ic_fluent_music_note_2_24_regular.svg");
+    out property <image> audio-filled: @image-url("../assets/icons/ic_fluent_music_note_2_24_filled.svg");
+    out property <image> archive-regular: @image-url("../assets/icons/ic_fluent_folder_zip_24_regular.svg");
+    out property <image> archive-filled: @image-url("../assets/icons/ic_fluent_folder_zip_24_filled.svg");
+    out property <image> pdf-regular: @image-url("../assets/icons/ic_fluent_document_pdf_24_regular.svg");
+    out property <image> pdf-filled: @image-url("../assets/icons/ic_fluent_document_pdf_24_filled.svg");
+    out property <image> text-regular: @image-url("../assets/icons/ic_fluent_document_text_24_regular.svg");
+    out property <image> text-filled: @image-url("../assets/icons/ic_fluent_document_text_24_filled.svg");
+    out property <image> search-regular: @image-url("../assets/icons/ic_fluent_search_24_regular.svg");
+    out property <image> search-filled: @image-url("../assets/icons/ic_fluent_search_24_filled.svg");
+    out property <image> refresh-regular: @image-url("../assets/icons/ic_fluent_arrow_clockwise_24_regular.svg");
+    out property <image> refresh-filled: @image-url("../assets/icons/ic_fluent_arrow_clockwise_24_filled.svg");
+    out property <image> upload-regular: @image-url("../assets/icons/ic_fluent_arrow_upload_24_regular.svg");
+    out property <image> upload-filled: @image-url("../assets/icons/ic_fluent_arrow_upload_24_filled.svg");
+    out property <image> download-regular: @image-url("../assets/icons/ic_fluent_arrow_download_24_regular.svg");
+    out property <image> download-filled: @image-url("../assets/icons/ic_fluent_arrow_download_24_filled.svg");
+    out property <image> folder-add-regular: @image-url("../assets/icons/ic_fluent_folder_add_24_regular.svg");
+    out property <image> folder-add-filled: @image-url("../assets/icons/ic_fluent_folder_add_24_filled.svg");
+    out property <image> delete-regular: @image-url("../assets/icons/ic_fluent_delete_24_regular.svg");
+    out property <image> delete-filled: @image-url("../assets/icons/ic_fluent_delete_24_filled.svg");
+    out property <image> rename-regular: @image-url("../assets/icons/ic_fluent_rename_24_regular.svg");
+    out property <image> rename-filled: @image-url("../assets/icons/ic_fluent_rename_24_filled.svg");
+    out property <image> copy-regular: @image-url("../assets/icons/ic_fluent_copy_24_regular.svg");
+    out property <image> copy-filled: @image-url("../assets/icons/ic_fluent_copy_24_filled.svg");
+    out property <image> move-regular: @image-url("../assets/icons/ic_fluent_arrow_move_24_regular.svg");
+    out property <image> move-filled: @image-url("../assets/icons/ic_fluent_arrow_move_24_filled.svg");
+    out property <image> folder-open-regular: @image-url("../assets/icons/ic_fluent_folder_open_24_regular.svg");
+    out property <image> folder-open-filled: @image-url("../assets/icons/ic_fluent_folder_open_24_filled.svg");
+    out property <image> select-all-regular: @image-url("../assets/icons/ic_fluent_select_all_on_24_regular.svg");
+    out property <image> select-all-filled: @image-url("../assets/icons/ic_fluent_select_all_on_24_filled.svg");
+    out property <image> back-regular: @image-url("../assets/icons/ic_fluent_arrow_left_24_regular.svg");
+    out property <image> back-filled: @image-url("../assets/icons/ic_fluent_arrow_left_24_filled.svg");
+    out property <image> chevron-right-regular: @image-url("../assets/icons/ic_fluent_chevron_right_24_regular.svg");
+    out property <image> chevron-right-filled: @image-url("../assets/icons/ic_fluent_chevron_right_24_filled.svg");
+    out property <image> chevron-down-regular: @image-url("../assets/icons/ic_fluent_chevron_down_24_regular.svg");
+    out property <image> chevron-down-filled: @image-url("../assets/icons/ic_fluent_chevron_down_24_filled.svg");
+    out property <image> chevron-up-regular: @image-url("../assets/icons/ic_fluent_chevron_up_24_regular.svg");
+    out property <image> chevron-up-filled: @image-url("../assets/icons/ic_fluent_chevron_up_24_filled.svg");
+    out property <image> more-regular: @image-url("../assets/icons/ic_fluent_more_horizontal_24_regular.svg");
+    out property <image> more-filled: @image-url("../assets/icons/ic_fluent_more_horizontal_24_filled.svg");
+    out property <image> close-regular: @image-url("../assets/icons/ic_fluent_dismiss_24_regular.svg");
+    out property <image> close-filled: @image-url("../assets/icons/ic_fluent_dismiss_24_filled.svg");
+    out property <image> check-regular: @image-url("../assets/icons/ic_fluent_checkmark_24_regular.svg");
+    out property <image> check-filled: @image-url("../assets/icons/ic_fluent_checkmark_24_filled.svg");
+    out property <image> add-regular: @image-url("../assets/icons/ic_fluent_add_24_regular.svg");
+    out property <image> add-filled: @image-url("../assets/icons/ic_fluent_add_24_filled.svg");
+    out property <image> filter-regular: @image-url("../assets/icons/ic_fluent_filter_24_regular.svg");
+    out property <image> filter-filled: @image-url("../assets/icons/ic_fluent_filter_24_filled.svg");
+    out property <image> sort-regular: @image-url("../assets/icons/ic_fluent_arrow_sort_24_regular.svg");
+    out property <image> sort-filled: @image-url("../assets/icons/ic_fluent_arrow_sort_24_filled.svg");
+    out property <image> sort-asc-regular: @image-url("../assets/icons/ic_fluent_arrow_sort_up_24_regular.svg");
+    out property <image> sort-asc-filled: @image-url("../assets/icons/ic_fluent_arrow_sort_up_24_filled.svg");
+    out property <image> sort-desc-regular: @image-url("../assets/icons/ic_fluent_arrow_sort_down_24_regular.svg");
+    out property <image> sort-desc-filled: @image-url("../assets/icons/ic_fluent_arrow_sort_down_24_filled.svg");
+    out property <image> pause-regular: @image-url("../assets/icons/ic_fluent_pause_24_regular.svg");
+    out property <image> pause-filled: @image-url("../assets/icons/ic_fluent_pause_24_filled.svg");
+    out property <image> play-regular: @image-url("../assets/icons/ic_fluent_play_24_regular.svg");
+    out property <image> play-filled: @image-url("../assets/icons/ic_fluent_play_24_filled.svg");
+    out property <image> cancel-regular: @image-url("../assets/icons/ic_fluent_dismiss_circle_24_regular.svg");
+    out property <image> cancel-filled: @image-url("../assets/icons/ic_fluent_dismiss_circle_24_filled.svg");
+    out property <image> retry-regular: @image-url("../assets/icons/ic_fluent_arrow_counterclockwise_24_regular.svg");
+    out property <image> retry-filled: @image-url("../assets/icons/ic_fluent_arrow_counterclockwise_24_filled.svg");
+    out property <image> success-regular: @image-url("../assets/icons/ic_fluent_checkmark_circle_24_regular.svg");
+    out property <image> success-filled: @image-url("../assets/icons/ic_fluent_checkmark_circle_24_filled.svg");
+    out property <image> error-regular: @image-url("../assets/icons/ic_fluent_error_circle_24_regular.svg");
+    out property <image> error-filled: @image-url("../assets/icons/ic_fluent_error_circle_24_filled.svg");
+    out property <image> warning-regular: @image-url("../assets/icons/ic_fluent_warning_24_regular.svg");
+    out property <image> warning-filled: @image-url("../assets/icons/ic_fluent_warning_24_filled.svg");
+    out property <image> account-regular: @image-url("../assets/icons/ic_fluent_person_24_regular.svg");
+    out property <image> account-filled: @image-url("../assets/icons/ic_fluent_person_24_filled.svg");
+    out property <image> password-show-regular: @image-url("../assets/icons/ic_fluent_eye_24_regular.svg");
+    out property <image> password-show-filled: @image-url("../assets/icons/ic_fluent_eye_24_filled.svg");
+    out property <image> password-hide-regular: @image-url("../assets/icons/ic_fluent_eye_off_24_regular.svg");
+    out property <image> password-hide-filled: @image-url("../assets/icons/ic_fluent_eye_off_24_filled.svg");
+    out property <image> login-regular: @image-url("../assets/icons/ic_fluent_arrow_enter_20_regular.svg");
+    out property <image> login-filled: @image-url("../assets/icons/ic_fluent_arrow_enter_20_filled.svg");
+    out property <image> logout-regular: @image-url("../assets/icons/ic_fluent_sign_out_24_regular.svg");
+    out property <image> logout-filled: @image-url("../assets/icons/ic_fluent_sign_out_24_filled.svg");
+    out property <image> info-regular: @image-url("../assets/icons/ic_fluent_info_24_regular.svg");
+    out property <image> info-filled: @image-url("../assets/icons/ic_fluent_info_24_filled.svg");
+    out property <image> cloud-regular: @image-url("../assets/icons/ic_fluent_cloud_24_regular.svg");
+    out property <image> cloud-filled: @image-url("../assets/icons/ic_fluent_cloud_24_filled.svg");
+    out property <image> cloud-off-regular: @image-url("../assets/icons/ic_fluent_cloud_off_24_regular.svg");
+    out property <image> cloud-off-filled: @image-url("../assets/icons/ic_fluent_cloud_off_24_filled.svg");
+    out property <image> storage-regular: @image-url("../assets/icons/ic_fluent_storage_24_regular.svg");
+    out property <image> storage-filled: @image-url("../assets/icons/ic_fluent_storage_24_filled.svg");
+    out property <image> clock-regular: @image-url("../assets/icons/ic_fluent_clock_24_regular.svg");
+    out property <image> clock-filled: @image-url("../assets/icons/ic_fluent_clock_24_filled.svg");
+    out property <image> light-regular: @image-url("../assets/icons/ic_fluent_weather_sunny_24_regular.svg");
+    out property <image> light-filled: @image-url("../assets/icons/ic_fluent_weather_sunny_24_filled.svg");
+    out property <image> dark-regular: @image-url("../assets/icons/ic_fluent_weather_moon_24_regular.svg");
+    out property <image> dark-filled: @image-url("../assets/icons/ic_fluent_weather_moon_24_filled.svg");
+    out property <image> qr-regular: @image-url("../assets/icons/ic_fluent_qr_code_24_regular.svg");
+    out property <image> qr-filled: @image-url("../assets/icons/ic_fluent_qr_code_24_filled.svg");
+// </generated:assets>
+
 }
 
-/// 通用图标：按尺寸绘制上面字形表中的路径
-export component Icon inherits Rectangle {
-    in property <string> glyph: Icons.file;
-    in property <brush> icon-color: Theme.text-secondary;
-    in property <length> size: 16px;
-    in property <length> thickness: 1.6px;
-    /// 实心图标（播放、更多等）置 true
+/// 统一图标组件。
+///
+/// 调用方只描述语义与尺寸，不接触任何 SVG 细节：
+///
+/// ```slint
+/// Icon { name: IconName.settings; size: Theme.icon-md; }
+/// Icon { name: IconName.home; filled: root.selected; }
+/// ```
+///
+/// 尺寸体系（与 WinUI 3 一致，见 tokens.slint）：
+///  * Theme.icon-sm 16px —— 工具栏 / 行内操作 / 输入框内
+///  * Theme.icon-md 20px —— 导航栏 / 列表项 / 主要按钮
+///  * Theme.icon-lg 32px —— 空状态
+///  * Theme.icon-xl 48px —— 大号空状态 / 引导页
+///
+/// 无论传入哪种尺寸，SVG 都以目标尺寸重新栅格化（不是位图缩放），
+/// 因此高 DPI 下依旧清晰；24×24 画布统一，图标之间视觉大小一致。
+export component Icon inherits Image {
+    /// 语义名
+    in property <IconName> name: IconName.none;
+    /// 选中/激活态用官方 Filled 变体
     in property <bool> filled: false;
+    /// 禁用态：统一降级为 Theme.text-disabled，调用方不必自己算颜色
+    in property <bool> disabled: false;
+    /// 着色。默认次级文字色，强调场景由调用方传 Theme.accent 等令牌
+    in property <brush> icon-color: Theme.text-secondary;
+    /// 视觉尺寸（正方形）
+    in property <length> size: Theme.icon-md;
 
-    width: size;
-    height: size;
-    background: transparent;
+    width: root.size;
+    height: root.size;
+    /// 官方 SVG 全部为正方形 24×24 画布，contain 保证任何尺寸下都不拉伸、
+    /// 不裁切、不失真；组件布局留白与 SVG 自身留白严格分离。
+    image-fit: contain;
+    image-rendering: smooth;
+    /// none 不参与布局绘制（但仍占位，便于状态切换时布局不动）
+    visible: root.name != IconName.none;
+    // <generated:source>
+    source: root.name == IconName.none ? IconAssets.placeholder
+        : root.name == IconName.home ? (root.filled ? IconAssets.home-filled : IconAssets.home-regular)
+        : root.name == IconName.people ? (root.filled ? IconAssets.people-filled : IconAssets.people-regular)
+        : root.name == IconName.transfer ? (root.filled ? IconAssets.transfer-filled : IconAssets.transfer-regular)
+        : root.name == IconName.link ? (root.filled ? IconAssets.link-filled : IconAssets.link-regular)
+        : root.name == IconName.settings ? (root.filled ? IconAssets.settings-filled : IconAssets.settings-regular)
+        : root.name == IconName.folder ? (root.filled ? IconAssets.folder-filled : IconAssets.folder-regular)
+        : root.name == IconName.file ? (root.filled ? IconAssets.file-filled : IconAssets.file-regular)
+        : root.name == IconName.image ? (root.filled ? IconAssets.image-filled : IconAssets.image-regular)
+        : root.name == IconName.video ? (root.filled ? IconAssets.video-filled : IconAssets.video-regular)
+        : root.name == IconName.audio ? (root.filled ? IconAssets.audio-filled : IconAssets.audio-regular)
+        : root.name == IconName.archive ? (root.filled ? IconAssets.archive-filled : IconAssets.archive-regular)
+        : root.name == IconName.pdf ? (root.filled ? IconAssets.pdf-filled : IconAssets.pdf-regular)
+        : root.name == IconName.text ? (root.filled ? IconAssets.text-filled : IconAssets.text-regular)
+        : root.name == IconName.search ? (root.filled ? IconAssets.search-filled : IconAssets.search-regular)
+        : root.name == IconName.refresh ? (root.filled ? IconAssets.refresh-filled : IconAssets.refresh-regular)
+        : root.name == IconName.upload ? (root.filled ? IconAssets.upload-filled : IconAssets.upload-regular)
+        : root.name == IconName.download ? (root.filled ? IconAssets.download-filled : IconAssets.download-regular)
+        : root.name == IconName.folder-add ? (root.filled ? IconAssets.folder-add-filled : IconAssets.folder-add-regular)
+        : root.name == IconName.delete ? (root.filled ? IconAssets.delete-filled : IconAssets.delete-regular)
+        : root.name == IconName.rename ? (root.filled ? IconAssets.rename-filled : IconAssets.rename-regular)
+        : root.name == IconName.copy ? (root.filled ? IconAssets.copy-filled : IconAssets.copy-regular)
+        : root.name == IconName.move ? (root.filled ? IconAssets.move-filled : IconAssets.move-regular)
+        : root.name == IconName.folder-open ? (root.filled ? IconAssets.folder-open-filled : IconAssets.folder-open-regular)
+        : root.name == IconName.select-all ? (root.filled ? IconAssets.select-all-filled : IconAssets.select-all-regular)
+        : root.name == IconName.back ? (root.filled ? IconAssets.back-filled : IconAssets.back-regular)
+        : root.name == IconName.chevron-right ? (root.filled ? IconAssets.chevron-right-filled : IconAssets.chevron-right-regular)
+        : root.name == IconName.chevron-down ? (root.filled ? IconAssets.chevron-down-filled : IconAssets.chevron-down-regular)
+        : root.name == IconName.chevron-up ? (root.filled ? IconAssets.chevron-up-filled : IconAssets.chevron-up-regular)
+        : root.name == IconName.more ? (root.filled ? IconAssets.more-filled : IconAssets.more-regular)
+        : root.name == IconName.close ? (root.filled ? IconAssets.close-filled : IconAssets.close-regular)
+        : root.name == IconName.check ? (root.filled ? IconAssets.check-filled : IconAssets.check-regular)
+        : root.name == IconName.add ? (root.filled ? IconAssets.add-filled : IconAssets.add-regular)
+        : root.name == IconName.filter ? (root.filled ? IconAssets.filter-filled : IconAssets.filter-regular)
+        : root.name == IconName.sort ? (root.filled ? IconAssets.sort-filled : IconAssets.sort-regular)
+        : root.name == IconName.sort-asc ? (root.filled ? IconAssets.sort-asc-filled : IconAssets.sort-asc-regular)
+        : root.name == IconName.sort-desc ? (root.filled ? IconAssets.sort-desc-filled : IconAssets.sort-desc-regular)
+        : root.name == IconName.pause ? (root.filled ? IconAssets.pause-filled : IconAssets.pause-regular)
+        : root.name == IconName.play ? (root.filled ? IconAssets.play-filled : IconAssets.play-regular)
+        : root.name == IconName.cancel ? (root.filled ? IconAssets.cancel-filled : IconAssets.cancel-regular)
+        : root.name == IconName.retry ? (root.filled ? IconAssets.retry-filled : IconAssets.retry-regular)
+        : root.name == IconName.success ? (root.filled ? IconAssets.success-filled : IconAssets.success-regular)
+        : root.name == IconName.error ? (root.filled ? IconAssets.error-filled : IconAssets.error-regular)
+        : root.name == IconName.warning ? (root.filled ? IconAssets.warning-filled : IconAssets.warning-regular)
+        : root.name == IconName.account ? (root.filled ? IconAssets.account-filled : IconAssets.account-regular)
+        : root.name == IconName.password-show ? (root.filled ? IconAssets.password-show-filled : IconAssets.password-show-regular)
+        : root.name == IconName.password-hide ? (root.filled ? IconAssets.password-hide-filled : IconAssets.password-hide-regular)
+        : root.name == IconName.login ? (root.filled ? IconAssets.login-filled : IconAssets.login-regular)
+        : root.name == IconName.logout ? (root.filled ? IconAssets.logout-filled : IconAssets.logout-regular)
+        : root.name == IconName.info ? (root.filled ? IconAssets.info-filled : IconAssets.info-regular)
+        : root.name == IconName.cloud ? (root.filled ? IconAssets.cloud-filled : IconAssets.cloud-regular)
+        : root.name == IconName.cloud-off ? (root.filled ? IconAssets.cloud-off-filled : IconAssets.cloud-off-regular)
+        : root.name == IconName.storage ? (root.filled ? IconAssets.storage-filled : IconAssets.storage-regular)
+        : root.name == IconName.clock ? (root.filled ? IconAssets.clock-filled : IconAssets.clock-regular)
+        : root.name == IconName.light ? (root.filled ? IconAssets.light-filled : IconAssets.light-regular)
+        : root.name == IconName.dark ? (root.filled ? IconAssets.dark-filled : IconAssets.dark-regular)
+        : root.name == IconName.qr ? (root.filled ? IconAssets.qr-filled : IconAssets.qr-regular)
+        : IconAssets.placeholder;
+// </generated:source>
+    colorize: root.disabled ? Theme.text-disabled : root.icon-color;
 
-    Path {
-        commands: root.glyph;
-        width: root.size;
-        height: root.size;
-        viewbox-x: 0;
-        viewbox-y: 0;
-        viewbox-width: 24;
-        viewbox-height: 24;
-        fit: contain;
-        stroke: root.filled ? transparent : root.icon-color;
-        stroke-width: root.thickness;
-        stroke-line-cap: round;
-        stroke-line-join: round;
-        fill: root.filled ? root.icon-color : transparent;
+    animate colorize {
+        duration: Theme.motion-fast;
+        easing: ease-out;
     }
 }
+
+
+
+
+
+
+
+
+
+

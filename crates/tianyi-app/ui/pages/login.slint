@@ -9,7 +9,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentTextField } from "../components/text-field.slint";
 import { FluentSegmented } from "../components/segmented.slint";
@@ -88,9 +88,8 @@ export component LoginPage inherits Rectangle {
                             Icon {
                                 x: (parent.width - self.width) / 2;
                                 y: (parent.height - self.height) / 2;
-                                glyph: Icons.cloud;
-                                size: 28px;
-                                thickness: 1.7px;
+                                name: IconName.cloud;
+                                size: Theme.icon-lg;
                                 icon-color: Theme.text-on-accent;
                             }
                         }
@@ -168,9 +167,8 @@ export component LoginPage inherits Rectangle {
                                         Icon {
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
-                                            glyph: Icons.person;
-                                            size: 14px;
-                                            thickness: 1.7px;
+                                            name: IconName.account;
+                                            size: Theme.icon-sm;
                                             icon-color: Theme.accent;
                                         }
                                     }
@@ -212,7 +210,7 @@ export component LoginPage inherits Rectangle {
 
                         user-field := FluentTextField {
                             placeholder: "手机号 / 邮箱";
-                            glyph: Icons.person;
+                            icon: IconName.account;
                             clearable: true;
                             enabled: !root.login-loading;
                         }
@@ -278,9 +276,8 @@ export component LoginPage inherits Rectangle {
                                 cross-axis-alignment: center;
 
                                 Icon {
-                                    glyph: Icons.error-circle;
-                                    size: 16px;
-                                    thickness: 1.7px;
+                                    name: IconName.error;
+                                    size: Theme.icon-sm;
                                     icon-color: Theme.danger;
                                 }
 
@@ -346,9 +343,8 @@ export component LoginPage inherits Rectangle {
                                     padding: Theme.space-3;
 
                                     Icon {
-                                        glyph: Icons.refresh;
-                                        size: 24px;
-                                        thickness: 1.6px;
+                                        name: IconName.refresh;
+                                        size: Theme.icon-lg;
                                         icon-color: Theme.text-secondary;
                                     }
 
@@ -405,7 +401,7 @@ export component LoginPage inherits Rectangle {
 
                             FluentButton {
                                 text: "刷新二维码";
-                                glyph: Icons.refresh;
+                                icon: IconName.refresh;
                                 enabled: !root.login-loading;
                                 min-w: 132px;
                                 clicked => {

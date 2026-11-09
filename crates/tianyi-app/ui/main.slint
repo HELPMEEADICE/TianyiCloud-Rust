@@ -12,7 +12,7 @@
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme/tokens.slint";
-import { Icon, Icons } from "theme/icons.slint";
+import { Icon, IconName } from "theme/icons.slint";
 import { FileEntry, TransferEntry, CrumbEntry, TooltipState } from "types.slint";
 import { FluentButton } from "components/button.slint";
 import { FluentIconButton } from "components/icon-button.slint";
@@ -258,9 +258,8 @@ export component MainWindow inherits Window {
                         Icon {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
-                            glyph: Icons.cloud;
-                            size: 16px;
-                            thickness: 1.7px;
+                            name: IconName.cloud;
+                            size: Theme.icon-sm;
                             icon-color: Theme.text-on-accent;
                         }
                     }
@@ -287,7 +286,7 @@ export component MainWindow inherits Window {
                 }
 
                 FluentNavItem {
-                    glyph: Icons.home;
+                    icon: IconName.home;
                     label: "个人云";
                     compact: root.nav-compact;
                     selected: root.current-page == 0;
@@ -298,7 +297,7 @@ export component MainWindow inherits Window {
                 }
 
                 FluentNavItem {
-                    glyph: Icons.people;
+                    icon: IconName.people;
                     label: "家庭云";
                     compact: root.nav-compact;
                     selected: root.current-page == 1;
@@ -309,7 +308,7 @@ export component MainWindow inherits Window {
                 }
 
                 FluentNavItem {
-                    glyph: Icons.transfer;
+                    icon: IconName.transfer;
                     label: "传输任务";
                     compact: root.nav-compact;
                     selected: root.current-page == 2;
@@ -320,7 +319,7 @@ export component MainWindow inherits Window {
                 }
 
                 FluentNavItem {
-                    glyph: Icons.link;
+                    icon: IconName.link;
                     label: "下载直链";
                     compact: root.nav-compact;
                     selected: root.current-page == 3;
@@ -331,7 +330,7 @@ export component MainWindow inherits Window {
                 }
 
                 FluentNavItem {
-                    glyph: Icons.settings;
+                    icon: IconName.settings;
                     label: "设置";
                     compact: root.nav-compact;
                     selected: root.current-page == 4;
@@ -367,9 +366,8 @@ export component MainWindow inherits Window {
                             cross-axis-alignment: center;
 
                             Icon {
-                                glyph: Icons.storage;
-                                size: 13px;
-                                thickness: 1.6px;
+                                name: IconName.storage;
+                                size: Theme.icon-sm;
                                 icon-color: Theme.text-tertiary;
                             }
 
@@ -417,9 +415,8 @@ export component MainWindow inherits Window {
                     Icon {
                         x: (parent.width - self.width) / 2;
                         y: (parent.height - self.height) / 2;
-                        glyph: Icons.storage;
-                        size: 16px;
-                        thickness: 1.6px;
+                        name: IconName.storage;
+                        size: Theme.icon-sm;
                         icon-color: root.capacity-ratio > 0.9 ? Theme.danger : Theme.text-secondary;
                     }
 
@@ -480,9 +477,9 @@ export component MainWindow inherits Window {
                     if !root.nav-compact: Icon {
                         x: parent.width - 26px;
                         y: (parent.height - self.height) / 2;
-                        glyph: Icons.more;
+                        name: IconName.more;
                         filled: true;
-                        size: 14px;
+                        size: Theme.icon-sm;
                         icon-color: Theme.text-tertiary;
                     }
 
@@ -521,9 +518,8 @@ export component MainWindow inherits Window {
                         cross-axis-alignment: center;
 
                         Icon {
-                            glyph: Icons.transfer;
-                            size: 15px;
-                            thickness: 1.7px;
+                            name: IconName.transfer;
+                            size: Theme.icon-sm;
                             icon-color: Theme.accent;
                         }
 
@@ -552,7 +548,7 @@ export component MainWindow inherits Window {
                         }
 
                         FluentIconButton {
-                            glyph: Icons.chevron-down;
+                            icon: IconName.chevron-down;
                             tooltip: "收起传输面板";
                             clicked => {
                                 root.transfer-panel-open = false;
@@ -835,11 +831,10 @@ export component MainWindow inherits Window {
             cross-axis-alignment: center;
 
             Icon {
-                glyph: root.notice-kind == "error" || root.notice-kind == "warning" ? Icons.warning
-                    : root.notice-kind == "success" ? Icons.check-circle
-                    : Icons.info;
-                size: 16px;
-                thickness: 1.7px;
+                name: root.notice-kind == "error" || root.notice-kind == "warning" ? IconName.warning
+                    : root.notice-kind == "success" ? IconName.success
+                    : IconName.info;
+                size: Theme.icon-sm;
                 icon-color: root.notice-kind == "error" ? Theme.danger
                     : root.notice-kind == "success" ? Theme.success
                     : root.notice-kind == "warning" ? Theme.warning
@@ -857,10 +852,10 @@ export component MainWindow inherits Window {
             }
 
             FluentIconButton {
-                glyph: Icons.close;
+                icon: IconName.close;
                 tooltip: "关闭提示";
                 size: 24px;
-                icon-size: 10px;
+                icon-size: Theme.icon-xs;
                 clicked => {
                     root.notice_closed();
                 }
@@ -942,7 +937,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.settings;
+                icon: IconName.settings;
                 label: "设置";
                 triggered => {
                     root.account-menu-open = false;
@@ -951,7 +946,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.folder-open;
+                icon: IconName.folder-open;
                 label: "下载目录";
                 triggered => {
                     root.account-menu-open = false;
@@ -963,7 +958,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.logout;
+                icon: IconName.logout;
                 label: "退出登录";
                 danger: true;
                 triggered => {
@@ -1024,7 +1019,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: root.context-is-dir ? Icons.folder-open : Icons.file;
+                icon: root.context-is-dir ? IconName.folder-open : IconName.file;
                 label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
                 triggered => {
                     root.context-open = false;
@@ -1033,7 +1028,7 @@ export component MainWindow inherits Window {
             }
 
             if !root.context-is-dir: FluentMenuItem {
-                glyph: Icons.download;
+                icon: IconName.download;
                 label: "下载到本地";
                 triggered => {
                     root.context-open = false;
@@ -1045,7 +1040,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.pencil;
+                icon: IconName.rename;
                 label: "重命名";
                 shortcut: "F2";
                 enabled: root.selected-count == 1;
@@ -1056,7 +1051,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.copy;
+                icon: IconName.copy;
                 label: "复制到当前目录";
                 triggered => {
                     root.context-open = false;
@@ -1065,7 +1060,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.folder;
+                icon: IconName.folder;
                 label: "移动到上级目录";
                 enabled: root.crumbs.length > 1;
                 triggered => {
@@ -1075,7 +1070,7 @@ export component MainWindow inherits Window {
             }
 
             if !root.context-is-dir: FluentMenuItem {
-                glyph: Icons.link;
+                icon: IconName.link;
                 label: "提取直链";
                 triggered => {
                     root.context-open = false;
@@ -1087,7 +1082,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.select-all;
+                icon: IconName.select-all;
                 label: "全选";
                 shortcut: "Ctrl+A";
                 triggered => {
@@ -1097,7 +1092,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.close;
+                icon: IconName.close;
                 label: "取消选择";
                 shortcut: "Esc";
                 enabled: root.selected-count > 0;
@@ -1111,7 +1106,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
-                glyph: Icons.trash;
+                icon: IconName.delete;
                 label: "删除";
                 shortcut: "Del";
                 danger: true;

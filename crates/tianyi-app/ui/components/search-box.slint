@@ -3,7 +3,7 @@
 // 去抖在 UI 侧完成（Timer），Rust 侧只负责请求乱序丢弃，避免双重延迟。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icons } from "../theme/icons.slint";
+import { IconName } from "../theme/icons.slint";
 import { FluentTextField } from "text-field.slint";
 
 export component FluentSearchBox inherits Rectangle {
@@ -38,7 +38,7 @@ export component FluentSearchBox inherits Rectangle {
         width: parent.width;
         height: parent.height;
         placeholder: root.placeholder;
-        glyph: Icons.search;
+        icon: IconName.search;
         clearable: true;
         enabled: root.enabled;
 

@@ -3,7 +3,7 @@
 // 由页面统一渲染在内容区顶部；消息为空时完全收起，不占用布局空间。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "button.slint";
 import { FluentIconButton } from "icon-button.slint";
 
@@ -41,11 +41,11 @@ export component FluentInfoBar inherits Rectangle {
         cross-axis-alignment: center;
 
         Icon {
-            glyph: root.is-error || root.is-warning ? Icons.warning
-                : root.is-success ? Icons.check
-                : Icons.info;
-            size: 16px;
-            thickness: 1.7px;
+            name: root.is-error ? IconName.error
+                : root.is-warning ? IconName.warning
+                : root.is-success ? IconName.success
+                : IconName.info;
+            size: Theme.icon-sm;
             icon-color: root.is-error ? Theme.danger
                 : root.is-success ? Theme.success
                 : root.is-warning ? Theme.warning
@@ -72,10 +72,10 @@ export component FluentInfoBar inherits Rectangle {
         }
 
         if root.closable: FluentIconButton {
-            glyph: Icons.close;
+            icon: IconName.close;
             tooltip: "关闭提示";
             size: 28px;
-            icon-size: 11px;
+            icon-size: Theme.icon-xs;
             clicked => {
                 root.closed();
             }

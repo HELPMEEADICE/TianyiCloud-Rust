@@ -5,7 +5,7 @@
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentSegmented } from "../components/segmented.slint";
 import { TransferRow } from "../components/transfer-row.slint";
@@ -71,7 +71,7 @@ export component TransfersPage inherits Rectangle {
 
             FluentButton {
                 text: "打开下载目录";
-                glyph: Icons.folder-open;
+                icon: IconName.folder-open;
                 subtle: true;
                 clicked => {
                     root.open-download-dir();
@@ -80,7 +80,7 @@ export component TransfersPage inherits Rectangle {
 
             FluentButton {
                 text: "清理已完成";
-                glyph: Icons.trash;
+                icon: IconName.delete;
                 subtle: true;
                 enabled: root.finished-count > 0;
                 clicked => {
@@ -137,7 +137,7 @@ export component TransfersPage inherits Rectangle {
                     y: 0;
                     width: parent.width;
                     height: parent.height;
-                    glyph: Icons.transfer;
+                    icon: IconName.transfer;
                     title: root.filter == 0 ? "还没有传输任务" : "该分类下没有任务";
                     description: root.filter == 0
                         ? "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"

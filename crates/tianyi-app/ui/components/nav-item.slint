@@ -1,17 +1,26 @@
 // Fluent 导航项（NavigationView item）
 //
 // 展开态：图标 + 文本 + 可选徽章；折叠态：仅图标（悬停显示 Tooltip）。
-// 选中态：柔和强调底 + 左侧 3px 强调指示条 + 强调色文字。
+// 选中态：柔和强调底 + 左侧 3px 强调指示条 + 强调色文字 + Filled 图标。
 //
 // 布局说明：所有子元素都显式定位（不混用布局与自由子元素），
 // 触摸层放在最后以保证位于最上层，指针事件稳定命中。
+//
+// —— 历史缺陷（已修复，不要退回旧写法）——
+// 徽章曾经写成 `Rectangle { min-width: 18px; height: 18px; }`，没有给 width。
+// Slint 里非布局子元素的 width 默认是「父容器宽度的 100%」，于是徽章从
+// `root.width - 34px` 开始又往后铺满一整个导航项宽度，被侧边栏边界裁掉后
+// 在「下载直链」/「传输任务」右侧留下一条横向蓝色/灰色胶囊。
+// 现在：宽度按位数显式给定（1 位 18px / 2 位 26px / 3 位以上 34px），
+// 位置用 `root.width - self.width - 12px` 由自身宽度反推，任何窗口宽度下都
+// 完整落在导航项内部，不会被裁切，也不会再出现"拉伸到边界"的假象。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { TooltipState } from "../types.slint";
 
 export component FluentNavItem inherits Rectangle {
-    in property <string> glyph: "";
+    in property <IconName> icon: IconName.none;
     in property <string> label: "";
     in property <bool> selected: false;
     in property <bool> compact: false;
@@ -39,7 +48,7 @@ export component FluentNavItem inherits Rectangle {
         easing: ease-out;
     }
 
-    // 左侧选中指示条
+    // 左侧选中指示条（Fluent 2 的 NavigationView 指示器，完整位于组件内）
     Rectangle {
         x: 0;
         y: (root.height - 16px) / 2;
@@ -55,21 +64,23 @@ export component FluentNavItem inherits Rectangle {
         }
     }
 
-    // 图标
+    // 图标：官方 Fluent 图标，20px（WinUI NavigationView 标准），
+    // 选中态切官方 Filled 变体，画布一致所以尺寸与位置完全不变。
     Icon {
         x: root.compact ? (root.width - self.width) / 2 : 12px;
         y: (root.height - self.height) / 2;
-        glyph: root.glyph;
-        size: 17px;
-        thickness: 1.6px;
-        icon-color: root.selected ? Theme.accent : (root.enabled ? Theme.text-primary : Theme.text-disabled);
+        name: root.icon;
+        filled: root.selected;
+        size: Theme.icon-md;
+        icon-color: root.selected ? Theme.accent : Theme.text-primary;
+        disabled: !root.enabled;
     }
 
-    // 文本
+    // 文本：图标 12px 起 + 20px 图标 + 12px 间距 = 44px
     if !root.compact: Text {
-        x: 41px;
+        x: 44px;
         y: 0;
-        width: root.width - 41px - (root.badge > 0 ? root.badge-w + 20px : 12px);
+        width: root.width - 44px - (root.badge > 0 ? root.badge-w + 20px : 12px);
         height: root.height;
         text: root.label;
         font-family: Theme.font-family;
@@ -102,7 +113,7 @@ export component FluentNavItem inherits Rectangle {
         }
     }
 
-    // 折叠态的“有任务”小圆点
+    // 折叠态的"有任务"小圆点
     if root.compact && root.badge > 0: Rectangle {
         x: root.width - 16px;
         y: 7px;

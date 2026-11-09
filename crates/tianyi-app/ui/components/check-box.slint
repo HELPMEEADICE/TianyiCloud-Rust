@@ -1,7 +1,7 @@
 // Fluent 复选盒（登录页“保存账号”、设置页开关项）
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 
 export component FluentCheckBox inherits Rectangle {
     in property <string> text: "";
@@ -36,9 +36,8 @@ export component FluentCheckBox inherits Rectangle {
             if root.checked: Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                glyph: Icons.check;
-                size: 12px;
-                thickness: 2.4px;
+                name: IconName.check;
+                size: Theme.icon-xs;
                 icon-color: Theme.text-on-accent;
             }
         }

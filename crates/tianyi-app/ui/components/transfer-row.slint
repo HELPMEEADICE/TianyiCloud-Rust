@@ -5,7 +5,7 @@
 //   已完成 → 打开文件夹/移除。所有按钮均有 Tooltip。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentProgressBar } from "progress-bar.slint";
 import { FluentIconButton } from "icon-button.slint";
 import { TransferEntry } from "../types.slint";
@@ -73,9 +73,8 @@ export component TransferRow inherits Rectangle {
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                glyph: root.uploading ? Icons.upload : Icons.download;
-                size: 17px;
-                thickness: 1.7px;
+                name: root.uploading ? IconName.upload : IconName.download;
+                size: Theme.icon-md;
                 icon-color: root.uploading ? Theme.success : Theme.accent;
             }
         }
@@ -161,7 +160,7 @@ export component TransferRow inherits Rectangle {
             horizontal-stretch: 0;
 
             if root.running: FluentIconButton {
-                glyph: Icons.pause;
+                icon: IconName.pause;
                 tooltip: "暂停任务";
                 clicked => {
                     root.pause-clicked();
@@ -169,7 +168,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.paused: FluentIconButton {
-                glyph: Icons.play;
+                icon: IconName.play;
                 filled: true;
                 accent: true;
                 tooltip: "继续任务";
@@ -179,7 +178,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.failed || root.canceled: FluentIconButton {
-                glyph: Icons.refresh;
+                icon: IconName.retry;
                 tooltip: "重试任务";
                 clicked => {
                     root.retry-clicked();
@@ -187,7 +186,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.done: FluentIconButton {
-                glyph: Icons.folder-open;
+                icon: IconName.folder-open;
                 tooltip: "打开所在文件夹";
                 clicked => {
                     root.reveal-clicked();
@@ -195,7 +194,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.running || root.paused: FluentIconButton {
-                glyph: Icons.cancel;
+                icon: IconName.cancel;
                 danger: true;
                 tooltip: "取消任务";
                 clicked => {
@@ -204,7 +203,7 @@ export component TransferRow inherits Rectangle {
             }
 
             if root.failed || root.canceled || root.done: FluentIconButton {
-                glyph: Icons.trash;
+                icon: IconName.delete;
                 tooltip: "从列表中移除";
                 clicked => {
                     root.remove-clicked();

@@ -138,6 +138,20 @@ export global Theme {
     /// 焦点框宽度
     out property <length> focus-width: 2px;
 
+    // ---------------------------------------------------------------- 图标尺寸
+    // 与 WinUI 3 一致的四档。官方 Fluent SVG 均为 24×24 画布，
+    // 由 Icon 组件按目标尺寸重新栅格化，任何 DPI 下都不模糊。
+    /// 行内微图标（复选勾、输入框清除、面包屑分隔、微型图标按钮内）
+    out property <length> icon-xs: 12px;
+    /// 行内操作 / 工具栏 / 输入框内
+    out property <length> icon-sm: 16px;
+    /// 导航栏 / 列表项 / 主要按钮
+    out property <length> icon-md: 20px;
+    /// 空状态
+    out property <length> icon-lg: 32px;
+    /// 大号空状态
+    out property <length> icon-xl: 48px;
+
     // ---------------------------------------------------------------- 动效
     /// 快速（悬停、按下）
     out property <duration> motion-fast: reduce-motion ? 0ms : 90ms;

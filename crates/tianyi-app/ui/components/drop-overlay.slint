@@ -1,7 +1,7 @@
 // Fluent 拖入上传遮罩：文件悬停在窗口上时显示目标目录与说明
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 
 export component DropOverlay inherits Rectangle {
     in property <string> target-name: "";
@@ -36,9 +36,8 @@ export component DropOverlay inherits Rectangle {
             Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                glyph: Icons.upload;
-                size: 26px;
-                thickness: 1.8px;
+                name: IconName.upload;
+                size: Theme.icon-lg;
                 icon-color: Theme.text-on-accent;
             }
         }

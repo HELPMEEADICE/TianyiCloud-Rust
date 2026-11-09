@@ -6,7 +6,7 @@
 
 import { ListView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
 import { FluentEmptyState } from "../components/state-view.slint";
@@ -68,7 +68,7 @@ export component LinksPage inherits Rectangle {
 
             FluentButton {
                 text: "返回云盘";
-                glyph: Icons.back;
+                icon: IconName.back;
                 subtle: true;
                 clicked => {
                     root.go-personal();
@@ -122,9 +122,8 @@ export component LinksPage inherits Rectangle {
                                     Icon {
                                         x: (parent.width - self.width) / 2;
                                         y: (parent.height - self.height) / 2;
-                                        glyph: Icons.link;
-                                        size: 15px;
-                                        thickness: 1.7px;
+                                        name: IconName.link;
+                                        size: Theme.icon-sm;
                                         icon-color: Theme.accent;
                                     }
                                 }
@@ -153,7 +152,7 @@ export component LinksPage inherits Rectangle {
                                 }
 
                                 FluentIconButton {
-                                    glyph: Icons.copy;
+                                    icon: IconName.copy;
                                     tooltip: "复制直链";
                                     clicked => {
                                         root.copy-link(item.url);
@@ -169,7 +168,7 @@ export component LinksPage inherits Rectangle {
                     y: 0;
                     width: parent.width;
                     height: parent.height;
-                    glyph: Icons.link;
+                    icon: IconName.link;
                     title: "还没有提取过直链";
                     description: "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果";
                     action-text: "去个人云";

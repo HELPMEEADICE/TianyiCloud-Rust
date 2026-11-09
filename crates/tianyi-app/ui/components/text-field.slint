@@ -4,7 +4,7 @@
 // 占位文本放在输入区的绝对定位层里，避免与 TextInput 争抢布局单元。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentIconButton } from "icon-button.slint";
 
 export component FluentTextField inherits Rectangle {
@@ -13,8 +13,8 @@ export component FluentTextField inherits Rectangle {
     /// 密码输入（以圆点遮罩），配合内部的眼睛按钮可临时显示
     in property <bool> password: false;
     in property <bool> enabled: true;
-    /// 前置图标路径
-    in property <string> glyph: "";
+    /// 前置图标
+    in property <IconName> icon: IconName.none;
     /// 有内容时在尾部显示清除按钮
     in property <bool> clearable: false;
     in property <bool> invalid: false;
@@ -66,10 +66,10 @@ export component FluentTextField inherits Rectangle {
         vertical-stretch: 1;
         cross-axis-alignment: center;
 
-        if root.glyph != "": Icon {
-            glyph: root.glyph;
-            size: 16px;
-            thickness: 1.6px;
+        if root.icon != IconName.none: Icon {
+            name: root.icon;
+            size: Theme.icon-sm;
+            disabled: !root.enabled;
             icon-color: input.has-focus ? Theme.accent : Theme.text-tertiary;
         }
 
@@ -111,10 +111,10 @@ export component FluentTextField inherits Rectangle {
         }
 
         if root.password: FluentIconButton {
-            glyph: root.revealed ? Icons.eye-off : Icons.eye;
+            icon: root.revealed ? IconName.password-hide : IconName.password-show;
             tooltip: root.revealed ? "隐藏密码" : "显示密码";
             size: 28px;
-            icon-size: 15px;
+            icon-size: Theme.icon-sm;
             enabled: root.enabled;
             clicked => {
                 root.revealed = !root.revealed;
@@ -122,10 +122,10 @@ export component FluentTextField inherits Rectangle {
         }
 
         if root.clearable && root.text != "" && !root.password: FluentIconButton {
-            glyph: Icons.close;
+            icon: IconName.close;
             tooltip: "清除";
             size: 28px;
-            icon-size: 12px;
+            icon-size: Theme.icon-xs;
             enabled: root.enabled;
             clicked => {
                 input.text = "";

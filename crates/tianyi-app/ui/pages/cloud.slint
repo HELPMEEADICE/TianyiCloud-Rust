@@ -11,7 +11,7 @@
 //   loading=首次加载、refreshing=已有数据的静默刷新、ready、empty、empty-search、error
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
 import { FluentSearchBox } from "../components/search-box.slint";
@@ -97,7 +97,7 @@ export component CloudPage inherits Rectangle {
             cross-axis-alignment: center;
 
             FluentIconButton {
-                glyph: Icons.back;
+                icon: IconName.back;
                 tooltip: "返回上级目录 (Alt+←)";
                 enabled: root.crumbs.length > 1 && !root.searching;
                 clicked => {
@@ -150,9 +150,8 @@ export component CloudPage inherits Rectangle {
                         }
 
                         if idx < root.crumbs.length - 1: Icon {
-                            glyph: Icons.chevron-right;
-                            size: 11px;
-                            thickness: 1.8px;
+                            name: IconName.chevron-right;
+                            size: Theme.icon-xs;
                             icon-color: Theme.text-tertiary;
                         }
                     }
@@ -183,7 +182,7 @@ export component CloudPage inherits Rectangle {
             }
 
             FluentIconButton {
-                glyph: Icons.refresh;
+                icon: IconName.refresh;
                 tooltip: "刷新 (F5)";
                 enabled: root.list-state != "loading" && !root.refreshing;
                 clicked => {
@@ -193,7 +192,7 @@ export component CloudPage inherits Rectangle {
 
             // 窄窗口：次要操作折叠为图标按钮，核心操作（上传）始终可见
             if root.narrow: FluentIconButton {
-                glyph: Icons.folder;
+                icon: IconName.folder;
                 tooltip: "新建文件夹";
                 enabled: root.list-state != "loading";
                 clicked => {
@@ -203,7 +202,7 @@ export component CloudPage inherits Rectangle {
 
             if !root.narrow: FluentButton {
                 text: "新建文件夹";
-                glyph: Icons.plus;
+                icon: IconName.add;
                 enabled: root.list-state != "loading";
                 clicked => {
                     root.create-folder();
@@ -212,7 +211,7 @@ export component CloudPage inherits Rectangle {
 
             FluentButton {
                 text: "上传";
-                glyph: Icons.upload;
+                icon: IconName.upload;
                 accent: true;
                 enabled: root.list-state != "loading";
                 clicked => {
@@ -261,7 +260,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: "下载";
-                        glyph: Icons.download;
+                        icon: IconName.download;
                         subtle: true;
                         clicked => {
                             root.download-selected();
@@ -270,7 +269,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection && root.selected-count == 1: FluentButton {
                         text: "重命名";
-                        glyph: Icons.pencil;
+                        icon: IconName.rename;
                         subtle: true;
                         clicked => {
                             root.rename-selected();
@@ -279,7 +278,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "复制";
-                        glyph: Icons.copy;
+                        icon: IconName.copy;
                         subtle: true;
                         clicked => {
                             root.copy-selected();
@@ -288,7 +287,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "移动到上级";
-                        glyph: Icons.folder;
+                        icon: IconName.folder;
                         subtle: true;
                         enabled: root.crumbs.length > 1;
                         clicked => {
@@ -298,7 +297,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "提取直链";
-                        glyph: Icons.link;
+                        icon: IconName.link;
                         subtle: true;
                         clicked => {
                             root.link-selected();
@@ -307,7 +306,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "删除";
-                        glyph: Icons.trash;
+                        icon: IconName.delete;
                         danger: true;
                         subtle: true;
                         clicked => {
@@ -363,9 +362,8 @@ export component CloudPage inherits Rectangle {
                 cross-axis-alignment: center;
 
                 Icon {
-                    glyph: Icons.search;
-                    size: 14px;
-                    thickness: 1.7px;
+                    name: IconName.search;
+                    size: Theme.icon-sm;
                     icon-color: Theme.accent;
                 }
 
@@ -404,9 +402,8 @@ export component CloudPage inherits Rectangle {
                 cross-axis-alignment: center;
 
                 Icon {
-                    glyph: Icons.warning;
-                    size: 15px;
-                    thickness: 1.7px;
+                    name: IconName.warning;
+                    size: Theme.icon-sm;
                     icon-color: Theme.danger;
                 }
 
@@ -547,9 +544,8 @@ export component CloudPage inherits Rectangle {
 
                                     // 指示器放在标签前面：不受横向布局剩余空间分配的影响
                                     if root.sort-key == 0: Icon {
-                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
-                                        size: 13px;
-                                        thickness: 1.7px;
+                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                        size: Theme.icon-sm;
                                         icon-color: Theme.accent;
                                     }
 
@@ -585,9 +581,8 @@ export component CloudPage inherits Rectangle {
                                     spacing: 4px;
 
                                     if root.sort-key == 1: Icon {
-                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
-                                        size: 13px;
-                                        thickness: 1.7px;
+                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                        size: Theme.icon-sm;
                                         icon-color: Theme.accent;
                                     }
 
@@ -631,9 +626,8 @@ export component CloudPage inherits Rectangle {
                                     }
 
                                     if root.sort-key == 2: Icon {
-                                        glyph: root.sort-asc ? Icons.sort-asc : Icons.sort-desc;
-                                        size: 13px;
-                                        thickness: 1.7px;
+                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                        size: Theme.icon-sm;
                                         icon-color: Theme.accent;
                                     }
                                 }
@@ -731,7 +725,7 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            glyph: Icons.folder;
+                            icon: IconName.folder;
                             title: "这里还没有文件";
                             description: "把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”";
                             action-text: "上传文件";
@@ -749,7 +743,7 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            glyph: Icons.search;
+                            icon: IconName.search;
                             title: "没有找到匹配的文件";
                             description: "换个关键词试试，或退出搜索回到当前目录";
                             action-text: "退出搜索";
@@ -803,9 +797,8 @@ export component CloudPage inherits Rectangle {
                     cross-axis-alignment: center;
 
                     Icon {
-                        glyph: Icons.transfer;
-                        size: 13px;
-                        thickness: 1.7px;
+                        name: IconName.transfer;
+                        size: Theme.icon-sm;
                         icon-color: root.active-transfers > 0 ? Theme.accent : Theme.text-tertiary;
                     }
 

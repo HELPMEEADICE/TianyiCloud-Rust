@@ -8,7 +8,7 @@
 // 由页面按窗口宽度给出，避免窄窗口下四列互相挤压。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { DragOutApi, FileEntry, ModifiersApi } from "../types.slint";
 
 /// 文件列表列宽（表头与行共享）
@@ -44,15 +44,16 @@ export component FileRow inherits Rectangle {
     property <bool> drag-out-fired: false;
 
     // 图标与着色（文件夹用强调色，文件用中性色，保持统一单色风格）
-    property <string> row-glyph: entry.is_dir ? Icons.folder
-        : entry.kind == "image" ? Icons.image
-        : entry.kind == "video" ? Icons.video
-        : entry.kind == "audio" ? Icons.audio
-        : entry.kind == "pdf" ? Icons.pdf
-        : entry.kind == "archive" ? Icons.archive
-        : entry.kind == "office" ? Icons.file
-        : entry.kind == "text" ? Icons.text-file
-        : Icons.file;
+    // 文件类型 → 官方 Fluent 图标（语义一一对应，禁止用形状近似的图标顶替）
+    property <IconName> row-icon: entry.is_dir ? IconName.folder
+        : entry.kind == "image" ? IconName.image
+        : entry.kind == "video" ? IconName.video
+        : entry.kind == "audio" ? IconName.audio
+        : entry.kind == "pdf" ? IconName.pdf
+        : entry.kind == "archive" ? IconName.archive
+        : entry.kind == "office" ? IconName.file
+        : entry.kind == "text" ? IconName.text
+        : IconName.file;
 
     property <brush> row-tint: entry.is_dir ? Theme.accent : Theme.text-secondary;
 
@@ -106,9 +107,8 @@ export component FileRow inherits Rectangle {
                 Icon {
                     x: 0;
                     y: (parent.height - self.height) / 2;
-                    glyph: root.row-glyph;
+                    name: root.row-icon;
                     size: FileColumns.icon;
-                    thickness: 1.6px;
                     icon-color: entry.selected ? Theme.accent : root.row-tint;
                 }
             }

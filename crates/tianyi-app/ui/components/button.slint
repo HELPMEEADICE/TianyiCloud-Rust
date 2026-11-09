@@ -4,7 +4,7 @@
 // 四种视觉状态（hover / pressed / disabled / busy）都由令牌驱动，不允许页面本地覆盖颜色。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentSpinner } from "spinner.slint";
 
 export component FluentButton inherits Rectangle {
@@ -18,8 +18,8 @@ export component FluentButton inherits Rectangle {
     in property <bool> enabled: true;
     /// 处理中：显示进度环并禁用点击
     in property <bool> busy: false;
-    /// 前置图标路径（可选）
-    in property <string> glyph: "";
+    /// 前置图标（可选）
+    in property <IconName> icon: IconName.none;
     /// 最小宽度（主操作按钮用它保持视觉节奏，不应设置成"铺满父容器"）
     in property <length> min-w: 0px;
 
@@ -56,10 +56,10 @@ export component FluentButton inherits Rectangle {
             tint: root.accent ? Theme.text-on-accent : Theme.accent;
         }
 
-        if !root.busy && root.glyph != "": Icon {
-            glyph: root.glyph;
-            size: 16px;
-            thickness: 1.7px;
+        if !root.busy && root.icon != IconName.none: Icon {
+            name: root.icon;
+            size: Theme.icon-sm;
+            disabled: !root.enabled;
             icon-color: root.accent ? Theme.text-on-accent : (root.danger ? Theme.danger : Theme.text-primary);
         }
 

@@ -4,10 +4,10 @@
 // 这里只提供可复用的行与分隔线。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 
 export component FluentMenuItem inherits Rectangle {
-    in property <string> glyph: "";
+    in property <IconName> icon: IconName.none;
     in property <string> label: "";
     in property <string> shortcut: "";
     in property <bool> danger: false;
@@ -30,11 +30,11 @@ export component FluentMenuItem inherits Rectangle {
         spacing: 10px;
         cross-axis-alignment: center;
 
-        if root.glyph != "": Icon {
-            glyph: root.glyph;
-            size: 15px;
-            thickness: 1.6px;
+        if root.icon != IconName.none: Icon {
+            name: root.icon;
+            size: Theme.icon-sm;
             icon-color: root.danger ? Theme.danger : Theme.text-secondary;
+            disabled: !root.enabled;
         }
 
         Text {

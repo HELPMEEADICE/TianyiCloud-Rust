@@ -10,7 +10,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { TooltipState } from "../types.slint";
 import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
@@ -97,7 +97,7 @@ component PathRow inherits HorizontalLayout {
         }
 
         FluentIconButton {
-            glyph: Icons.copy;
+            icon: IconName.copy;
             tooltip: "复制路径";
             enabled: root.value != "";
             clicked => {
@@ -256,7 +256,7 @@ export component SettingsPage inherits Rectangle {
 
                                 FluentButton {
                                     text: "退出登录";
-                                    glyph: Icons.logout;
+                                    icon: IconName.logout;
                                     danger: true;
                                     subtle: true;
                                     enabled: root.account-name != "";

@@ -3,11 +3,11 @@
 // 图标按钮不承载文字，因此 tooltip 必须给出可读名称（传空字符串不会显示气泡）。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { TooltipState } from "../types.slint";
 
 export component FluentIconButton inherits Rectangle {
-    in property <string> glyph: "";
+    in property <IconName> icon: IconName.none;
     in property <string> tooltip: "";
     in property <bool> enabled: true;
     /// 选中态（如“传输面板已展开”）
@@ -40,12 +40,11 @@ export component FluentIconButton inherits Rectangle {
     Icon {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
-        glyph: root.glyph;
+        name: root.icon;
         size: root.icon-size;
         filled: root.filled;
-        thickness: 1.7px;
-        icon-color: !root.enabled ? Theme.text-disabled
-            : root.accent ? Theme.accent
+        disabled: !root.enabled;
+        icon-color: root.accent ? Theme.accent
             : root.danger ? Theme.danger
             : root.checked ? Theme.accent : Theme.text-primary;
     }

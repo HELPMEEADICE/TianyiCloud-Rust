@@ -4,7 +4,7 @@
 // 卡片宽度随窗口收缩（不超过 420px），保证窄窗口下不越界。
 
 import { Theme } from "../theme/tokens.slint";
-import { Icon, Icons } from "../theme/icons.slint";
+import { Icon, IconName } from "../theme/icons.slint";
 import { FluentButton } from "button.slint";
 
 export component FluentContentDialog inherits Rectangle {
@@ -76,9 +76,8 @@ export component FluentContentDialog inherits Rectangle {
                         cross-axis-alignment: center;
 
                         if root.danger: Icon {
-                            glyph: Icons.warning;
-                            size: 18px;
-                            thickness: 1.7px;
+                            name: IconName.warning;
+                            size: Theme.icon-md;
                             icon-color: Theme.danger;
                         }
 
