@@ -31,6 +31,9 @@ export component FluentContentDialog inherits Rectangle {
         init => {
             self.focus();
         }
+        // 这层只负责收 Esc / Enter，不是可点的东西：不管焦点在哪，
+        // 点遮罩都必须真的执行"取消"，不能被它当成"点我一下给你焦点"吞掉。
+        focus-on-click: false;
 
         KeyBinding {
             keys: @keys(Escape);

@@ -38,6 +38,8 @@ export component CloudPage inherits Rectangle {
     in property <int> selected-count: 0;
     in property <bool> drop-active: false;
     in property <string> drop-target-name: "";
+    /// 右键菜单是否打开（由外壳传入）：菜单关闭时把键盘焦点还给文件列表
+    in property <bool> context-menu-open: false;
     in property <string> error-text: "";
     /// 排序：0=名称 1=大小 2=修改时间
     in property <int> sort-key: 0;
@@ -47,6 +49,8 @@ export component CloudPage inherits Rectangle {
     callback select-all();
     callback clear-selection();
     callback open-item(string, string, bool);
+    /// 打开当前唯一选中项（Enter 键）：选择集的事实来源在 Rust 侧，UI 不自行挑行
+    callback open-selected();
     callback context-requested(string, string, bool, length, length);
     callback navigate-crumb(int);
     callback navigate-up();
@@ -82,6 +86,15 @@ export component CloudPage inherits Rectangle {
     property <bool> inline-error: root.list-state == "error" && root.rows.length > 0;
 
     background: Theme.window-bg;
+
+    // 右键菜单打开期间焦点被菜单拿走（菜单需要焦点才能收 Esc）。
+    // 菜单一关就把焦点还给文件列表，否则 F5 / Delete / Enter 这些快捷键
+    // 会在关掉菜单之后集体失效，直到用户又点中某一行。
+    changed context-menu-open => {
+        if (!root.context-menu-open) {
+            list-area.focus();
+        }
+    }
 
     VerticalLayout {
         padding-left: Theme.space-4;
@@ -438,20 +451,32 @@ export component CloudPage inherits Rectangle {
                 self.focus();
             }
 
+            // 快捷键总表
+            //
+            // 一律用 `enabled:` 而不是在 activated 里 if：KeyBinding 在**捕获阶段**判定，
+            // 匹配上就吃掉这次按键，焦点所在的行内输入框（重命名框）再也收不到。
+            // 把开关放到 enabled 上，不适用时按键会正常往下传——
+            // 重命名时 Enter 才能提交、Delete 才能删字、Esc 才能取消。
+            KeyBinding {
+                keys: @keys(Return);
+                enabled: root.renaming-id == "" && root.selected-count == 1;
+                activated => {
+                    root.open-selected();
+                }
+            }
+
             KeyBinding {
                 keys: @keys(F2);
+                enabled: root.renaming-id == "" && root.selected-count == 1;
                 activated => {
-                    if (root.selected-count == 1) {
-                        root.rename-selected();
-                    }
+                    root.rename-selected();
                 }
             }
             KeyBinding {
                 keys: @keys(Delete);
+                enabled: root.renaming-id == "" && root.has-selection;
                 activated => {
-                    if (root.has-selection) {
-                        root.delete-selected();
-                    }
+                    root.delete-selected();
                 }
             }
             KeyBinding {
@@ -468,12 +493,14 @@ export component CloudPage inherits Rectangle {
             }
             KeyBinding {
                 keys: @keys(Control+A);
+                enabled: root.renaming-id == "";
                 activated => {
                     root.select-all();
                 }
             }
             KeyBinding {
                 keys: @keys(Escape);
+                enabled: root.renaming-id == "" && root.has-selection;
                 activated => {
                     root.clear-selection();
                 }

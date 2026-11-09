@@ -67,8 +67,15 @@ impl Controller {
         *lock_or_recover(&self.entry_cache) = entries.clone();
         let count = selected.len() as i32;
         self.set_ui_state(move |ui| {
-            ui.set_file_list(entries_model(entries));
-            ui.set_selected_count(count);
+            apply_entries(ui, entries, count);
+        });
+    }
+
+    /// 清空列表模型（换云空间时用）
+    fn clear_entries(&self) {
+        *lock_or_recover(&self.entry_cache) = Vec::new();
+        self.set_ui_state(|ui| {
+            ui.set_file_list(slint::ModelRc::default());
         });
     }
 
@@ -86,9 +93,9 @@ impl Controller {
         let entries = cache.clone();
         drop(cache);
         let count = ids.len() as i32;
+        // 只改 selected 标记：走就地更新，行实例（和它的双击判定）不受影响
         self.set_ui_state(move |ui| {
-            ui.set_file_list(entries_model(entries));
-            ui.set_selected_count(count);
+            apply_entries(ui, entries, count);
         });
     }
 
@@ -327,9 +334,11 @@ impl Controller {
         let Some(client) = self.client() else { return };
         client.set_account(|acc| acc.space_type = space.clone());
 
+        // 先清空模型与行缓存，再清选择集：反过来的话 set_selection 会拿旧行的
+        // 缓存再做一次就地更新，纯属白干
+        self.clear_entries();
         self.set_selection(Vec::new());
         self.set_ui_state(|ui| {
-            ui.set_file_list(slint::ModelRc::default());
             ui.set_searching(false);
             ui.set_search_keyword(SharedString::default());
             ui.set_renaming_id(SharedString::default());
@@ -384,6 +393,18 @@ impl Controller {
         lock_or_recover(&self.path_stack).push((current, name.to_string()));
         *lock_or_recover(&self.folder_id) = id.to_string();
         self.load_dir(false);
+    }
+
+    /// Enter 键的「打开」：与双击同义，作用于当前唯一选中项。
+    ///
+    /// 目标从选择集（`targets()`）取，而不是让 UI 自己去列表里猜哪一行被选中——
+    /// 选择状态只有一份事实来源。
+    pub(super) fn open_selected(self: &Arc<Self>) {
+        let targets = self.targets();
+        let [item] = targets.as_slice() else {
+            return;
+        };
+        self.handle_open_item(&item.id, &item.name, item.is_dir);
     }
 
     /// 单击选择：普通点击=单选，Ctrl=切换，Shift=从锚点范围选择
@@ -1082,6 +1103,39 @@ pub fn sort_files(rows: &mut [FileObject], key: i32, asc: bool) {
 
 fn entries_model(entries: Vec<FileEntry>) -> slint::ModelRc<FileEntry> {
     slint::ModelRc::new(slint::VecModel::from(entries))
+}
+
+/// 把一组行数据推到 UI 的 `file-list`，顺带更新选中数量。
+///
+/// **行集合没变时就地逐行更新**（复用同一个模型实例），只有行集合真的换了
+/// （换目录 / 换云空间 / 搜索结果变化）才整表替换。
+///
+/// 为什么必须在乎模型实例的身份：Slint 的 `double-clicked` 依赖窗口里 `ClickState`
+/// 的点击计数，而命中项（ItemRc）一变，运行时就把计数清零（i-slint-core `input.rs`
+/// 的 `event.set_click_count(0)`）。整表换模型会让 ListView 的重排器重建所有行实例，
+/// 第二下点击落在新实例上，双击因此永远凑不齐——用户看到的就是"双击打不开文件夹"。
+/// 就地更新走 `row_changed`，行实例原地存活，双击判定才成立。
+pub(crate) fn apply_entries(ui: &MainWindow, entries: Vec<FileEntry>, selected_count: i32) {
+    use slint::Model;
+    let model = ui.get_file_list();
+    if same_row_ids(&model, &entries) {
+        for (idx, entry) in entries.into_iter().enumerate() {
+            model.set_row_data(idx, entry);
+        }
+    } else {
+        ui.set_file_list(entries_model(entries));
+    }
+    ui.set_selected_count(selected_count);
+}
+
+/// 模型里的行 id 序列是否与 `entries` 完全一致（用于判断"能不能就地更新"）
+fn same_row_ids(model: &slint::ModelRc<FileEntry>, entries: &[FileEntry]) -> bool {
+    use slint::Model;
+    model.row_count() == entries.len()
+        && entries
+            .iter()
+            .enumerate()
+            .all(|(idx, entry)| model.row_data(idx).is_some_and(|row| row.id == entry.id))
 }
 
 /// 去掉文件名中不安全的字符

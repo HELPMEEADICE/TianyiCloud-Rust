@@ -133,6 +133,8 @@ export component MainWindow inherits Window {
 
     // ==================== 文件回调 ====================
     callback open_item(string, string, bool);
+    /// 打开当前唯一选中项（列表里按 Enter）
+    callback open_selected();
     callback select_item(string, bool, bool);
     callback select_all();
     callback clear_selection();
@@ -657,6 +659,7 @@ export component MainWindow inherits Window {
                     error-text: root.file-error;
                     drop-active: root.drop-active;
                     drop-target-name: root.drop-target-name;
+                    context-menu-open: root.context-open;
                     search-text <=> root.search-keyword;
 
                     select-item(id, ctrl, shift) => {
@@ -670,6 +673,9 @@ export component MainWindow inherits Window {
                     }
                     open-item(id, name, is-dir) => {
                         root.open_item(id, name, is-dir);
+                    }
+                    open-selected => {
+                        root.open_selected();
                     }
                     context-requested(id, name, is-dir, x, y) => {
                         root.context_requested(id, name, is-dir, x, y);
@@ -1169,6 +1175,9 @@ export component MainWindow inherits Window {
             init => {
                 self.focus();
             }
+            // 这层只负责收 Esc：焦点一旦被别处拿走（例如用户 Tab 到工具栏），
+            // 剩下那一下点击不能被它当成"点我一下给你焦点"吞掉。
+            focus-on-click: false;
 
             KeyBinding {
                 keys: @keys(Escape);

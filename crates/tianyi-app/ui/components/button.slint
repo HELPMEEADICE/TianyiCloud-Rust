@@ -90,6 +90,8 @@ export component FluentButton inherits Rectangle {
         changed pressed => {
             if (self.pressed) {
                 InputMode.track-focus(FocusReason.pointer-click);
+                // 焦点在按下时显式移交给本按钮的 FocusScope（见下方 fs 处的说明）
+                fs.focus();
             }
         }
         clicked => {
@@ -108,6 +110,13 @@ export component FluentButton inherits Rectangle {
         height: root.height;
         // 禁用/忙时既不可 Tab 到达，也不响应按键
         enabled: root.enabled;
+        // 鼠标点击的焦点由下方的 TouchArea 在按下时显式移交（`fs.focus()`）。
+        //
+        // 不能保留 `focus-on-click`（默认 true）：本 FocusScope 覆盖整个控件，且声明在
+        // TouchArea 之后（= 命中测试在前）。`FocusScope::input_event` 在"按下 + 尚无焦点"
+        // 时返回 EventAccepted，事件就此终止，后面的 TouchArea 根本收不到这次按下——
+        // 表现为"控件要点第二次才响应"（左侧导航栏、右键菜单项都是这个症状）。
+        focus-on-click: false;
 
         // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
         focus-changed-event(reason) => {

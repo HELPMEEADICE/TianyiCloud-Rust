@@ -51,6 +51,8 @@ export component FluentSegmented inherits Rectangle {
                 changed pressed => {
                     if (self.pressed) {
                         InputMode.track-focus(FocusReason.pointer-click);
+                        // 焦点在按下时显式移交给整组的 FocusScope（见下方 fs 处的说明）
+                        fs.focus();
                     }
                 }
                 clicked => {
@@ -78,6 +80,11 @@ export component FluentSegmented inherits Rectangle {
         width: root.width;
         height: root.height;
         enabled: root.enabled;
+        // 鼠标点击的焦点由各分段的 TouchArea 在按下时显式移交。
+        // 保留 focus-on-click 会让这个覆盖整组、且声明在分段之后（= 命中测试在前）的
+        // FocusScope 把第一次按下吞成"只给焦点"（EventAccepted 终止派发），
+        // 于是切换筛选项/登录方式要点第二次才生效。
+        focus-on-click: false;
 
         // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
         focus-changed-event(reason) => {

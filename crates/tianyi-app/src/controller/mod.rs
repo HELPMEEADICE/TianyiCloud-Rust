@@ -13,6 +13,10 @@ mod files;
 mod session;
 mod transfers;
 use self::dnd::MovedFile;
+/// 只服务 `ui_tests`：断言"选中态更新必须就地改模型、不能整表换"这条不变量
+/// （换模型会重建 ListView 的行实例，双击判定随之失效）
+#[cfg(test)]
+pub(crate) use self::files::apply_entries;
 use self::files::PendingConfirm;
 use self::session::ConfigStore;
 use self::transfers::TransferSnapshot;
@@ -281,6 +285,14 @@ impl Controller {
             ui.on_open_item(move |id, name, is_dir| {
                 let c = c.clone();
                 c.handle_open_item(id.as_str(), name.as_str(), is_dir);
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_open_selected(move || {
+                let c = c.clone();
+                c.open_selected();
             });
         });
 

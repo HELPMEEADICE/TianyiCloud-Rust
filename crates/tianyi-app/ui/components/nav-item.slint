@@ -144,6 +144,8 @@ export component FluentNavItem inherits Rectangle {
         changed pressed => {
             if (self.pressed) {
                 InputMode.track-focus(FocusReason.pointer-click);
+                // 焦点在按下时显式移交给本项的 FocusScope（见下方 fs 处的说明）
+                fs.focus();
             }
         }
         clicked => {
@@ -174,6 +176,12 @@ export component FluentNavItem inherits Rectangle {
         width: root.width;
         height: root.height;
         enabled: root.enabled;
+        // 鼠标点击的焦点由 TouchArea 在按下时显式移交。
+        //
+        // 保留 focus-on-click 会让这个覆盖整项、且声明在 TouchArea 之后的 FocusScope
+        // 把第一次按下吞成"只给焦点"（`FocusScope::input_event` 返回 EventAccepted 终止
+        // 派发），后面的 TouchArea 收不到这次点击——导航项因此要点第二次才切换页面。
+        focus-on-click: false;
 
         // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
         focus-changed-event(reason) => {
