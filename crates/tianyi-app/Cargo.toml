@@ -41,3 +41,12 @@ windows-core = "0.58"
 
 [build-dependencies]
 slint-build = "1.17"
+
+[features]
+# 图标总览组件（ui/dev/icon-sheet.slint，近 6000 行）只为 examples/icon_sheet.rs
+# 的视觉自检服务，主界面 ui/main.slint 不引用它：常规构建不编译。
+icon-sheet = []
+
+[[example]]
+name = "icon_sheet"
+required-features = ["icon-sheet"]

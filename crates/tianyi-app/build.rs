@@ -9,8 +9,12 @@ fn main() {
 
     // 图标总览：只服务 examples/icon_sheet.rs 的视觉自检，
     // 单独编译到 OUT_DIR，不进入主界面的组件树。
-    let sheet_out =
-        std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("icon_sheet.rs");
-    slint_build::compile_with_output_path("ui/dev/icon-sheet.slint", sheet_out, config())
-        .expect("slint compile icon-sheet");
+    // 该文件近 6000 行，常规构建靠 feature 门控整体跳过，只有显式
+    // `--features icon-sheet` 时才编译（example 侧由 required-features 绑定）。
+    if cfg!(feature = "icon-sheet") {
+        let sheet_out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"))
+            .join("icon_sheet.rs");
+        slint_build::compile_with_output_path("ui/dev/icon-sheet.slint", sheet_out, config())
+            .expect("slint compile icon-sheet");
+    }
 }
