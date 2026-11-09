@@ -42,7 +42,13 @@ export component FluentContentDialog inherits Rectangle {
         KeyBinding {
             keys: @keys(Return);
             activated => {
-                root.confirm();
+                // 危险操作（删除等）不可撤销：Enter 不能是执行键，
+                // 否则连按两下回车就会误删。取消才是这里的默认动作。
+                if (root.danger) {
+                    root.cancel();
+                } else {
+                    root.confirm();
+                }
             }
         }
     }
