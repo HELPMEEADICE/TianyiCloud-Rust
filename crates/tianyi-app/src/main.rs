@@ -19,7 +19,16 @@ use std::time::Duration;
 
 /// 传输面板刷新间隔（毫秒）
 const TICK_MS: u64 = 200;
-/// 跟随系统主题时的轮询间隔（秒）
+// 跟随系统主题时的轮询间隔（秒）
+//
+// macOS 上的 `tianyi_core::theme::system_prefers_dark()` 每次调用都会起一个线程
+// 并 spawn 一个 `defaults read -g AppleInterfaceStyle` 子进程；3 秒一次等于每 3 秒
+// 就新起一个进程，笔记本上耗电明显。主题切换本身是低频操作，放宽到 30 秒后最坏
+// 情况只是"改了系统主题，客户端晚半分钟跟上"，用户几乎感知不到。
+// Windows 读注册表、其它平台是轻量查询，保持 3 秒以获得即时跟随。
+#[cfg(target_os = "macos")]
+const THEME_POLL_SECS: u64 = 30;
+#[cfg(not(target_os = "macos"))]
 const THEME_POLL_SECS: u64 = 3;
 
 /// 拖拽进入状态（跨线程由 winit 事件回调与控制器共享）
