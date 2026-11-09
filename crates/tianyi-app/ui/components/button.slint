@@ -6,6 +6,7 @@
 import { Theme } from "../theme/tokens.slint";
 import { Icon, IconName } from "../theme/icons.slint";
 import { FluentSpinner } from "spinner.slint";
+import { InputMode } from "../types.slint";
 
 export component FluentButton inherits Rectangle {
     in property <string> text: "";
@@ -85,8 +86,57 @@ export component FluentButton inherits Rectangle {
     touch := TouchArea {
         enabled: root.enabled && !root.busy;
         mouse-cursor: pointer;
+        // 鼠标按下即离开键盘模式：焦点即使仍留在本控件上，焦点环也不显示
+        changed pressed => {
+            if (self.pressed) {
+                InputMode.track-focus(FocusReason.pointer-click);
+            }
+        }
         clicked => {
             root.clicked();
         }
+    }
+
+    // —— 键盘可达性 ——
+    // FocusScope 是不渲染、不参与布局的元素；Tab / Shift-Tab 由 Slint 运行时在
+    // 所有 FocusScope 之间自动移动焦点（见 i-slint-core window.rs 的 Tab 分支）。
+    // key-pressed 返回 accept = 已处理并终止传递，reject = 交回上一级。
+    fs := FocusScope {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        // 禁用/忙时既不可 Tab 到达，也不响应按键
+        enabled: root.enabled;
+
+        // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
+        focus-changed-event(reason) => {
+            InputMode.track-focus(reason);
+        }
+
+        key-pressed(event) => {
+            if (!root.enabled || root.busy) {
+                return reject;
+            }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // 焦点环：绝对定位的叠加层，边框画在自身边界内侧，
+    // 因此不参与布局，控件的尺寸/位置/内边距/背景一律不变。
+    // 只在键盘模式出现（鼠标点击不显示，对齐 WinUI）；不使用动画，reduce-motion 下天然成立。
+    if fs.has-focus && InputMode.keyboard: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        border-radius: Theme.radius-control;
+        border-width: Theme.focus-width;
+        border-color: Theme.focus-ring;
+        background: transparent;
     }
 }

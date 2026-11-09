@@ -5,6 +5,7 @@
 
 import { Theme } from "../theme/tokens.slint";
 import { Icon, IconName } from "../theme/icons.slint";
+import { InputMode } from "../types.slint";
 
 export component FluentMenuItem inherits Rectangle {
     in property <IconName> icon: IconName.none;
@@ -68,9 +69,54 @@ export component FluentMenuItem inherits Rectangle {
     ta := TouchArea {
         enabled: root.enabled;
         mouse-cursor: pointer;
+        // 鼠标按下即离开键盘模式：焦点即使仍留在本控件上，焦点环也不显示
+        changed pressed => {
+            if (self.pressed) {
+                InputMode.track-focus(FocusReason.pointer-click);
+            }
+        }
         clicked => {
             root.triggered();
         }
+    }
+
+    // —— 键盘可达性 ——
+    // FocusScope 不渲染、不参与布局；Tab 遍历由 Slint 运行时完成。
+    // key-pressed: accept = 已处理并终止传递，reject = 交回上一级。
+    fs := FocusScope {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        enabled: root.enabled;
+
+        // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
+        focus-changed-event(reason) => {
+            InputMode.track-focus(reason);
+        }
+
+        key-pressed(event) => {
+            if (!root.enabled) {
+                return reject;
+            }
+            if (event.text == Key.Space || event.text == Key.Return) {
+                root.triggered();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // 焦点环：叠加层 + 内侧边框，不撑大布局；仅键盘模式可见；无动画。
+    if fs.has-focus && InputMode.keyboard: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        border-radius: Theme.radius-control;
+        border-width: Theme.focus-width;
+        border-color: Theme.focus-ring;
+        background: transparent;
     }
 }
 

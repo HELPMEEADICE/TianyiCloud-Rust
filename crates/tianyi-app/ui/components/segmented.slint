@@ -3,6 +3,7 @@
 // 用于登录方式切换与传输任务筛选。Win11 样式：浅色沟槽 + 选中段浮起的浅色药丸。
 
 import { Theme } from "../theme/tokens.slint";
+import { InputMode } from "../types.slint";
 
 export component FluentSegmented inherits Rectangle {
     in property <[string]> items: [];
@@ -46,6 +47,12 @@ export component FluentSegmented inherits Rectangle {
             seg-ta := TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: pointer;
+                // 鼠标按下即离开键盘模式（整个分段控件共享一个键盘模式状态）
+                changed pressed => {
+                    if (self.pressed) {
+                        InputMode.track-focus(FocusReason.pointer-click);
+                    }
+                }
                 clicked => {
                     if (root.current != idx) {
                         root.current = idx;
@@ -54,5 +61,60 @@ export component FluentSegmented inherits Rectangle {
                 }
             }
         }
+    }
+
+    // —— 键盘可达性 ——
+    //
+    // 取舍：不给每个分段单独加 FocusScope。分段是"单选组"语义（同一时刻只有一个
+    // current），逐段可聚焦会产生 N 个 Tab 停靠点，还会让"当前段"和"焦点段"两个
+    // 状态各自漂移。因此整组一个 FocusScope + 左右方向键切换 current：
+    // Tab 到达整组，方向键改选中段，语义与 WinUI 的单选组一致。
+    //
+    // Space / Return 在这里返回 reject（不吞掉）：分段本身没有"激活"动作，
+    // 交给父级处理（例如登录页的 Enter 提交），避免把按键吃掉。
+    fs := FocusScope {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        enabled: root.enabled;
+
+        // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
+        focus-changed-event(reason) => {
+            InputMode.track-focus(reason);
+        }
+
+        key-pressed(event) => {
+            if (!root.enabled) {
+                return reject;
+            }
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                if (root.current + 1 < root.items.length) {
+                    root.current += 1;
+                    root.changed(root.current);
+                }
+                return accept;
+            }
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                if (root.current > 0) {
+                    root.current -= 1;
+                    root.changed(root.current);
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    // 焦点环：叠加层 + 内侧边框，不撑大布局；仅键盘模式可见；无动画。
+    if fs.has-focus && InputMode.keyboard: Rectangle {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        border-radius: Theme.radius-control;
+        border-width: Theme.focus-width;
+        border-color: Theme.focus-ring;
+        background: transparent;
     }
 }
