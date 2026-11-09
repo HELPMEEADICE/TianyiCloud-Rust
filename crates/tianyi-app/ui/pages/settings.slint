@@ -70,13 +70,15 @@ component PathRow inherits HorizontalLayout {
             }
 
             hover := TouchArea {
+                // 抢占 + 归属判定：先认领归属键再点亮，收尾只关自己点亮的那盏
                 changed has-hover => {
                     if (self.has-hover && root.value != "") {
+                        TooltipState.owner = "path:" + root.label;
                         TooltipState.text = root.value + (root.hint == "" ? "" : (" · " + root.hint));
                         TooltipState.x = self.absolute-position.x;
                         TooltipState.y = self.absolute-position.y + self.height + 4px;
                         TooltipState.visible = true;
-                    } else {
+                    } else if (TooltipState.owner == "path:" + root.label) {
                         TooltipState.visible = false;
                     }
                 }

@@ -58,11 +58,13 @@ export component FluentIconButton inherits Rectangle {
 
         changed has-hover => {
             if (self.has-hover && root.tooltip != "") {
+                // 抢占 + 归属判定：先认领归属键再点亮，收尾只关自己点亮的那盏
+                TooltipState.owner = "tip:" + root.tooltip;
                 TooltipState.text = root.tooltip;
                 TooltipState.x = self.absolute-position.x;
                 TooltipState.y = self.absolute-position.y + self.height + 4px;
                 TooltipState.visible = true;
-            } else {
+            } else if (TooltipState.owner == "tip:" + root.tooltip) {
                 TooltipState.visible = false;
             }
         }

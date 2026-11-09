@@ -71,6 +71,15 @@ export global TooltipState {
     in-out property <length> x: 0px;
     in-out property <length> y: 0px;
     in-out property <bool> visible: false;
+    /// 当前 Tooltip 的归属键：写入方在点亮 Tooltip 时填自己的唯一键
+    /// （icon-button "tip:…" / nav-item "nav:…" / 设置页路径 "path:…" /
+    /// 存储指示 "storage"）。
+    ///
+    /// 解决的是"互相抢占"：鼠标从 A 移到 B 时，两个 `changed has-hover` 谁先谁后
+    /// 不确定——若 B 先点亮、A 的收尾再无条件 `visible = false`，B 刚弹出的
+    /// Tooltip 会被 A 关掉，表现为"Tooltip 时有时无"。有了归属键，写入方只在
+    /// "当前这盏灯还是我点亮的"时才负责熄灭，别人的灯不动。
+    in-out property <string> owner: "";
 }
 
 /// 键盘修饰键状态

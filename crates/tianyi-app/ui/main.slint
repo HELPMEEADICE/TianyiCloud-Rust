@@ -113,6 +113,13 @@ export component MainWindow inherits Window {
     in property <string> dialog-confirm-text: "确定";
     in property <bool> dialog-danger: false;
 
+    // ==================== Tooltip 浮层（渲染端私有状态） ====================
+    /// 悬停是否已经持续到延迟结束。lit=false 时不渲染气泡，见文件末尾的 tip-delay
+    private property <bool> tip-shown: false;
+    /// `TooltipState.visible` 的镜像：Slint 的 `changed` 处理器只接受组件自身的
+    /// 属性名（`changed a.b` 不是合法语法），要监听全局属性必须先镜像到本地。
+    private property <bool> tip-visible: TooltipState.visible;
+
     // ==================== 登录回调 ====================
     callback login_request(string, string, string, bool);
     callback qr_refresh();
@@ -427,12 +434,14 @@ export component MainWindow inherits Window {
                         mouse-cursor: pointer;
                         changed has-hover => {
                             if (self.has-hover) {
+                                TooltipState.owner = "storage";
                                 TooltipState.text = root.total-space == "" ? "未获取到容量信息"
                                     : ("存储 " + root.capacity-percent + "% · " + root.capacity-text);
                                 TooltipState.x = self.absolute-position.x + self.width + 8px;
                                 TooltipState.y = self.absolute-position.y;
                                 TooltipState.visible = true;
-                            } else {
+                            } else if (TooltipState.owner == "storage") {
+                                // 只熄灭自己点亮的那盏：鼠标可能已移到别的控件上
                                 TooltipState.visible = false;
                             }
                         }
@@ -1125,7 +1134,23 @@ export component MainWindow inherits Window {
     }
 
     // ==================== 顶层：轻量 Tooltip 浮层 ====================
-    if TooltipState.visible && TooltipState.text != "": tooltip := Rectangle {
+    // 显示延迟只做在渲染端：写点仍立即写入 text / owner / 坐标，隐藏也立即生效。
+    // 悬停必须持续到延迟结束才弹出，鼠标掠过密集控件（工具栏图标）时不再闪烁。
+    tip-delay := Timer {
+        interval: Theme.reduce-motion ? 0ms : 450ms;
+        running: TooltipState.visible && !root.tip-shown;
+        triggered => {
+            root.tip-shown = true;
+        }
+    }
+
+    changed tip-visible => {
+        if (!root.tip-visible) {
+            root.tip-shown = false;
+        }
+    }
+
+    if TooltipState.visible && root.tip-shown && TooltipState.text != "": tooltip := Rectangle {
         width: Math.min(tip-layout.preferred-width, 420px);
         height: tip-layout.preferred-height;
         x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
