@@ -14,6 +14,9 @@ rust-version = "1.92"
 
 [profile.release]
 opt-level = 2
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
