@@ -41,8 +41,12 @@ fn shoot(
     height: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     window.set_size(PhysicalSize::new(width, height));
-    std::thread::sleep(Duration::from_millis(120));
-    slint::platform::update_timers_and_animations();
+    // 图标切换主题时有 90ms 的 colorize 过渡动画（Theme.motion-fast），
+    // 必须等动画跑完再截，否则会拍到过渡中间色。
+    for _ in 0..6 {
+        std::thread::sleep(Duration::from_millis(60));
+        slint::platform::update_timers_and_animations();
+    }
 
     let mut buffer = slint::SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
     window.request_redraw();
@@ -82,11 +86,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 与 ui/dev/icon-sheet.slint 的 Window 尺寸一致（56 个图标 × 38px 行高 + 表头）
     let (w, h) = (620u32, 150 + 56 * 38);
-    sheet.set_dark(false);
-    shoot(&window, &out, "icon-sheet-light", w, h)?;
+    // 支持 `--dark-first`：先深色渲染再切浅色。
+    // 用来区分"首帧就正确"与"运行期切主题后是否重绘"两种情形。
+    let dark_first = std::env::args().any(|a| a == "--dark-first");
+    if dark_first {
+        sheet.set_dark(true);
+        shoot(&window, &out, "icon-sheet-dark", w, h)?;
 
-    sheet.set_dark(true);
-    shoot(&window, &out, "icon-sheet-dark", w, h)?;
+        sheet.set_dark(false);
+        shoot(&window, &out, "icon-sheet-light", w, h)?;
+    } else {
+        sheet.set_dark(false);
+        shoot(&window, &out, "icon-sheet-light", w, h)?;
+
+        sheet.set_dark(true);
+        shoot(&window, &out, "icon-sheet-dark", w, h)?;
+    }
 
     Ok(())
 }

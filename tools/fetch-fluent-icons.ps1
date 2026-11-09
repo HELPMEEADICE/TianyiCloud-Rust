@@ -246,7 +246,10 @@ function Splice-Block {
 $slint = Splice-Block -Text $slint -Tag 'enum' -Content $enumLines.ToString()
 $slint = Splice-Block -Text $slint -Tag 'assets' -Content $assetLines.ToString()
 $slint = Splice-Block -Text $slint -Tag 'source' -Content $pickLines.ToString()
-Set-Content -Path $slintPath -Value $slint -Encoding utf8
+# 收敛文件尾部空行，避免每次生成都在 EOF 累积空白
+$slint = [regex]::Replace($slint, '(\r?\n)+$', "
+")
+Set-Content -Path $slintPath -Value $slint -Encoding utf8 -NoNewline
 
 Write-Host ''
 Write-Host "SVG 数量: $((Get-ChildItem $dest -Filter *.svg).Count)  目录: $dest"
@@ -300,7 +303,8 @@ Add-Lines @(
     '    title: "Fluent 图标总览";',
     '    // 主题开关：单独编译的文件不会导出 Theme 全局，因此在 Slint 侧写入',
     '    in property <bool> dark: false;',
-    '    init => { Theme.dark = root.dark; }',
+    '    // 用 changed 而不是 init：init 只执行一次，改属性后不会重新灌入主题',
+    '    changed dark => { Theme.dark = root.dark; }',
     '    background: Theme.window-bg;',
     '    width: 620px;',
     ('    height: {0}px;' -f (150 + $rows.Count * 38)),
@@ -310,9 +314,9 @@ Add-Lines @(
     '        spacing: Theme.space-2;',
     '        alignment: start;',
     '        cross-axis-alignment: start;',
-    '',
     '        Text {',
-    ('            text: "Fluent UI System Icons · {0} 个图标（{1} 个 SVG） · 官方 24px 画布（{2} 个例外） · Regular 与 Filled 对照";' -f $rows.Count, ($rows.Count * 2), ($rows | Where-Object { $_.size -ne 24 }).Count),
+    ('            text: "Fluent UI System Icons · {0} 个图标 / {1} 个 SVG · Regular vs Filled";' -f $rows.Count, ($rows.Count * 2)),
+
     '            font-family: Theme.font-family;',
     '            font-size: Theme.font-body-large;',
     '            font-weight: Theme.weight-semibold;',

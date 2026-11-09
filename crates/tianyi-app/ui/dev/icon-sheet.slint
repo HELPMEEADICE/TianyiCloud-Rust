@@ -11,7 +11,8 @@ export component IconSheet inherits Window {
     title: "Fluent 图标总览";
     // 主题开关：单独编译的文件不会导出 Theme 全局，因此在 Slint 侧写入
     in property <bool> dark: false;
-    init => { Theme.dark = root.dark; }
+    // 用 changed 而不是 init：init 只执行一次，改属性后不会重新灌入主题
+    changed dark => { Theme.dark = root.dark; }
     background: Theme.window-bg;
     width: 620px;
     height: 2278px;
@@ -21,9 +22,8 @@ export component IconSheet inherits Window {
         spacing: Theme.space-2;
         alignment: start;
         cross-axis-alignment: start;
-
         Text {
-            text: "Fluent UI System Icons · 56 个图标（112 个 SVG） · 官方 24px 画布（1 个例外） · Regular 与 Filled 对照";
+            text: "Fluent UI System Icons · 56 个图标 / 112 个 SVG · Regular vs Filled";
             font-family: Theme.font-family;
             font-size: Theme.font-body-large;
             font-weight: Theme.weight-semibold;
