@@ -43,18 +43,11 @@ export component TransferRow inherits Rectangle {
 
     height: 72px;
     border-radius: Theme.radius-card;
-    background: ta.has-hover ? Theme.control-bg-hover : Theme.card-bg;
+    // 整行不可点击（行内操作按钮才是点击面），因此不给悬停高亮与手型光标：
+    // 有反馈却无行为等于假 affordance
+    background: Theme.card-bg;
     border-width: 1px;
     border-color: Theme.divider;
-
-    animate background {
-        duration: Theme.motion-fast;
-        easing: ease-out;
-    }
-
-    ta := TouchArea {
-        mouse-cursor: pointer;
-    }
 
     HorizontalLayout {
         padding-left: Theme.space-3;

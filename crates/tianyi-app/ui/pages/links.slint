@@ -102,7 +102,7 @@ export component LinksPage inherits Rectangle {
                         link-ta := TouchArea {
                             mouse-cursor: pointer;
 
-                            double-clicked => {
+                            clicked => {
                                 root.copy-link(item.url);
                             }
 
