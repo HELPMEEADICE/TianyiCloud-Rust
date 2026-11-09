@@ -19,7 +19,10 @@
 //! 改 UI 时若把它们改红，先读那条注释再决定是不是真的要改布局。
 
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementQuery};
-use slint::{ComponentHandle, Model};
+use slint::platform::{PointerEventButton, WindowEvent};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Once;
 use std::time::Duration;
 
@@ -51,6 +54,9 @@ fn ui_geometry_regression() {
     check_empty_state_icon(&mut failures);
     check_detail_level_columns(&mut failures);
     check_a11y_semantics(&mut failures);
+    check_pointer_routing(&mut failures);
+    check_row_open_gestures(&mut failures);
+    check_shortcuts_yield_to_rename(&mut failures);
     assert!(
         failures.is_empty(),
         "几何回归失败 {} 项：\n{}",
@@ -116,6 +122,18 @@ fn expect(failures: &mut Vec<String>, ok: bool, message: impl FnOnce() -> String
     if !ok {
         failures.push(message());
     }
+}
+
+/// 派发一次按键。
+///
+/// 测试后端只能发"文本形式"的按键，特殊键用的是 Unicode 私用区码点，
+/// 取值见 i-slint-common 的 key_codes 表：`Return` = '\n'、`Delete` = '\u{7f}'、
+/// `Escape` = '\u{1b}'、`F5` = '\u{f708}'。
+fn press_key(ui: &crate::app::MainWindow, ch: char) {
+    ui.window().dispatch_event(WindowEvent::KeyPressed {
+        text: SharedString::from(ch.to_string()),
+    });
+    settle();
 }
 
 /// A. 登录卡片：宽度被钳制到 `min(432px, 窗口宽 - 48px)`，且水平居中。
@@ -628,4 +646,312 @@ fn check_a11y_semantics(failures: &mut Vec<String>) {
             });
         }
     }
+}
+
+// ==================== G. 指针与键盘的派发路径（点击必须一次到位） ====================
+//
+// 与 A~F 的断言不同，这一组断言的是**事件到底落到了谁身上**：用测试后端把真实的
+// 按下/抬起与按键事件派发进窗口，再看组件的回调有没有响。
+//
+// 曾出现过、且必须继续守住的三类缺陷：
+//   G1/G2  FocusScope 的 focus-on-click（默认 true）把第一次按下当成"只给焦点"并
+//          终止派发（`FocusScope::input_event` 返回 EventAccepted），覆盖在
+//          TouchArea 之上时控件要点第二次才响应 —— 左侧导航栏、右键菜单项都是这个症状。
+//   G3     整表替换 `file-list` 模型会重建全部行实例，Slint 的点击计数随之清零
+//          （命中项一变就 `set_click_count(0)`），双击永远凑不齐 —— 表现为"双击打不开"。
+//   G4/G5  列表焦点没回到文件列表时，Enter 这类快捷键会打在空气里。
+//
+// 这一组只在首选窗口尺寸下跑：断言的是派发路径，与窗口宽度无关（几何断言才需要两档）。
+
+/// 按 `accessible-label` 在一类组件里查元素（同标签可能同时命中容器与文字子元素，
+/// 这里用 `match_inherits` 限定组件类型）
+fn labelled(ui: &crate::app::MainWindow, type_name: &str, label: &str) -> Option<ElementHandle> {
+    ElementQuery::from_root(ui)
+        .match_inherits(type_name)
+        .find_all()
+        .into_iter()
+        .find(|element| label_of(element) == label)
+}
+
+/// 构造一行文件列表数据
+fn file_row_data(id: &str, name: &str, is_dir: bool, selected: bool) -> crate::app::FileEntry {
+    crate::app::FileEntry {
+        id: SharedString::from(id),
+        name: SharedString::from(name),
+        size: 0,
+        size_text: SharedString::from("—"),
+        is_dir,
+        modified: SharedString::default(),
+        kind: SharedString::from("other"),
+        kind_text: SharedString::from("文件夹"),
+        selected,
+    }
+}
+
+/// 一行表格数据（两行的目录，id 稳定）
+fn two_row_model(selected: Option<&str>) -> ModelRc<crate::app::FileEntry> {
+    ModelRc::new(VecModel::from(vec![
+        file_row_data("1", "文件夹A", true, selected == Some("1")),
+        file_row_data("2", "文件夹B", true, selected == Some("2")),
+    ]))
+}
+
+/// 第一行 FileRow 元素
+fn first_row(ui: &crate::app::MainWindow) -> ElementHandle {
+    ElementQuery::from_root(ui)
+        .match_inherits("FileRow")
+        .find_first()
+        .expect("文件列表没有渲染出任何 FileRow")
+}
+
+/// 记录型回调：测试里用它判断"某个动作到底有没有被触发"
+type Hits = Rc<RefCell<Vec<String>>>;
+
+fn record(hits: &Hits, tag: &'static str) -> impl Fn() + 'static {
+    let hits = hits.clone();
+    move || hits.borrow_mut().push(tag.to_string())
+}
+
+fn hit_list(hits: &Hits) -> Vec<String> {
+    hits.borrow().clone()
+}
+
+/// G1/G2. 单击必须一次到位：导航项切页、右键菜单项执行动作。
+///
+/// 根因（两处同一个坑）：`FocusScope` 的 `focus-on-click` 默认 true，且这些组件的
+/// FocusScope 覆盖整个控件、声明在 TouchArea 之后（命中测试在前）。
+/// 按下时它返回 `EventAccepted` 直接终止派发，TouchArea 收不到这次点击，
+/// 用户看到的就是"左侧导航要点两下""右键菜单点不动"。
+fn check_pointer_routing(failures: &mut Vec<String>) {
+    // ---------- G1 导航项：单击即切页 ----------
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    settle();
+
+    let nav = labelled(&ui, "FluentNavItem", "设置").expect("导航项「设置」不存在");
+    nav.mock_single_click(PointerEventButton::Left);
+    settle();
+    let page = ui.get_current_page();
+    println!("G1 单击导航「设置」: current-page={page}");
+    expect(failures, page == 4, || {
+        format!(
+            "G1: 单击导航「设置」后 current-page 实测 {page}（期望 4）\
+             —— 第一下点击被 FocusScope 的 focus-on-click 吃掉了，要点第二次才生效"
+        )
+    });
+
+    // ---------- G2 右键菜单项：单击即触发动作 ----------
+    let hits: Hits = Rc::new(RefCell::new(Vec::new()));
+    ui.on_select_all(record(&hits, "select-all"));
+    ui.set_current_page(0);
+    ui.set_context_item_name(SharedString::from("样本"));
+    ui.set_context_is_dir(true);
+    ui.set_selected_count(1);
+    ui.set_context_x(200.0);
+    ui.set_context_y(200.0);
+    ui.set_context_open(true);
+    settle();
+
+    let item = labelled(&ui, "FluentMenuItem", "全选").expect("右键菜单项「全选」不存在");
+    item.mock_single_click(PointerEventButton::Left);
+    settle();
+    let fired = hit_list(&hits);
+    println!(
+        "G2 单击菜单项「全选」: 回调={fired:?} context-open={}",
+        ui.get_context_open()
+    );
+    expect(failures, fired == vec!["select-all".to_string()], || {
+        format!(
+            "G2: 单击右键菜单项「全选」触发的回调实测 {fired:?}（期望 [\"select-all\"]）\
+             —— 菜单项的 FocusScope 把第一下点击吞掉了"
+        )
+    });
+    expect(failures, !ui.get_context_open(), || {
+        "G2: 点了菜单项之后 context-open 仍为 true（菜单没关闭）".to_string()
+    });
+
+    // ---------- G2b 点击之后键盘仍能激活该按钮（鼠标点击必须把焦点交给控件自己） ----------
+    let uploads: Hits = Rc::new(RefCell::new(Vec::new()));
+    ui.on_upload_files(record(&uploads, "upload"));
+    let button = labelled(&ui, "FluentButton", "上传").expect("命令栏的「上传」按钮不存在");
+    button.mock_single_click(PointerEventButton::Left);
+    settle();
+    expect(failures, !hit_list(&uploads).is_empty(), || {
+        "G2b: 单击「上传」按钮没有触发 upload".to_string()
+    });
+    uploads.borrow_mut().clear();
+    press_key(&ui, ' ');
+    let by_keyboard = hit_list(&uploads);
+    println!("G2b 单击「上传」后按 Space: 回调={by_keyboard:?}");
+    expect(failures, by_keyboard == vec!["upload".to_string()], || {
+        format!(
+            "G2b: 鼠标点过「上传」之后按 Space 触发的回调实测 {by_keyboard:?}\
+             （期望 [\"upload\"]）—— 点击没有把焦点交给按钮自己的 FocusScope"
+        )
+    });
+}
+
+/// G3. 双击打开：**选中态更新不能重建行实例**，否则双击判定永远凑不齐。
+///
+/// 这里刻意走控制器真正用的那条路径（`apply_entries` 就地更新），而不是直接
+/// 换模型：正是"每次点击都换一个新 VecModel"让第一下点击之后行实例被重建，
+/// 第二下落在新实例上，Slint 的点击计数被清零，`double-clicked` 永远不触发。
+fn check_row_open_gestures(failures: &mut Vec<String>) {
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+
+    let opened: Hits = Rc::new(RefCell::new(Vec::new()));
+    let o = opened.clone();
+    ui.on_open_item(move |id, _, _| o.borrow_mut().push(id.to_string()));
+
+    ui.set_file_list(two_row_model(None));
+    settle();
+
+    // 模拟控制器 handle_select_item -> set_selection 的那一步：选中态就地更新
+    let entries = vec![
+        file_row_data("1", "文件夹A", true, true),
+        file_row_data("2", "文件夹B", true, false),
+    ];
+    let before = first_row(&ui);
+    crate::controller::apply_entries(&ui, entries, 1);
+    settle();
+    expect(failures, before.is_valid(), || {
+        "G3: 选中态更新之后原来的 FileRow 实例失效了 —— 说明走了整表换模型，\
+         双击的两下会落在不同实例上"
+            .to_string()
+    });
+
+    // 两下点击（mock 时间相隔 50ms，在 500ms 的双击窗口内）
+    first_row(&ui).mock_single_click(PointerEventButton::Left);
+    settle();
+    first_row(&ui).mock_single_click(PointerEventButton::Left);
+    settle();
+    let opened_rows = hit_list(&opened);
+    println!("G3 双击第一行: open-item={opened_rows:?}");
+    expect(failures, opened_rows == vec!["1".to_string()], || {
+        format!(
+            "G3: 双击第一行触发的 open-item 实测 {opened_rows:?}（期望 [\"1\"]）\
+             —— 行实例在两次点击之间被重建，双击判定失效"
+        )
+    });
+
+    // ---------- G4 Enter = 打开唯一选中项 ----------
+    let keys: Hits = Rc::new(RefCell::new(Vec::new()));
+    ui.on_open_selected(record(&keys, "open-selected"));
+    ui.set_file_list(two_row_model(Some("1")));
+    ui.set_selected_count(1);
+    settle();
+    first_row(&ui).mock_single_click(PointerEventButton::Left);
+    settle();
+    press_key(&ui, '\n');
+    let enter_hits = hit_list(&keys);
+    println!("G4 Enter: 回调={enter_hits:?}");
+    expect(
+        failures,
+        enter_hits == vec!["open-selected".to_string()],
+        || {
+            format!(
+                "G4: 列表里按 Enter 触发的回调实测 {enter_hits:?}（期望 [\"open-selected\"]）\
+             —— list-area 没有 @keys(Return) 绑定，或焦点不在列表上"
+            )
+        },
+    );
+
+    // ---------- G5 右键菜单关掉之后，Enter 仍然有效 ----------
+    keys.borrow_mut().clear();
+    ui.set_context_open(true);
+    settle();
+    press_key(&ui, '\u{001b}');
+    expect(failures, !ui.get_context_open(), || {
+        "G5: 右键菜单打开时按 Esc 没关掉菜单".to_string()
+    });
+    keys.borrow_mut().clear();
+    press_key(&ui, '\n');
+    let after_close = hit_list(&keys);
+    println!("G5 关菜单后 Enter: 回调={after_close:?}");
+    expect(
+        failures,
+        after_close == vec!["open-selected".to_string()],
+        || {
+            format!(
+                "G5: 右键菜单关闭后按 Enter 触发的回调实测 {after_close:?}\
+             （期望 [\"open-selected\"]）—— 焦点没还给文件列表"
+            )
+        },
+    );
+}
+
+/// G6. 重命名输入框有焦点时，列表的 Enter / Delete / Esc 必须让位。
+///
+/// KeyBinding 在**捕获阶段**判定，匹配上就把按键吃掉；把开关写在 `activated`
+/// 里的 if 上已经太晚了。曾经因此出现"重命名时按 Delete 把选中文件删了"。
+fn check_shortcuts_yield_to_rename(failures: &mut Vec<String>) {
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+
+    let hits: Hits = Rc::new(RefCell::new(Vec::new()));
+    let h = hits.clone();
+    ui.on_rename_submitted(move |_, name| h.borrow_mut().push(format!("rename-submitted:{name}")));
+    let h = hits.clone();
+    ui.on_delete_selected(move || h.borrow_mut().push("delete-selected".into()));
+    let h = hits.clone();
+    ui.on_open_selected(move || h.borrow_mut().push("open-selected".into()));
+    let h = hits.clone();
+    ui.on_clear_selection(move || h.borrow_mut().push("clear-selection".into()));
+    let h = hits.clone();
+    ui.on_rename_cancelled(move |_| h.borrow_mut().push("rename-cancelled".into()));
+
+    // 行实例先以"不在重命名"的状态存在，再切 renaming-id：
+    // `changed renaming` 只在真的变化时触发，初始值不触发，输入框也拿不到焦点。
+    ui.set_renaming_id(SharedString::default());
+    ui.set_file_list(two_row_model(Some("1")));
+    ui.set_selected_count(1);
+    settle();
+    ui.set_renaming_id(SharedString::from("1"));
+    settle();
+
+    for (name, ch) in [("Enter", '\n'), ("Delete", '\u{007f}'), ("Esc", '\u{001b}')] {
+        hits.borrow_mut().clear();
+        press_key(&ui, ch);
+        let fired = hit_list(&hits);
+        println!("G6 重命名中 {name}: 回调={fired:?}");
+        let stolen = fired.iter().any(|tag| {
+            tag == "delete-selected" || tag == "open-selected" || tag == "clear-selection"
+        });
+        expect(failures, !stolen, || {
+            format!("G6: 重命名输入框里按 {name} 触发了列表快捷键 {fired:?} —— KeyBinding 没在 enabled 上让位")
+        });
+    }
+
+    // Enter 必须交给输入框：提交重命名
+    hits.borrow_mut().clear();
+    press_key(&ui, '\n');
+    let submitted = hit_list(&hits);
+    expect(
+        failures,
+        submitted.iter().any(|t| t.starts_with("rename-submitted")),
+        || {
+            format!(
+                "G6: 重命名输入框里按 Enter 没有提交重命名（回调实测 {submitted:?}）\
+                 —— 按键被列表的 @keys(Return) 吃掉了"
+            )
+        },
+    );
+
+    // Esc 同理：必须是"取消重命名"，不是"清空选择"
+    hits.borrow_mut().clear();
+    press_key(&ui, '\u{001b}');
+    let cancelled = hit_list(&hits);
+    expect(
+        failures,
+        cancelled == vec!["rename-cancelled".to_string()],
+        || {
+            format!(
+            "G6: 重命名输入框里按 Esc 触发的回调实测 {cancelled:?}（期望 [\"rename-cancelled\"]）\
+             —— 按键被列表的 @keys(Escape) 吃掉了"
+        )
+        },
+    );
 }
