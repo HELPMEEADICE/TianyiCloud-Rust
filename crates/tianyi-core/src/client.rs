@@ -7,11 +7,15 @@ use crate::config::AppConfig;
 use crate::crypto;
 use crate::error::{Error, Result};
 use crate::models::*;
+use crate::retry;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::Client;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
+
+/// 浏览器 UA（天翼云接口对 UA 敏感，降级路径也必须保留）
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /// 天翼云盘常量
 pub mod consts {
@@ -34,6 +38,51 @@ pub mod consts {
     pub const USER_INVALID_OPEN_TOKEN: &str = "UserInvalidOpenToken";
 }
 
+/// 构建 API 请求客户端
+///
+/// 构建失败不再 panic。`default_headers` 里只有浏览器模拟用的 Accept / Referer，
+/// 真正决定请求能否通过校验的 `Date` / `SessionKey` / `Signature` 由
+/// [`TianyiClient::signature_header`] 逐请求注入，因此丢掉默认头不影响签名与加密
+/// 路径的正确性；仅 cookie 复用（登录态、验证码会话）能力下降，故降级时记 warn。
+/// 极端情况下再退到 reqwest 的默认客户端（该客户端内部的 TLS 初始化失败由 reqwest
+/// 自己决定，已无更低一层的降级空间）。
+fn build_http_client() -> Client {
+    let primary = Client::builder()
+        .user_agent(USER_AGENT)
+        .cookie_store(true)
+        .default_headers({
+            let mut h = reqwest::header::HeaderMap::new();
+            if let Ok(v) = reqwest::header::HeaderValue::from_str("application/json;charset=UTF-8")
+            {
+                h.insert(reqwest::header::ACCEPT, v);
+            }
+            if let Ok(v) = reqwest::header::HeaderValue::from_str(consts::WEB_URL) {
+                h.insert(reqwest::header::REFERER, v);
+            }
+            h
+        })
+        .timeout(Duration::from_secs(120))
+        .build();
+
+    match primary {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("build http client failed, fallback to minimal client: {e}");
+            match Client::builder()
+                .user_agent(USER_AGENT)
+                .timeout(Duration::from_secs(120))
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    log::warn!("build minimal http client failed, fallback to default: {e}");
+                    Client::new()
+                }
+            }
+        }
+    }
+}
+
 /// 天翼云盘 API 客户端
 pub struct TianyiClient {
     http: Client,
@@ -54,22 +103,7 @@ struct SessionCache {
 impl TianyiClient {
     /// 使用配置和账号创建客户端
     pub fn new(config: AppConfig, account: AccountConfig) -> Self {
-        let http = Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
-            .cookie_store(true)
-            .default_headers({
-                let mut h = reqwest::header::HeaderMap::new();
-                if let Ok(v) = reqwest::header::HeaderValue::from_str("application/json;charset=UTF-8") {
-                    h.insert(reqwest::header::ACCEPT, v);
-                }
-                if let Ok(v) = reqwest::header::HeaderValue::from_str(consts::WEB_URL) {
-                    h.insert(reqwest::header::REFERER, v);
-                }
-                h
-            })
-            .timeout(Duration::from_secs(120))
-            .build()
-            .expect("build http client");
+        let http = build_http_client();
         let session = SessionCache {
             token: account.token.clone(),
         };
@@ -240,7 +274,7 @@ impl TianyiClient {
                 {
                     return self.refresh_token().await;
                 }
-                return Err(Error::Api(er.message()));
+                return Err(Error::from_resp(&er));
             }
         }
 
@@ -283,10 +317,9 @@ impl TianyiClient {
 
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
             if er.has_error() {
-                return Err(Error::Login(format!(
-                    "token refresh failed: {}",
-                    er.message()
-                )));
+                // 保留结构化 errorCode：refreshToken 失效时上层据此判定需要重新登录
+                log::warn!("token refresh failed: {}", er.message());
+                return Err(Error::from_resp(&er));
             }
         }
 
@@ -310,8 +343,25 @@ impl TianyiClient {
 
     /// 发起带签名的请求，返回 JSON 文本（自动处理会话失效）
     ///
-    /// 参数以明文 query 形式发送，签名不含 params（与 OpenList 的文件操作一致）
+    /// 这是幂等 GET，失败时按 [`retry::RetryPolicy`] 做指数退避重试
+    /// （最多 3 次，退避 200/600/1800 ms ±20% 抖动）；每次重试都会重新生成
+    /// `Date` 与 `Signature`，避免签名时间戳过期。
     async fn signed_get_json(
+        &self,
+        url: &str,
+        params: HashMap<String, String>,
+        is_family: bool,
+    ) -> Result<String> {
+        retry::with_retry(&retry::RetryPolicy::default(), || {
+            self.signed_get_json_once(url, params.clone(), is_family)
+        })
+        .await
+    }
+
+    /// 单次带签名 GET（无重试，供 [`TianyiClient::signed_get_json`] 调用）
+    ///
+    /// 参数以明文 query 形式发送，签名不含 params（与 OpenList 的文件操作一致）
+    async fn signed_get_json_once(
         &self,
         url: &str,
         params: HashMap<String, String>,
@@ -351,16 +401,16 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!(
-                "http {status}: {}",
-                text.chars().take(500).collect::<String>()
-            )));
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                body: text.chars().take(500).collect::<String>(),
+            });
         }
 
         // 业务错误
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
             if er.has_error() {
-                return Err(Error::Api(er.message()));
+                return Err(Error::from_resp(&er));
             }
         }
         Ok(text)
@@ -393,15 +443,15 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!(
-                "http {status}: {}",
-                text.chars().take(500).collect::<String>()
-            )));
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                body: text.chars().take(500).collect::<String>(),
+            });
         }
 
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
             if er.has_error() {
-                return Err(Error::Api(er.message()));
+                return Err(Error::from_resp(&er));
             }
         }
         Ok(text)
@@ -437,15 +487,15 @@ impl TianyiClient {
         }
 
         if !status.is_success() {
-            return Err(Error::Api(format!(
-                "http {status}: {}",
-                text.chars().take(500).collect::<String>()
-            )));
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                body: text.chars().take(500).collect::<String>(),
+            });
         }
 
         if let Ok(er) = serde_json::from_str::<RespErr>(&text) {
             if er.has_error() {
-                return Err(Error::Api(er.message()));
+                return Err(Error::from_resp(&er));
             }
         }
         Ok(text)
@@ -482,7 +532,21 @@ impl TianyiClient {
     }
 
     /// 无签名 GET（返回原始响应 body，用于验证码图片等）
+    ///
+    /// 幂等 GET：失败时按 [`retry::RetryPolicy`] 做指数退避重试（最多 3 次）。
     pub async fn get_raw(&self, url: &str, query: HashMap<String, String>) -> Result<bytes::Bytes> {
+        retry::with_retry(&retry::RetryPolicy::default(), || {
+            self.get_raw_once(url, query.clone())
+        })
+        .await
+    }
+
+    /// 单次无签名 GET（无重试）
+    async fn get_raw_once(
+        &self,
+        url: &str,
+        query: HashMap<String, String>,
+    ) -> Result<bytes::Bytes> {
         let mut req = self.http.get(url);
         if !query.is_empty() {
             req = req.query(&query);
@@ -491,7 +555,13 @@ impl TianyiClient {
         let status = resp.status();
         let body = resp.bytes().await?;
         if !status.is_success() {
-            return Err(Error::Api(format!("http {status}")));
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                body: String::from_utf8_lossy(&body)
+                    .chars()
+                    .take(500)
+                    .collect::<String>(),
+            });
         }
         Ok(body)
     }
@@ -502,7 +572,13 @@ impl TianyiClient {
         let status = resp.status();
         let body = resp.bytes().await?;
         if !status.is_success() {
-            return Err(Error::Api(format!("http {status}")));
+            return Err(Error::HttpStatus {
+                status: status.as_u16(),
+                body: String::from_utf8_lossy(&body)
+                    .chars()
+                    .take(500)
+                    .collect::<String>(),
+            });
         }
         Ok(body)
     }
@@ -902,10 +978,13 @@ impl TianyiClient {
         static UPLOAD: OnceLock<Client> = OnceLock::new();
         UPLOAD.get_or_init(|| {
             Client::builder()
-                .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+                .user_agent(USER_AGENT)
                 .timeout(Duration::from_secs(48 * 60 * 60))
                 .build()
-                .expect("build upload client")
+                .unwrap_or_else(|e| {
+                    log::warn!("build upload client failed, fallback to default: {e}");
+                    Client::new()
+                })
         })
     }
 
@@ -920,5 +999,128 @@ impl TianyiClient {
             }),
             upload_base: std::sync::Mutex::new(self.upload_base.lock().unwrap().clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn test_client() -> TianyiClient {
+        TianyiClient::new(AppConfig::default(), AccountConfig::default())
+    }
+
+    /// 极简进程内 HTTP mock：前 `fail_count` 个请求返回 `fail_status`，
+    /// 之后返回 200 + `ok_body`。返回 (base_url, 已收到的请求计数)。
+    async fn spawn_mock_server(
+        fail_status: u16,
+        fail_count: usize,
+        ok_body: &'static str,
+    ) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock server");
+        let addr = listener.local_addr().expect("local addr");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_srv = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                let n = hits_srv.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    // GET 无 body，读到头部结束即可
+                    let mut head = Vec::new();
+                    let mut byte = [0u8; 1];
+                    for _ in 0..65536 {
+                        match sock.read(&mut byte).await {
+                            Ok(0) => break,
+                            Ok(_) => {
+                                head.push(byte[0]);
+                                if head.ends_with(b"\r\n\r\n") {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    let (status, reason, body) = if n < fail_count {
+                        (fail_status, "Error", "boom".to_string())
+                    } else {
+                        (200u16, "OK", ok_body.to_string())
+                    };
+                    let resp = format!(
+                        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    /// 两次 500 后成功：返回 Ok，且总尝试次数正好 3 次
+    #[tokio::test]
+    async fn test_signed_get_json_retries_5xx_then_succeeds() {
+        let (base, hits) = spawn_mock_server(500, 2, "{}").await;
+        let client = test_client();
+        let text = client
+            .signed_get_json(&format!("{base}/listFiles.action"), HashMap::new(), false)
+            .await
+            .expect("两次 500 后应成功");
+        assert_eq!(text, "{}");
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "总尝试次数必须是 3");
+    }
+
+    /// 400 业务错误：只尝试 1 次，错误保留结构化状态码
+    #[tokio::test]
+    async fn test_signed_get_json_does_not_retry_4xx() {
+        let (base, hits) = spawn_mock_server(400, usize::MAX, "{}").await;
+        let client = test_client();
+        let err = client
+            .signed_get_json(&format!("{base}/listFiles.action"), HashMap::new(), false)
+            .await
+            .expect_err("400 应失败");
+        assert!(
+            matches!(err, Error::HttpStatus { status: 400, .. }),
+            "实际错误: {err:?}"
+        );
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "4xx 只应尝试一次");
+    }
+
+    /// 会话失效走既有刷新链路，不重试
+    #[tokio::test]
+    async fn test_signed_get_json_does_not_retry_session_invalid() {
+        let (base, hits) =
+            spawn_mock_server(200, 0, "{\"errorMsg\":\"userSessionBO is null\"}").await;
+        let client = test_client();
+        let err = client
+            .signed_get_json(&format!("{base}/listFiles.action"), HashMap::new(), false)
+            .await
+            .expect_err("会话失效应报错");
+        assert!(err.is_session_invalid(), "实际错误: {err:?}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "会话失效不应重试");
+    }
+
+    /// get_raw 同样具备重试能力（429 两次后成功）
+    #[tokio::test]
+    async fn test_get_raw_retries_429_then_succeeds() {
+        let (base, hits) = spawn_mock_server(429, 2, "hello").await;
+        let client = test_client();
+        let body = client
+            .get_raw(&format!("{base}/picCaptcha.do"), HashMap::new())
+            .await
+            .expect("两次 429 后应成功");
+        assert_eq!(body.to_vec(), b"hello".to_vec());
+        assert_eq!(hits.load(Ordering::SeqCst), 3, "总尝试次数必须是 3");
     }
 }
