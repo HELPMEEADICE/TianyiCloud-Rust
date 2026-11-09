@@ -130,16 +130,60 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --locked
 
+  # ---------------------------------------------------------------- 单元测试 (Windows)
+  test-windows:
+    name: 单元测试 (windows-x64)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-test-windows
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  # ---------------------------------------------------------------- MSRV 校验
+  # 唯一能证明 Cargo.toml 里 rust-version 声明成立的地方。
+  # dtolnay/rust-toolchain 通过 RUSTUP_TOOLCHAIN 指定版本，优先于仓库根的
+  # rust-toolchain.toml，所以这里能稳定跑在 1.75.0 上。
+  msrv:
+    name: MSRV 校验 (1.92.0)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Linux GUI 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfontconfig1-dev libfreetype6-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@1.92.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-msrv
+
+      - name: cargo check (MSRV)
+        run: cargo check --workspace --all-targets --locked
+
   # ---------------------------------------------------------------- 汇总门禁
   ci:
     name: CI 汇总
     if: always()
-    needs: [fmt, clippy, check, test]
+    needs: [fmt, clippy, check, test, test-windows, msrv]
     runs-on: ubuntu-latest
     steps:
       - name: 检查各任务结果
         run: |
-          echo "fmt=${{ needs.fmt.result }} clippy=${{ needs.clippy.result }} check=${{ needs.check.result }} test=${{ needs.test.result }}"
+          echo "fmt=${{ needs.fmt.result }} clippy=${{ needs.clippy.result }} check=${{ needs.check.result }} test=${{ needs.test.result }} test-windows=${{ needs.test-windows.result }} msrv=${{ needs.msrv.result }}"
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
             echo "存在失败的任务" >&2
             exit 1
