@@ -256,13 +256,12 @@ ui/ 下 Slint Path 元素 0、旧 `Icons.` 全局 0、`glyph:` 0、`thickness` 0
 
 ## 8. Git 提交记录
 
+主提交（其余为文档与自检工具修正，完整列表见 `git log --oneline 258af66..HEAD`）：
+
 ```text
 08b6809  fix(ui): resolve navigation item rendering artifacts
 1d9082a  refactor(ui): migrate to Microsoft Fluent System Icons
 c2577be  test(ui): verify icon resources and layout behavior
-0c62cf9  docs: 记录图标系统迁移报告与第三方资源许可
-50267db  docs(ui): 按独立复核意见修正画布尺寸与占位语义注释
-（+ 本报告提交记录的更新提交）
 ```
 
 每个提交都可独立编译：`08b6809` 只动导航项（旧图标 API 下即可编译），
