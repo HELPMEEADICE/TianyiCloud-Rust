@@ -32,6 +32,18 @@ const TICK_MS: u64 = 200;
 const MAX_TRANSFER_ROWS: usize = 200;
 /// 登录页最多展示的已保存账号数
 const MAX_SAVED_ACCOUNTS: usize = 4;
+/// 同时真正在跑的任务数上限（任务级）
+///
+/// 这是"任务级"并发上限：与 `transfer.rs` 内部按 `thread_count` 做的**分片级**并发
+/// 是两层完全不同的控制——这里限制"同时有几个任务在传"，那里限制"单个任务内部开几个
+/// 分片"。tokio runtime 只有 4 个 worker（见 `backend.rs`），一口气放 20 个任务进去会
+/// 把登录、列目录这类轻请求挤在队尾，所以留出名额给交互请求。
+const MAX_CONCURRENT_TRANSFERS: usize = 3;
+/// 进度推送阈值（千分比：10‰ = 1 个百分点）
+///
+/// 低于这个幅度的进度变化不重建列表模型；200ms 一跳的定时器会把它们累积起来，
+/// 最多晚 1% 才刷一次屏，肉眼无感但省掉大量字符串格式化。
+const PROGRESS_PUBLISH_PERMILLE: u64 = 10;
 
 /// 登录通知器（向 UI 推送验证码 / 二维码状态）
 ///
@@ -140,6 +152,10 @@ fn rgba_to_slint_image(img: image::RgbaImage) -> slint::Image {
 /// 应用控制器
 pub struct Controller {
     ui: Weak<MainWindow>,
+    /// 创建控制器时的线程 id（`Controller::new` 在 UI 线程上调用）
+    ///
+    /// 用来判断"已经在 UI 线程上"的调用可以同步执行闭包，不必再排一次事件循环。
+    ui_thread: std::thread::ThreadId,
     backend: Arc<Backend>,
     store: AppStore,
     client: Mutex<Option<Arc<TianyiClient>>>,
@@ -188,6 +204,12 @@ pub struct Controller {
     dirty: Arc<AtomicBool>,
     /// 进度节流：task_id -> (最后采样字节, 最后采样时间 ms)
     rate_samples: Arc<Mutex<HashMap<u64, (u64, u64)>>>,
+    /// 任务级并发许可：拿到许可才真正开始传输，拿不到就停在 Pending 排队
+    transfer_permits: Arc<tokio::sync::Semaphore>,
+    /// 上次推给 UI 的传输快照（增量刷新的判据）
+    last_snapshot: Mutex<Vec<TransferSnapshot>>,
+    /// 强制推送一次：筛选器切换这类"快照里看不出来"的变化走这里
+    force_publish: AtomicBool,
 
     // ---------------- 直链 ----------------
     links: Mutex<Vec<DirectLink>>,
@@ -217,6 +239,7 @@ impl Controller {
         );
         let c = Arc::new(Controller {
             ui,
+            ui_thread: std::thread::current().id(),
             backend,
             store,
             client: Mutex::new(None),
@@ -240,6 +263,10 @@ impl Controller {
             controls: Mutex::new(HashMap::new()),
             dirty: Arc::new(AtomicBool::new(false)),
             rate_samples: Arc::new(Mutex::new(HashMap::new())),
+            transfer_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TRANSFERS)),
+            last_snapshot: Mutex::new(Vec::new()),
+            // 首帧必须推一次：此时 last_snapshot 还是空的，但显式置 true 更稳
+            force_publish: AtomicBool::new(true),
             links: Mutex::new(Vec::new()),
             theme_mode: Mutex::new(theme_mode),
             notice_slot: Arc::new(Mutex::new(NoticeSlot::default())),
@@ -590,6 +617,9 @@ impl Controller {
         this.ui_set(move |ui| {
             ui.on_transfer_filter_changed(move |_idx| {
                 let c = c.clone();
+                // 筛选器变化不体现在任务快照里（快照只记 id/状态/进度），必须强制
+                // 推一次，否则用户切页签会继续看到上一次筛选的旧列表
+                c.force_publish.store(true, Ordering::SeqCst);
                 c.refresh_transfers();
             });
         });
@@ -740,7 +770,17 @@ impl Controller {
     // ==================================================================
     // 基础设施
     // ==================================================================
+    /// 在 UI 线程上执行一段 UI 操作
+    ///
+    /// 快路径：当前就在 UI 线程上（`tick()`、`on_*` UI 回调、`poll_system_theme()`、以及
+    /// 构造期的 `bind_ui`）时**同步**执行。原先一律 `invoke_from_event_loop`，等于白送
+    /// 一帧延迟，还会打乱顺序（notice 之后紧接着的"关闭"动作可能被重排到下一帧）。
+    /// 跨线程调用（tokio 任务、拖拽 winit 回调等）仍然排队投递。
     fn ui_set<F: FnOnce(&MainWindow) + Send + 'static>(&self, f: F) {
+        if let Some(ui) = self.upgrade_on_ui_thread() {
+            f(&ui);
+            return;
+        }
         let ui = self.ui.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = ui.upgrade() {
@@ -749,9 +789,19 @@ impl Controller {
         });
     }
 
+    /// 当前线程就是 UI 线程时返回强引用，否则返回 None（需要跨线程投递）
+    fn upgrade_on_ui_thread(&self) -> Option<MainWindow> {
+        if !should_apply_inline(std::thread::current().id(), self.ui_thread) {
+            return None;
+        }
+        // 构造期 UI 已经完全建好（`MainWindow::new()` 先于 `Controller::new`），
+        // 所以这里 upgrade 一定能拿到窗口；拿不到就退回投递路径，不会静默丢操作。
+        self.ui.upgrade()
+    }
+
     fn set_ui_state<F: FnOnce(&MainWindow) + Send + 'static>(&self, f: F) {
-        let ui = self.ui.clone();
-        invoke_ui(&ui, move |win| f(win));
+        // 与 ui_set 同一条路径：UI 线程同步执行，其它线程投递到事件循环
+        self.ui_set(f);
     }
 
     fn client(&self) -> Option<Arc<TianyiClient>> {
@@ -2246,12 +2296,19 @@ impl Controller {
             self.notice("error", "请先登录");
             return;
         }
-        // 去重：同一批里重复出现的路径只上传一次（避免拖拽多文件时重复入队）
-        let mut seen = std::collections::HashSet::new();
+        // 去重：同一批里重复出现的路径只上传一次（避免拖拽多文件时重复入队）。
+        //
+        // 这里刻意不再用 `std::fs::canonicalize`：它对每个路径都要摸一次文件系统
+        // （逐级 stat + 解析符号链接），而这段代码跑在 UI 线程上，拖入几百个文件时
+        // 会直接掉帧。改成纯字符串规整（见 `dedupe_key`）：相对路径按当前目录补全、
+        // 去掉 `.`、折叠 `..`、Windows 下大小写不敏感。
+        // 取舍：不解析符号链接，所以"同一个文件的两个软链"会被当成两个任务；拖拽
+        // 场景里几乎不出现，换来的是整批路径只发生一次 `current_dir()` 系统调用。
+        let base = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let mut seen = HashSet::new();
         let mut unique = Vec::new();
         for p in paths {
-            let key = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
-            if seen.insert(key) {
+            if seen.insert(dedupe_key(&p, &base)) {
                 unique.push(p);
             }
         }
@@ -2266,8 +2323,10 @@ impl Controller {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "file".to_string());
+            // 单文件用 metadata（O(1)）；目录的递归统计搬到 blocking 线程池去做，
+            // 入队时先记 0，算完再回填——绝不在 UI 线程上跑 `read_dir` 递归。
             let size = if is_dir {
-                dir_size(&path)
+                0
             } else {
                 std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
             };
@@ -2276,9 +2335,10 @@ impl Controller {
                 direction: TaskDirection::Upload,
                 file_name: name,
                 file_size: size,
-                local_path: path,
+                local_path: path.clone(),
                 remote_folder_id: folder_id.to_string(),
-                status: TaskStatus::Running,
+                // 先 Pending：拿到任务级并发许可、真正开始传输时才推进到 Running
+                status: TaskStatus::Pending,
                 progress: 0.0,
                 bytes_done: 0,
                 speed: 0,
@@ -2287,11 +2347,37 @@ impl Controller {
                 error: None,
                 created_at: now_secs(),
             });
+            if is_dir {
+                self.spawn_dir_size(task_id, path);
+            }
             self.spawn_transfer(task_id);
         }
         self.set_ui_state(|ui| ui.set_transfer_panel_open(true));
         self.refresh_transfers();
         self.notice("info", format!("已加入 {count} 个上传任务"));
+    }
+
+    /// 目录大小统计：扔进 tokio 的 blocking 线程池，算完回填并置脏
+    ///
+    /// 用 `tokio::task::spawn_blocking` 而不起裸线程：复用 runtime 的阻塞线程池，
+    /// 进程退出时能被统一回收，也不会因为连续拖入几十个目录就炸出几十个线程。
+    fn spawn_dir_size(self: &Arc<Self>, task_id: u64, path: PathBuf) {
+        let this = Arc::clone(self);
+        self.backend.spawn(move || async move {
+            match tokio::task::spawn_blocking(move || dir_size(&path)).await {
+                Ok(size) => this.set_task_size(task_id, size),
+                Err(e) => log::warn!("目录大小统计失败（任务 {task_id}）：{e}"),
+            }
+        });
+    }
+
+    /// 只更新任务大小
+    ///
+    /// 直接复用 `TaskManager::update`（已有 API，自带落盘），既不新增 `task.rs` 的
+    /// 接口，也不需要维护"大小覆盖层"——任务表仍然是唯一事实来源。
+    fn set_task_size(&self, task_id: u64, size: u64) {
+        self.tasks.update(task_id, |t| t.file_size = size);
+        self.dirty.store(true, Ordering::SeqCst);
     }
 
     fn handle_files_dropped(self: &Arc<Self>, paths: Vec<PathBuf>) {
@@ -2310,23 +2396,64 @@ impl Controller {
     // 传输任务
     // ==================================================================
     /// 启动（或恢复）一个任务的实际传输
+    ///
+    /// 真正开始传输前先抢一个任务级并发许可（`MAX_CONCURRENT_TRANSFERS`）；抢不到就
+    /// 停在 `Pending` 状态排队（UI 上能看到"等待中"），而不是所有任务一起 `Running`。
+    /// 许可由 `OwnedSemaphorePermit` 持有，成功/失败/取消/panic 都是 drop，出口唯一。
+    ///
+    /// 注意这是**任务级**并发上限，与 `transfer.rs` 内部按 `thread_count` 做的分片级
+    /// 并发是两层控制，互不覆盖。
     fn spawn_transfer(self: &Arc<Self>, task_id: u64) {
         let Some(task) = self.tasks.get(task_id) else {
             return;
         };
         if self.controls.lock().unwrap().contains_key(&task_id) {
-            return; // 已有存活的控制句柄，说明任务还在跑（可能是暂停挂起）
+            return; // 已有存活的控制句柄，说明任务还在跑（可能是暂停挂起或正在排队）
         }
-        // Pending / 重试后重新开始；已是 Running 时 transition 返回 false 也无妨
-        let _ = self.tasks.transition(task_id, TaskStatus::Running);
         let control = TransferControl::new();
         self.controls
             .lock()
             .unwrap()
             .insert(task_id, control.clone());
+        let permits = Arc::clone(&self.transfer_permits);
         let this = Arc::clone(self);
         self.backend.spawn(move || async move {
+            // acquire_owned：许可的生命周期与这个任务绑定，任务结束（future 被 drop）
+            // 时自动归还，不需要手工计数
+            let permit = match Arc::clone(&permits).acquire_owned().await {
+                Ok(p) => p,
+                Err(_) => {
+                    // 信号量随 runtime 销毁，正常路径走不到；兜底避免任务永远 Pending
+                    this.controls.lock().unwrap().remove(&task_id);
+                    this.finish_task(
+                        task_id,
+                        TaskStatus::Failed,
+                        Some("调度器已关闭".to_string()),
+                    );
+                    return;
+                }
+            };
+            let status = this.tasks.get(task_id).map(|t| t.status);
+            if control.is_canceled()
+                || !matches!(
+                    status,
+                    Some(TaskStatus::Pending) | Some(TaskStatus::Running)
+                )
+            {
+                if status == Some(TaskStatus::Paused) {
+                    // 排队期间被暂停：摘掉控制句柄，用户点"继续"会走"会话已丢失"的分支
+                    // 重新排队，而不是对着一个从未启动的任务假 Running
+                    this.controls.lock().unwrap().remove(&task_id);
+                }
+                drop(permit);
+                return;
+            }
+            let _ = this.tasks.transition(task_id, TaskStatus::Running);
+            this.dirty.store(true, Ordering::SeqCst);
             this.run_transfer(task, control).await;
+            // 传输结束（完成/暂停/取消/失败）后把名额让给排队中的任务
+            drop(permit);
+            this.dirty.store(true, Ordering::SeqCst);
         });
     }
 
@@ -2636,12 +2763,22 @@ impl Controller {
     }
 
     /// UI 定时器调用：把脏数据刷到界面（200ms 节流）
+    ///
+    /// `dirty` 的语义是"可能变了"：先 `swap(false)` 原子取走，再看快照决定推不推。
+    /// 取走不会丢信息——真正的判据是 `refresh_transfers` 里的快照比较，脏标记只负责
+    /// 省掉一次全量 `tasks.list()`；反过来，即使这一跳没推，下一次置脏也会重新评估。
     pub fn tick(self: &Arc<Self>) {
         if self.dirty.swap(false, Ordering::SeqCst) {
             self.refresh_transfers();
         }
     }
 
+    /// 推送传输列表（增量）
+    ///
+    /// 200ms 一跳、任务上百时，每次都全量 `list()` + 排序 + 构造两个模型是白烧 CPU，
+    /// 而且 Slint 侧还会跟着重排。这里先算轻量快照（id / 状态 / 进度度量），只有
+    /// 状态变化、任务集合变化、或进度跨过 `PROGRESS_PUBLISH_PERMILLE` 才真正重建。
+    /// 筛选器切换这类快照里看不出来的变化由 `force_publish` 强制推一次。
     fn refresh_transfers(self: &Arc<Self>) {
         let filter = self
             .ui
@@ -2650,6 +2787,15 @@ impl Controller {
             .unwrap_or(0);
         let mut tasks = self.tasks.list();
         tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(b.id.cmp(&a.id)));
+        let snapshot = transfer_snapshot(&tasks);
+        let force = self.force_publish.swap(false, Ordering::SeqCst);
+        {
+            let mut prev = self.last_snapshot.lock().unwrap();
+            if !force && !needs_publish(&prev, &snapshot) {
+                return;
+            }
+            *prev = snapshot;
+        }
         let active: Vec<TransferEntry> = tasks
             .iter()
             .filter(|t| {
@@ -3058,6 +3204,92 @@ fn dir_size(root: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+/// 是否可以在当前线程上同步执行 UI 闭包
+///
+/// 只做一件事：比较线程 id。抽成纯函数是为了能单测——真正的线程分支没法在单测里
+/// 造出一个 Slint 窗口。
+fn should_apply_inline(current: std::thread::ThreadId, ui_thread: std::thread::ThreadId) -> bool {
+    current == ui_thread
+}
+
+/// 路径去重键：完全不做文件系统访问的规整字符串
+///
+/// 规则：相对路径按 `base` 补全 → 丢掉 `.`、折叠 `..`（绝不越过根/盘符）→
+/// Windows 下统一小写（NTFS 默认大小写不敏感）。不解析符号链接也不解析短名，
+/// 这是 `upload_paths` 里显式接受的取舍：宁可漏掉极端去重，也不在 UI 线程上访问磁盘。
+fn dedupe_key(path: &std::path::Path, base: &std::path::Path) -> String {
+    use std::path::Component;
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for comp in absolute.components() {
+        match comp {
+            // Windows 盘符/UNC 前缀：作成一个不可折叠的段
+            Component::Prefix(p) => parts.push(format!("<{}>", p.as_os_str().to_string_lossy())),
+            // 根用空串占位，`..` 折叠时靠它挡住"吃掉根"
+            Component::RootDir => parts.push(String::new()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.last().map(|s| !s.is_empty()).unwrap_or(false) {
+                    parts.pop();
+                }
+            }
+            Component::Normal(n) => parts.push(n.to_string_lossy().to_string()),
+        }
+    }
+    let joined = parts.join("/");
+    if cfg!(windows) {
+        joined.to_lowercase()
+    } else {
+        joined
+    }
+}
+
+/// 传输列表快照元素：(任务 id, 状态, 进度度量)
+type TransferSnapshot = (u64, TaskStatus, u64);
+
+/// 进度度量：大小已知时用千分比（1‰ = 0.1%），未知时退化成已传字节
+///
+/// 目录大小还在后台统计时 `file_size == 0`，百分比恒为 0；如果不换成字节数，这类
+/// 任务的进度就永远触发不了推送，UI 会卡在 0。
+fn progress_marker(t: &Task) -> u64 {
+    if t.file_size == 0 {
+        t.bytes_done
+    } else {
+        t.bytes_done.min(t.file_size) * 1000 / t.file_size
+    }
+}
+
+/// 生成快照并按 id 排序（任务表顺序会随新增/删除变化，排序后才能逐位比较）
+fn transfer_snapshot(tasks: &[Task]) -> Vec<TransferSnapshot> {
+    let mut snap: Vec<TransferSnapshot> = tasks
+        .iter()
+        .map(|t| (t.id, t.status, progress_marker(t)))
+        .collect();
+    snap.sort_unstable_by_key(|s| s.0);
+    snap
+}
+
+/// 新快照是否需要推给 UI
+///
+/// 推送条件：任务集合变化（数量不同 / id 不同 / 顺序按 id 归一后不同）、任一任务状态
+/// 变化、进度回退（重试归零），或进度前进超过 `PROGRESS_PUBLISH_PERMILLE`。
+fn needs_publish(prev: &[TransferSnapshot], next: &[TransferSnapshot]) -> bool {
+    if prev.len() != next.len() {
+        return true; // 任务新增 / 移除
+    }
+    prev.iter().zip(next.iter()).any(|(a, b)| {
+        a.0 != b.0
+            || a.1 != b.1
+            // 先判回退（重试把进度清零必须立刻推），再判是否跨过阈值
+            || b.2 < a.2
+            || b.2 - a.2 > PROGRESS_PUBLISH_PERMILLE
+    })
 }
 
 /// 平台 UI 字体
@@ -3592,5 +3824,133 @@ mod tests {
         // 空 id = 没有任何行处于输入态，行内 TouchArea 恢复可用
         assert!(renaming_id.is_empty());
         assert_eq!(status, "已取消重命名");
+    }
+
+    // ---------------- UI 线程直通 ----------------
+
+    #[test]
+    fn should_apply_inline_only_on_ui_thread() {
+        let ui = std::thread::current().id();
+        // 同一线程：同步执行
+        assert!(should_apply_inline(ui, ui));
+        let other = std::thread::spawn(|| std::thread::current().id())
+            .join()
+            .expect("辅助线程应正常结束");
+        assert_ne!(other, ui, "不同线程的 id 必须不同");
+        // 后台线程 ← UI 线程：走投递
+        assert!(!should_apply_inline(other, ui));
+        // 反向也必须判否，判断不能是"单边"的
+        assert!(!should_apply_inline(ui, other));
+    }
+
+    // ---------------- 上传去重键 ----------------
+
+    #[test]
+    fn dedupe_key_normalizes_paths_without_touching_disk() {
+        let base = std::env::temp_dir();
+        let dir = base.join("tianyi-dedupe");
+        let plain = dir.join("a.bin");
+        // `.` 与 `..` 都被折叠，等价路径得到同一个键
+        assert_eq!(
+            dedupe_key(&dir.join("sub").join("..").join("a.bin"), &base),
+            dedupe_key(&plain, &base)
+        );
+        // 相对路径按 base 补全
+        assert_eq!(
+            dedupe_key(std::path::Path::new("./a.bin"), &dir),
+            dedupe_key(&plain, &dir)
+        );
+        // 不同文件仍然不同键（去重不能过度）
+        assert_ne!(
+            dedupe_key(&plain, &base),
+            dedupe_key(&dir.join("b.bin"), &base)
+        );
+        if cfg!(windows) {
+            // NTFS 默认大小写不敏感：同一路径的两种写法必须去重
+            assert_eq!(
+                dedupe_key(&base.join("MiXeD.TXT"), &base),
+                dedupe_key(&base.join("mixed.txt"), &base)
+            );
+            // `..` 不能吃掉盘符/根
+            assert_eq!(
+                dedupe_key(std::path::Path::new("C:/../../a.bin"), base.as_path()),
+                dedupe_key(std::path::Path::new("C:/a.bin"), base.as_path()),
+                "`..` 折叠不能越过根"
+            );
+        }
+    }
+
+    // ---------------- 传输列表增量刷新 ----------------
+
+    #[test]
+    fn needs_publish_ignores_sub_one_percent_progress() {
+        let prev = [(1_u64, TaskStatus::Running, 100_u64)];
+        // 与上次完全一致
+        assert!(!needs_publish(&prev, &prev));
+        // 0.5 个百分点（5‰）低于 1% 阈值
+        assert!(!needs_publish(&prev, &[(1, TaskStatus::Running, 105)]));
+        // 恰好 1%（10‰）：阈值是"超过"，边界上不推
+        assert!(!needs_publish(&prev, &[(1, TaskStatus::Running, 110)]));
+    }
+
+    #[test]
+    fn needs_publish_fires_on_significant_progress() {
+        let prev = [(1_u64, TaskStatus::Running, 100_u64)];
+        // 1.5 个百分点（15‰）超过阈值
+        assert!(needs_publish(&prev, &[(1, TaskStatus::Running, 115)]));
+        // 进度回退（重试把 progress 清零）必须立刻推，否则 UI 会停在旧进度
+        assert!(needs_publish(&prev, &[(1, TaskStatus::Running, 0)]));
+    }
+
+    #[test]
+    fn needs_publish_fires_on_status_and_task_set_change() {
+        // 状态变化（哪怕进度没动）
+        assert!(needs_publish(
+            &[(1, TaskStatus::Running, 500)],
+            &[(1, TaskStatus::Paused, 500)]
+        ));
+        // 新增任务
+        assert!(needs_publish(
+            &[(1, TaskStatus::Running, 500)],
+            &[(1, TaskStatus::Running, 500), (2, TaskStatus::Pending, 0)]
+        ));
+        // 移除任务
+        assert!(needs_publish(
+            &[(1, TaskStatus::Running, 500), (2, TaskStatus::Pending, 0)],
+            &[(1, TaskStatus::Running, 500)]
+        ));
+        // 数量不变但 id 换了（删一个加一个）
+        assert!(needs_publish(
+            &[(1, TaskStatus::Running, 500)],
+            &[(2, TaskStatus::Running, 500)]
+        ));
+    }
+
+    #[test]
+    fn progress_marker_and_snapshot_are_order_independent() {
+        let mut a = task(1, TaskDirection::Download, TaskStatus::Running);
+        a.file_size = 200;
+        a.bytes_done = 50;
+        assert_eq!(progress_marker(&a), 250, "25.0% 应换算成 250‰");
+
+        // 目录大小还在后台统计（file_size == 0）：退化成已传字节，仍能反映进度
+        let mut b = task(2, TaskDirection::Upload, TaskStatus::Running);
+        b.file_size = 0;
+        b.bytes_done = 4096;
+        assert_eq!(progress_marker(&b), 4096);
+
+        // 超过总量的脏数据按总量截断，不越 1000‰
+        let mut c = task(3, TaskDirection::Download, TaskStatus::Running);
+        c.file_size = 100;
+        c.bytes_done = 500;
+        assert_eq!(progress_marker(&c), 1000);
+
+        // 快照按 id 排序：任务表顺序变化不应造成"伪变化"
+        let sorted = transfer_snapshot(&[a.clone(), b.clone(), c.clone()]);
+        assert_eq!(
+            sorted.iter().map(|s| s.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(transfer_snapshot(&[c, a, b]), sorted);
     }
 }
