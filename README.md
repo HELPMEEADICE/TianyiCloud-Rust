@@ -39,7 +39,10 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 - 浅色 / 深色 / 跟随系统三态主题，跟随系统时轮询系统偏好并实时切换
 - 可折叠 NavigationView（窗口 < 1040px 自动收窄为图标栏，折叠态有 Tooltip）
 - 可展开的传输抽屉（默认收起，状态栏有实时任务计数）、统一 InfoBar 状态反馈、轻量 Tooltip 浮层
-- 零图标字体：全部图标为 24×24 矢量路径，随主题着色、任意 DPI 清晰
+- 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
+  编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
+  详见 [ICON_SYSTEM_MIGRATION.md](ICON_SYSTEM_MIGRATION.md) 与
+  `crates/tianyi-app/ui/assets/icons/SOURCES.md`
 - 支持“减少动画”，关闭全部过渡动画
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
 
@@ -70,12 +73,15 @@ crates/
 │       ├── config.rs          # 账号/配置持久化（%APPDATA%/tianyi-cloud-rust）
 │       └── file.rs            # 文件类型识别、容量/时间/进度格式化
 └── tianyi-app/                # Slint 桌面 UI
+    ├── examples/              # ui_preview（界面截图）、icon_sheet（图标总览）
     ├── ui/
     │   ├── main.slint         # 主窗口：路由、导航、抽屉、右键菜单、Tooltip 浮层
     │   ├── types.slint        # 共享数据结构与全局状态（DragOutApi / TooltipState）
     │   ├── theme/
-    │   │   ├── tokens.slint   # 设计令牌（颜色/圆角/间距/字号/动效）
-    │   │   └── icons.slint    # 矢量图标字形表 + Icon 组件
+    │   │   ├── tokens.slint   # 设计令牌（颜色/圆角/间距/字号/图标尺寸/动效）
+    │   │   └── icons.slint    # 图标注册表（IconName 枚举 + IconAssets + Icon 组件）
+    │   ├── assets/icons/      # 微软官方 Fluent SVG（112 个）+ LICENSE + SOURCES.md
+    │   ├── dev/               # icon-sheet.slint：图标总览（自检用，不进主界面）
     │   ├── components/        # 按钮、输入框、进度条、导航项、文件行、传输行、InfoBar、空状态…
     │   └── pages/             # login / cloud / transfers / links / settings
     └── src/
@@ -142,3 +148,8 @@ cargo build --release
 ## 许可证
 
 GPLv3
+
+第三方资源：
+- 应用内全部 UI 图标来自 [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons)，
+  许可证 MIT，原文见 `crates/tianyi-app/ui/assets/icons/LICENSE`；
+  逐图标来源与上游提交号见同目录 `SOURCES.md`。
