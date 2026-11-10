@@ -43,6 +43,9 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
   详见 [docs/ICON_SYSTEM_MIGRATION.md](docs/ICON_SYSTEM_MIGRATION.md) 与
   `crates/tianyi-app/ui/assets/icons/SOURCES.md`
+- 动效统一走 `Theme.motion-*` 令牌（90 / 180 / 240ms）：浮层入场、页面切换淡入、传输抽屉展开、
+  状态切换淡入与控件状态过渡；「减少动画」开关会把全部动效时长归零。
+  配方与取舍见 [docs/MOTION_REPORT.md](docs/MOTION_REPORT.md)
 - 支持“减少动画”，关闭全部过渡动画
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
 

@@ -21,8 +21,12 @@
 - **日志落盘**：日志同时写入 stderr 与配置目录下的 `logs/tianyi-cloud.YYYY-MM-DD.log`，按本地日期滚动并保留 7 天；写盘失败自动退化为仅 stderr。设置页「关于」分组新增日志目录行（打开 / 复制）。
 - **直链页增强**：直链行单击即在默认浏览器中打开，页面顶部新增「复制全部」（按行拼接后一次复制）。
 - **本轮优化报告**：`docs/OPTIMIZATION_REPORT.md`，含缺陷清单、验证方式与自我修正记录。
+- **界面动效层（对齐 Fluent / Win11）**：浮层入场淡入（对话框、账号菜单、右键菜单、Toast、Tooltip）、页面切换淡入转场、传输抽屉拉帘式展开、加载/空/错误状态淡入，并补齐控件状态过渡（复选框勾选与描边、开关滑块配色、导航项文字、分段控件文字、菜单行 hover）。所有动效统一走 `Theme.motion-fast/normal/slow`（90 / 180 / 240ms），受「减少动画」开关全量归零。
+- **本轮动效报告**：`docs/MOTION_REPORT.md`，含两条入场配方、为什么 `init` 里抬值不产生动画（Slint 属性惰性求值的实测结论）、验证记录与已知取舍。
 
 ### Changed
+
+- **预览采图口径**：`examples/ui_preview.rs` 不再"固定 sleep 260ms 后推进一次"，改为"先真绘一帧 → 循环（等一帧 + 推进定时器 + 绘制）直到没有活跃动画"，`animation-tick()` 驱动的 spinner/进度条场景用 1s 墙钟上限兜底。旧写法会把"下一帧才触发"的入场动效卡在起始帧，采出半透明/空白图。
 
 - **常规构建不再编译 icon-sheet 开发组件**：图标总览改为 `icon-sheet` feature 门控（`cargo build --features icon-sheet --example icon_sheet`），日常构建和 CI 的编译时间/体积不再包含这块开发界面。
 - **引入 `rust-toolchain.toml` 并校准 MSRV 声明**：`rust-version` 由 1.75 修正为 1.92，依据 slint 1.17.1 自身声明的最低版本；此前声明的 1.75 无法成立。
