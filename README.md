@@ -109,8 +109,12 @@ cargo build --release
 
 ## 测试与门禁
 
-- **单元测试**：`cargo test --workspace`。除核心库的持久化/任务状态机测试外，UI 层还有一组基于
-  Slint 测试后端的**几何断言**（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局尺寸。
+- **单元测试**：`cargo test --workspace`，当前 **126 条**（app 61 / core 62 / 集成 3）。其中 UI 层有
+  **8 个 `#[test]`** 基于 Slint 测试后端（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局几何、
+  控件可访问语义与键盘交互：1 个聚合的几何断言 + 7 条独立断言（批量栏可读名、登录输入跨模式留存、
+  Toast 不压状态栏、模态焦点闭包、选中行视口跟随、切页收起 Tooltip、方向键移动选择）。
+  测试后端用线程局部哨兵而非进程级初始化，多个 `#[test]` 因此可以并行。
+- **视觉基线**：`screenshots/after/` 共 **25 张**，由 `examples/ui_preview.rs` 采集，逐通道比对（`docs/ROUND3_REPORT.md` §4）。
 - **代码门禁**：`cargo fmt --all -- --check` 与 `cargo clippy --workspace --all-targets --locked -- -D warnings`
   在 CI 中都是硬门禁（`ci` 汇总作业会因此失败）；`cargo check --workspace --all-targets` 覆盖三平台。
 - **本机（MSYS2 ucrt64）跑 clippy**：本机没有 rustup/`link.exe`，`cargo clippy` 会转发到 msvc 工具链而失败，
@@ -156,7 +160,10 @@ cargo build --release
 
 - **分享链接**：客户端只实现了“解析文件下载直链”，没有实现分享链接的创建/管理接口，因此导航项与页面命名为“下载直链”，不展示与能力不符的功能。
 - **多选**：支持单选、Ctrl+单击逐项多选、Shift+单击范围选择与 Ctrl+A 全选（选中集合以控制器为唯一事实来源）。
-- **键盘可达性**：按钮、图标按钮、导航项、菜单项、复选框、开关、分段控件均可 Tab 聚焦，Space/Enter 触发，且只在键盘操作时显示焦点环；文件列表支持 F2/Delete/F5/Alt+←/Ctrl+A/Ctrl+F/Esc。文本输入、列表行、对话框与搜索框尚未纳入焦点体系（见 `docs/OPTIMIZATION_REPORT.md` §7）。
+- **键盘可达性**：按钮、图标按钮、导航项、菜单项、复选框、开关、分段控件均可 Tab 聚焦，Space/Enter 触发，且只在键盘操作时显示焦点环；文件列表支持 ↑↓ / Home / End / PageUp / PageDown 移动选择、Shift 扩选（选中行自动滚入视口），以及 F2/Delete/F5/Alt+←/Ctrl+A/Ctrl+F/Esc；对话框打开时背景控件退出 Tab 序列、Tab 在对话框内循环；右键菜单可 ↑↓ 高亮 + Enter 触发；搜索态可按 Esc 退出。**仍未覆盖**：账号菜单没有 Tab 循环、右键菜单按 Tab 仍可能先跳到文件列表（键盘路径实际是方向键 + Enter）、传输行与直链行内部按钮的 Tab 顺序未验证，且**未做真实读屏软件（NVDA / 讲述人）实测**——a11y 断言读的是 accesskit 暴露的同一层，不等价于实测（见 `docs/ROUND3_REPORT.md` §7）。
+- **Tooltip 残留**：归属键已唯一化，并加了「切页」与「四个 `ListView` 的 `viewport-y` 变化」两个清零点；但指针静止、行被销毁且不滚动时仍可能残留（没有信号可监，已权衡不做「指针位置 × 归属矩形」的复杂方案）。
+- **960px 断点跳变**：窗口 959→960 时导航从折叠变为展开，内容区宽度反而从 903px 降到 712px，于是 960–1007 区间比 959px 更窄（工具栏丢失标签）。本轮未改断点——改它会连带作废 `detail-level` 的三档断言，属单独一轮的响应式重标定。
+- **配置降级未实跑**：配置目录不可写时退到 `%TEMP%\tianyi-cloud-fallback`，日志随之同源；但 Windows 上 `dirs::config_dir()` 走 `SHGetKnownFolderPath`、不读 `APPDATA` 环境变量，无法强制触发该分支，目前只有单测 + 代码链覆盖。
 - **Mica / Acrylic**：未引入 Windows App SDK，窗口背景为纯色（Mica 需平台 API 且跨平台不可用），保留系统原生标题栏以保证拖动/贴边/双击最大化/DPI 缩放在所有场景可靠。
 - **拖出下载**仅 Windows 实现；Linux/macOS 上会在状态栏提示不支持。
 - 极端情况下（进程被强制结束）`.part` 文件可能残留，下次下载同文件时会从合法前缀继续。

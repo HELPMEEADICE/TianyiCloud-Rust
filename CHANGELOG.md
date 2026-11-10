@@ -23,6 +23,14 @@
 - **本轮优化报告**：`docs/OPTIMIZATION_REPORT.md`，含缺陷清单、验证方式与自我修正记录。
 - **界面动效层（对齐 Fluent / Win11）**：浮层入场淡入（对话框、账号菜单、右键菜单、Toast、Tooltip）、页面切换淡入转场、传输抽屉拉帘式展开、加载/空/错误状态淡入，并补齐控件状态过渡（复选框勾选与描边、开关滑块配色、导航项文字、分段控件文字、菜单行 hover）。所有动效统一走 `Theme.motion-fast/normal/slow`（90 / 180 / 240ms），受「减少动画」开关全量归零。
 - **本轮动效报告**：`docs/MOTION_REPORT.md`，含两条入场配方、为什么 `init` 里抬值不产生动画（Slint 属性惰性求值的实测结论）、验证记录与已知取舍。
+- **日志单日滚动上限**：单日日志超过 **8 MiB** 就滚成 `.log.1`，历史逐级后移、最多保留 `.log.1/.2/.3` 三份；`parse_log_date` 扩展到识别 `.log.N`，滚动分段与主文件同属一天、一起按 7 天保留期清理（否则分段会绕过保留期永久堆积）。
+- **可访问性（第三层：键盘可用）**：文件列表支持 ↑↓ / Home / End / PageUp / PageDown 移动选择、Shift 扩选，并用 `selection-index` 驱动 `ListView.viewport-y`，选中行始终可见。
+- **文件行暴露 `list-item` 语义**：`FileRow` 补上「名称 + 大小 · 修改时间 · 类型」描述与默认动作，读屏不再把文件列表读成空列表。
+- **模态焦点闭包**：新增 `ModalsApi.blocking` 与 `ActivateScope.enabled`，对话框/浮层打开时背景控件退出 Tab 序列，对话框内 Tab 循环不再把焦点漏给背景导航项。
+- **右键菜单键盘导航**：↑↓ 移动高亮、Enter 触发，初始 `ctx-highlight: -1`，打开瞬间不产生视觉变化。
+- **七条独立 UI 断言**：`crates/tianyi-app/src/ui_tests.rs` 新增 7 个独立 `#[test]`（`check_batch_bar_a11y` / `check_login_input_survives_mode_switch` / `check_toast_clears_status_bar` / `check_dialog_focus_closure` / `check_selection_index_brings_row_into_view` / `check_tooltip_clears_on_page_switch` / `check_arrow_key_moves_selection`），失败时测试名本身就是结论，不必从汇总输出里倒推红的是哪一条。
+- **三个视觉场景与 25 张基线**：新增 `23-cloud-narrow-actions`（960×760）、`24-cloud-inline-error`（1180×760）、`25-login-invalid`（900×760），`screenshots/after/` 由 22 张增至 25 张。
+- **本轮优化报告**：`docs/ROUND3_REPORT.md`，含缺陷清单、五类验证方式、已知偏差与残余限制。
 
 ### Changed
 
@@ -39,6 +47,11 @@
 - **性能：传输列表增量刷新**：改为快照比对后再重建模型（进度变化超过 1% 才推送），切换筛选项强制推送一次。
 - **性能：任务级并发上限**：同时进行的传输任务最多 3 个，超出的保持排队状态（与分片级并发是两层控制）。
 - **设置页「并发分片数」改为可编辑**：−/数值/+ 步进器，范围 1..=8，写回配置并对新任务生效；界面数字恒等于真正生效的值。
+- **焦点 Scope 样板抽成 `ActivateScope`**：6 个控件里逐字同构的 FocusScope 样板收敛到 `components/activate-scope.slint`，`focus-on-click: false` 由 9 处降到 4 处（1 处唯一实现 + 3 处语义不同的例外，例外就地注明不套用的理由），避免以后任一处被改回默认值就静默复发「单击要点第二次」。
+- **删除 `FluentInfoBar` 死组件**：`components/info-bar.slint`（75 行）零引用，直接删除；`pages/cloud.slint` 的两处提示条因此仍是手写实现，取舍见 `docs/ROUND3_REPORT.md` §5。
+- **颜色字面量收敛为令牌**：`ui/` 下 8 处颜色字面量收敛为 7 个新令牌（`segmented-track`、`switch-knob`、`qr-surface`、`state-icon-bg`、`state-icon-bg-busy`、`drag-tint`、`flyout-scrim`），取值逐字符相同、渲染零变化；组件层颜色字面量归 **0**。
+- **导航折叠断点单点化**：断点收敛到 `ui/types.slint` 的 `LayoutMetrics.nav-compact-of`，README 与代码统一为 **960px**（此前 README 写 1040px，与代码不符）。
+- **UI 测试后端改为线程局部哨兵**：从进程级 `init_integration_test_with_mock_time()`（含 proxy，第二个测试线程必然 `AlreadySet` panic）改为线程局部哨兵 + `init_no_event_loop()`，多个 `#[test]` 才可能真正并行。
 
 ### Fixed
 
@@ -62,6 +75,21 @@
 - **锁中毒不再连锁 panic**：`tianyi-app` 侧 97 处 `.lock().unwrap()` 改为 `lock_or_recover`，持锁 panic 后仍可继续使用内部数据。
 - **关窗时取消传输并落盘**：新增 `close-requested` 钩子，把未完成任务归一化为「已暂停」（不是「已取消」——后者是终态会丧失续传能力），避免下次启动看到幽灵任务。
 - **删除死字段 `FileEntry.thumb`**：UI 从不渲染它，却每行每次刷新克隆一次字符串。
+- **三份持久化文件改为原子写**：`tasks.json` / `config.json` / `accounts.json` 统一走 `tianyi-core/src/fsutil.rs::write_atomic`（同目录临时文件 → `fsync` → `rename`），写到一半中断不会留下半截 JSON 把整份数据读坏。
+- **`tasks.json` 解析失败不再丢整份历史**：损坏时改名留档为 `tasks.json.corrupt-<ts>`，而不是静默丢弃后从空列表重新开始。
+- **`tianyi-core` 锁中毒不再级联 panic**：core 侧 9 处 `.lock().unwrap()` 换成 `lock_or_recover`（`tianyi-core/src/lib.rs`），持锁 panic 后仍可继续使用内部数据；core 侧 `.lock().unwrap()` 归零（上一轮只治理了 `tianyi-app` 侧 97 处）。
+- **关窗竞态不再覆盖「已暂停」**：新增 `shutting_down` 标志与 `close_safe_status()`，进程退出过程中在跑任务只被归一为 `Paused`，不会被几毫秒后到达的 `Canceled/Completed/Failed` 覆盖写回。
+- **日志目录与配置目录同源**：`logging::init(root)` 接受 `ConfigStore::open().root()`，配置降级到 `%TEMP%` 时日志随之同源，设置页两行路径不再互相矛盾。
+- **窄窗口批量操作按钮有可读名称**：`narrow` 分支补 `tooltip` 与 `accessible-label` 回退链（text → tooltip → 「按钮」）；实测该分支在窗口 **960–1007px** 区间可达，此前这一档的批量按钮既无文字也无提示。
+- **登录方式切换不再丢失输入**：账号与密码提升为页面级 `user-text` / `pass-text`，切「密码 / 扫码」不再清空已输入内容。
+- **Toast 不再压住传输胶囊**：Toast 上移 `statusbar-height + space-2`，可点的传输胶囊不会被浮层盖住。
+- **点击当前空间的导航项不再白跑一趟**：已在目标空间根目录且非搜索态时，不再清空路径栈与选择集、也不再发起多余请求。
+- **Tooltip 同类文案不再互相关灯**：归属键加入绝对坐标，两个同文案控件不再因阻塞同一个键而互相收尾。
+- **切页与滚动时收起 Tooltip**：切页以及四个 `ListView` 的 `viewport-y` 变化时清空气泡，避免行被回收后浮层残留在原位。
+- **`FluentTextField.invalid` 接上登录失败态**：此前属性存在却无人赋值，登录失败只有 Toast，输入框本身没有视觉反馈。
+- **加载态接上「取消」入口**：`cancel_loading` 打通，加载中可以退出，不再只能等请求自己返回。
+- **搜索态补 Esc 出口**：搜索中按 Esc 可退出；搜索中点击「取消」委托 `clear_search()`，不再落到误导性的「没有找到匹配的文件」。
+- **状态栏胶囊等回归断言的假绿修正**：见 `docs/ROUND3_REPORT.md` §5，`b181cd7` 提交信息里「22 张逐像素相同」的结论已由 numpy 重算推翻（实为 20 张相同 + 2 张 spinner 相位噪声）。
 
 ## [0.1.0]
 
