@@ -61,6 +61,19 @@ const FALLBACK_CONFIG_DIR: &str = "tianyi-cloud-fallback";
 /// 内存态配置（不落盘）时设置页「配置目录」一栏的显示文案
 const MEMORY_CONFIG_LABEL: &str = "（配置目录不可写，本次运行不保存设置）";
 
+/// 配置根目录：与 `Controller::new` 里 `ConfigStore::open()` 完全同一条降级链
+///
+/// 日志初始化必须早于 `MainWindow` / `Controller`（启动期日志不能丢），但日志目录又要与
+/// 设置页展示的配置目录同源。这里把解析结果单独暴露出来，让 `main.rs` 在构造控制器之前
+/// 就能拿到同一个路径，而不是两边各自猜一遍——各自猜的结果就是主目录不可写时配置退到
+/// `%TEMP%\tianyi-cloud-fallback`、日志还留在原处。
+///
+/// 代价是这次 `ConfigStore::open()` 早于日志初始化，它在降级时打的那行 warn 只到 stderr；
+/// 同一条信息仍会通过 `Controller::new` 返回的降级提示条呈现给用户，行为不变。
+pub(crate) fn config_root() -> PathBuf {
+    ConfigStore::open().0.root().clone()
+}
+
 /// 应用控制器
 pub struct Controller {
     ui: Weak<MainWindow>,

@@ -179,7 +179,11 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
 fn main() -> anyhow::Result<()> {
     // 日志：stderr（沿用 RUST_LOG，默认 info）+ 配置目录下按天滚动的日志文件。
     // 落盘失败时自动退化为“仅 stderr”，不会影响启动（见 logging.rs）。
-    let log_dir = logging::init();
+    //
+    // 目录必须与设置页展示的配置目录同源：先按控制器的降级链解析出配置根目录，再拿它
+    // 初始化日志（`Controller::new` 随后走同一条路径，两次结果必然一致）。日志初始化
+    // 仍然早于 `MainWindow::new`，启动期那几行不会丢。
+    let log_dir = logging::init(&controller::config_root());
     log::info!(
         "tianyi-cloud-rust starting（日志目录：{}）",
         log_dir.display()

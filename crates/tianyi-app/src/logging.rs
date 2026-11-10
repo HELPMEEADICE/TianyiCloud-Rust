@@ -45,11 +45,11 @@ static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 /// 日志目录：`<配置目录>/logs`
 ///
-/// 必须与 `tianyi_core::config::AppStore::root()` 指向同一个目录。日志初始化发生在
-/// `Controller` 之前（见 `main.rs`），此时还没有 `ConfigStore`，所以这里直接用
-/// `AppStore::new(None)` 解析系统默认根目录：它是唯一不会和控制器漂移的写法。
-/// `AppStore::new` 的副作用只有 `create_dir_all(root)`，而控制器随即也会做同样的事，
-/// 因此这次“提前打开”不改变程序的可观察行为。
+/// 正常情况下这个值由 [`init`] 在启动时按 `ConfigStore` 解析出的配置根目录写入（见
+/// `main.rs`），所以它和设置页展示的「配置目录」永远是同一个来源。
+///
+/// 直接调用 `log_dir()` 而没先 `init`（例如单测）时，这里退化为 `AppStore::new(None)`
+/// 的默认根目录：它是唯一不会和控制器漂移的写法。
 pub fn log_dir() -> PathBuf {
     LOG_DIR.get_or_init(resolve_log_dir).clone()
 }
@@ -69,6 +69,15 @@ fn resolve_log_dir() -> PathBuf {
             fallback
         }
     }
+}
+
+/// 按显式给定的配置根目录确定日志目录，并把它固化下来
+///
+/// 路径必须由调用方从 `ConfigStore::open()` 的 `root()` 算出来，而不是这里再猜一遍默认
+/// 路径：配置目录不可写时 `ConfigStore` 会退到 `%TEMP%\tianyi-cloud-fallback`，日志如果
+/// 还按主路径解析，设置页上「配置目录」与「日志目录」就会指向两个地方（上一轮的缺陷）。
+fn log_dir_under(root: &Path) -> PathBuf {
+    LOG_DIR.get_or_init(|| root.join("logs")).clone()
 }
 
 // ======================================================================
@@ -508,11 +517,14 @@ fn degrade(path: &Path, err: impl std::fmt::Display) {
     );
 }
 
-/// 初始化日志：stderr（沿用 `RUST_LOG`，默认 `info`）+ 按天滚动的日志文件
+/// 初始化日志：stderr（沿用 `RUST_LOG`，默认 `info`）+ 按天滚动、按体积滚动的日志文件
+///
+/// `root` 是配置根目录（调用方从 `ConfigStore` 拿到），日志落在 `<root>/logs`——日志目录
+/// 与设置页展示的配置目录因此同源，配置目录降级到临时目录时日志也跟着走。
 ///
 /// 返回日志目录。即使落盘失败也返回它：设置页那一行与“打开”按钮照常可用。
-pub fn init() -> PathBuf {
-    let dir = log_dir();
+pub fn init(root: &Path) -> PathBuf {
+    let dir = log_dir_under(root);
     let today = now_local().0;
     // 保留期清理：此时 logger 还没装，结果是给人看的调试信息，失败静默
     let pruned = prune_old(&dir, today).len();
@@ -855,5 +867,17 @@ mod tests {
         assert!(!dir.join(format!("{expired_log}.1")).exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 日志目录永远挂在调用方给的配置根目录下（设置页那两行因此不会漂）
+    #[test]
+    fn log_dir_follows_the_given_config_root() {
+        let root = temp_dir("root-follow");
+        // 主配置目录不可写时 `ConfigStore` 给的是 %TEMP%\tianyi-cloud-fallback，
+        // 日志必须跟着落进那个目录的 logs 子目录，而不是留在原处
+        let dir = log_dir_under(&root);
+        assert_eq!(dir, root.join("logs"));
+        // 设置页读的是 log_dir()：必须与 init 固化的那个值完全一致
+        assert_eq!(log_dir(), dir);
     }
 }
