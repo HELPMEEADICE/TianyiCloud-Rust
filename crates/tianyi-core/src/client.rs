@@ -6,6 +6,7 @@
 use crate::config::AppConfig;
 use crate::crypto;
 use crate::error::{Error, Result};
+use crate::lock_or_recover;
 use crate::models::*;
 use crate::retry;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -119,42 +120,40 @@ impl TianyiClient {
     /// 设置上传基地址覆盖（供测试注入本地 mock 服务）
     #[cfg(test)]
     pub fn set_upload_base(&self, url: &str) {
-        *self.upload_base.lock().unwrap() = Some(url.to_string());
+        *lock_or_recover(&self.upload_base) = Some(url.to_string());
     }
 
     /// 获取上传基地址（测试覆盖优先）
     pub fn upload_base_url(&self) -> String {
-        self.upload_base
-            .lock()
-            .unwrap()
+        lock_or_recover(&self.upload_base)
             .clone()
             .unwrap_or_else(|| consts::UPLOAD_URL.to_string())
     }
 
     /// 获取账号配置
     pub fn account(&self) -> AccountConfig {
-        self.account.lock().unwrap().clone()
+        lock_or_recover(&self.account).clone()
     }
 
     /// 修改账号配置（如切换空间类型）
     pub fn set_account<F: FnOnce(&mut AccountConfig)>(&self, f: F) {
-        let mut acc = self.account.lock().unwrap();
+        let mut acc = lock_or_recover(&self.account);
         f(&mut acc);
     }
 
     /// 获取账号配置的可变引用
     pub fn account_mut(&self) -> std::sync::MutexGuard<'_, AccountConfig> {
-        self.account.lock().unwrap()
+        lock_or_recover(&self.account)
     }
 
     /// 获取会话 token
     pub fn token(&self) -> TokenInfo {
-        self.session.lock().unwrap().token.clone()
+        lock_or_recover(&self.session).token.clone()
     }
 
     /// 获取会话 token 引用（调用方需在锁内）
     fn session_token(&self) -> TokenInfo {
-        self.session.lock().unwrap().token.clone()
+        lock_or_recover(&self.session).token.clone()
     }
 
     /// 判断是否家庭云
@@ -286,7 +285,7 @@ impl TianyiClient {
             us.family_session_key.len(), us.family_session_secret.len(),
             us.login_name
         );
-        let mut session = self.session.lock().unwrap();
+        let mut session = lock_or_recover(&self.session);
         session.token.session_key = us.session_key;
         session.token.session_secret = us.session_secret;
         session.token.family_session_key = us.family_session_key;
@@ -325,7 +324,7 @@ impl TianyiClient {
 
         let tr: AppSessionResp = serde_json::from_str(&text)
             .map_err(|e| Error::Api(format!("parse token resp: {e}")))?;
-        let mut session = self.session.lock().unwrap();
+        let mut session = lock_or_recover(&self.session);
         session.token.access_token = tr.access_token;
         session.token.refresh_token = tr.refresh_token;
         Ok(())
@@ -997,7 +996,7 @@ impl TianyiClient {
             session: std::sync::Mutex::new(SessionCache {
                 token: self.session_token(),
             }),
-            upload_base: std::sync::Mutex::new(self.upload_base.lock().unwrap().clone()),
+            upload_base: std::sync::Mutex::new(lock_or_recover(&self.upload_base).clone()),
         }
     }
 }
@@ -1122,5 +1121,29 @@ mod tests {
             .expect("两次 429 后应成功");
         assert_eq!(body.to_vec(), b"hello".to_vec());
         assert_eq!(hits.load(Ordering::SeqCst), 3, "总尝试次数必须是 3");
+    }
+
+    /// 会话锁被毒化后 `token()` 仍然可用：一次持锁 panic 不该放大成整个客户端不可用
+    #[test]
+    fn token_survives_poisoned_session_lock() {
+        let mut account = AccountConfig::default();
+        account.token.session_key = "keep-me".to_string();
+        let client = TianyiClient::new(AppConfig::default(), account);
+
+        // 刻意在持锁期间 panic（stderr 里会出现一行 panic 信息），把会话锁真的毒化掉
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = client.session.lock().expect("首次取锁");
+            panic!("刻意毒化会话锁");
+        }));
+        assert!(poisoned.is_err(), "panic 应被 catch_unwind 捕获");
+        assert!(client.session.is_poisoned(), "持锁 panic 后锁必须中毒");
+
+        assert_eq!(
+            client.token().session_key,
+            "keep-me",
+            "中毒后仍应读到既定内容"
+        );
+        // 再读一次也不 panic：证明不是「这一次恰好没中毒」
+        assert_eq!(client.token().session_key, "keep-me");
     }
 }
