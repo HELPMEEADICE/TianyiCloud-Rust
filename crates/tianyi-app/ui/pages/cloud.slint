@@ -23,7 +23,7 @@ import { ListView } from "std-widgets.slint";
 import { FileEntry, CrumbEntry, ModifiersApi, TooltipState } from "../types.slint";
 
 export component CloudPage inherits Rectangle {
-    in property <string> space-label: "个人云";
+    in property <string> space-label: @tr("个人云");
     in property <[CrumbEntry]> crumbs: [];
     in property <[FileEntry]> rows: [];
     in property <string> renaming-id: "";
@@ -161,7 +161,7 @@ export component CloudPage inherits Rectangle {
 
             FluentIconButton {
                 icon: IconName.back;
-                tooltip: "返回上级目录 (Alt+←)";
+                tooltip: @tr("返回上级目录 (Alt+←)");
                 enabled: root.crumbs.length > 1 && !root.searching;
                 clicked => {
                     root.navigate-up();
@@ -220,7 +220,7 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.crumbs.length == 0: Text {
-                        text: "根目录";
+                        text: @tr("根目录");
                         font-family: Theme.font-family;
                         font-size: Theme.font-body;
                         color: Theme.text-secondary;
@@ -232,7 +232,7 @@ export component CloudPage inherits Rectangle {
             search := FluentSearchBox {
                 width: root.narrow ? 172px : 232px;
                 text <=> root.search-text;
-                placeholder: "搜索云盘文件";
+                placeholder: @tr("搜索云盘文件");
                 search(t) => {
                     root.search-changed(t);
                 }
@@ -246,7 +246,7 @@ export component CloudPage inherits Rectangle {
 
             FluentIconButton {
                 icon: IconName.refresh;
-                tooltip: "刷新 (F5)";
+                tooltip: @tr("刷新 (F5)");
                 enabled: root.list-state != "loading" && !root.refreshing;
                 clicked => {
                     root.refresh();
@@ -256,7 +256,7 @@ export component CloudPage inherits Rectangle {
             // 窄窗口：次要操作折叠为图标按钮，核心操作（上传）始终可见
             if root.narrow: FluentIconButton {
                 icon: IconName.folder;
-                tooltip: "新建文件夹";
+                tooltip: @tr("新建文件夹");
                 enabled: root.list-state != "loading";
                 clicked => {
                     root.create-folder();
@@ -264,7 +264,7 @@ export component CloudPage inherits Rectangle {
             }
 
             if !root.narrow: FluentButton {
-                text: "新建文件夹";
+                text: @tr("新建文件夹");
                 icon: IconName.add;
                 enabled: root.list-state != "loading";
                 clicked => {
@@ -273,7 +273,7 @@ export component CloudPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "上传";
+                text: @tr("上传");
                 icon: IconName.upload;
                 accent: true;
                 enabled: root.list-state != "loading";
@@ -308,7 +308,7 @@ export component CloudPage inherits Rectangle {
                     cross-axis-alignment: center;
 
                     if root.has-selection: Text {
-                        text: "已选择 " + root.selected-count + " 项";
+                        text: @tr("已选择 {0} 项", root.selected-count);
                         font-family: Theme.font-family;
                         font-size: Theme.font-small;
                         font-weight: Theme.weight-semibold;
@@ -317,7 +317,7 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if !root.has-selection: Text {
-                        text: root.rows.length > 0 ? ("共 " + root.rows.length + " 个项目") : "";
+                        text: root.rows.length > 0 ? @tr("共 {0} 个项目", root.rows.length) : "";
                         font-family: Theme.font-family;
                         font-size: Theme.font-small;
                         color: Theme.text-tertiary;
@@ -325,8 +325,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: "下载";
-                        tooltip: "下载";
+                        text: @tr("下载");
+                        tooltip: @tr("下载");
                         icon: IconName.download;
                         subtle: true;
                         clicked => {
@@ -335,8 +335,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection && root.selected-count == 1: FluentButton {
-                        text: "重命名";
-                        tooltip: "重命名";
+                        text: @tr("重命名");
+                        tooltip: @tr("重命名");
                         icon: IconName.rename;
                         subtle: true;
                         clicked => {
@@ -345,8 +345,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : "复制";
-                        tooltip: "复制";
+                        text: root.narrow ? "" : @tr("复制");
+                        tooltip: @tr("复制");
                         icon: IconName.copy;
                         subtle: true;
                         clicked => {
@@ -355,8 +355,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : "移动到上级";
-                        tooltip: "移动到上级";
+                        text: root.narrow ? "" : @tr("移动到上级");
+                        tooltip: @tr("移动到上级");
                         icon: IconName.folder;
                         subtle: true;
                         enabled: root.crumbs.length > 1;
@@ -366,8 +366,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : "提取直链";
-                        tooltip: "提取直链";
+                        text: root.narrow ? "" : @tr("提取直链");
+                        tooltip: @tr("提取直链");
                         icon: IconName.link;
                         subtle: true;
                         clicked => {
@@ -376,8 +376,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : "删除";
-                        tooltip: "删除";
+                        text: root.narrow ? "" : @tr("删除");
+                        tooltip: @tr("删除");
                         icon: IconName.delete;
                         danger: true;
                         subtle: true;
@@ -387,8 +387,8 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : "取消选择";
-                        tooltip: "取消选择";
+                        text: root.narrow ? "" : @tr("取消选择");
+                        tooltip: @tr("取消选择");
                         subtle: true;
                         clicked => {
                             root.clear-selection();
@@ -403,7 +403,7 @@ export component CloudPage inherits Rectangle {
                     cross-axis-alignment: center;
 
                     if !root.has-selection: Text {
-                        text: root.narrow ? "" : "Ctrl+单击多选 · Shift+单击范围选择";
+                        text: root.narrow ? "" : @tr("Ctrl+单击多选 · Shift+单击范围选择");
                         font-family: Theme.font-family;
                         font-size: Theme.font-caption;
                         color: Theme.text-tertiary;
@@ -411,7 +411,7 @@ export component CloudPage inherits Rectangle {
                     }
 
                     if !root.has-selection: FluentButton {
-                        text: "全选";
+                        text: @tr("全选");
                         subtle: true;
                         enabled: root.rows.length > 0;
                         clicked => {
@@ -451,7 +451,7 @@ export component CloudPage inherits Rectangle {
                 }
 
                 FluentButton {
-                    text: "退出搜索";
+                    text: @tr("退出搜索");
                     subtle: true;
                     clicked => {
                         root.search-cleared();
@@ -491,7 +491,7 @@ export component CloudPage inherits Rectangle {
                 }
 
                 FluentButton {
-                    text: "重试";
+                    text: @tr("重试");
                     subtle: true;
                     clicked => {
                         root.refresh();
@@ -700,7 +700,7 @@ export component CloudPage inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: "名称";
+                                        text: @tr("名称");
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-caption;
                                         font-weight: root.sort-key == 0 ? Theme.weight-semibold : Theme.weight-regular;
@@ -737,7 +737,7 @@ export component CloudPage inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: "大小";
+                                        text: @tr("大小");
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-caption;
                                         font-weight: root.sort-key == 1 ? Theme.weight-semibold : Theme.weight-regular;
@@ -767,7 +767,7 @@ export component CloudPage inherits Rectangle {
                                     cross-axis-alignment: center;
 
                                     Text {
-                                        text: "修改时间";
+                                        text: @tr("修改时间");
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-caption;
                                         font-weight: root.sort-key == 2 ? Theme.weight-semibold : Theme.weight-regular;
@@ -792,7 +792,7 @@ export component CloudPage inherits Rectangle {
 
                             if root.detail-level >= 3: kind-header := Text {
                                 width: FileColumns.kind;
-                                text: "类型";
+                                text: @tr("类型");
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
                                 color: Theme.text-tertiary;
@@ -868,11 +868,11 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            title: root.searching ? "正在搜索…" : "正在加载目录…";
-                            description: root.searching ? "正在云端检索匹配的文件" : "正在从云端读取目录内容";
+                            title: root.searching ? @tr("正在搜索…") : @tr("正在加载目录…");
+                            description: root.searching ? @tr("正在云端检索匹配的文件") : @tr("正在从云端读取目录内容");
                             // 加载态原来没有出口：目录读不出来时用户只能干等（或关窗口）。
                             // 取消只递增代数让在途结果被丢弃，列表状态就地归一。
-                            cancel-text: "取消";
+                            cancel-text: @tr("取消");
                             cancel => {
                                 root.cancel-loading();
                             }
@@ -883,9 +883,9 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
-                            title: "加载失败";
+                            title: @tr("加载失败");
                             description: root.error-text;
-                            retry-text: "重试";
+                            retry-text: @tr("重试");
                             retry => {
                                 root.refresh();
                             }
@@ -897,10 +897,10 @@ export component CloudPage inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             icon: IconName.folder;
-                            title: "这里还没有文件";
-                            description: "把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”";
-                            action-text: "上传文件";
-                            secondary-text: "新建文件夹";
+                            title: @tr("这里还没有文件");
+                            description: @tr("把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”");
+                            action-text: @tr("上传文件");
+                            secondary-text: @tr("新建文件夹");
                             action => {
                                 root.upload();
                             }
@@ -915,9 +915,9 @@ export component CloudPage inherits Rectangle {
                             width: parent.width;
                             height: parent.height;
                             icon: IconName.search;
-                            title: "没有找到匹配的文件";
-                            description: "换个关键词试试，或退出搜索回到当前目录";
-                            action-text: "退出搜索";
+                            title: @tr("没有找到匹配的文件");
+                            description: @tr("换个关键词试试，或退出搜索回到当前目录");
+                            action-text: @tr("退出搜索");
                             action => {
                                 root.search-cleared();
                             }
@@ -974,7 +974,7 @@ export component CloudPage inherits Rectangle {
                     }
 
                     Text {
-                        text: root.active-transfers > 0 ? ("传输中 " + root.active-transfers) : "传输任务";
+                        text: root.active-transfers > 0 ? @tr("传输中 {0}", root.active-transfers) : @tr("传输任务");
                         font-family: Theme.font-family;
                         font-size: Theme.font-caption;
                         color: root.active-transfers > 0 ? Theme.accent : Theme.text-secondary;

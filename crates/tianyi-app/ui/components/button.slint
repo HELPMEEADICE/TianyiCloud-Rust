@@ -63,7 +63,7 @@ export component FluentButton inherits Rectangle {
     // 是比读"按钮"更糟的结果（用户无法判断这一格是什么）。
     // 辅助技术触发的"默认动作"等价于鼠标点一下，走同一个 callback。
     accessible-role: button;
-    accessible-label: root.text != "" ? root.text : (root.tooltip != "" ? root.tooltip : "按钮");
+    accessible-label: root.text != "" ? root.text : (root.tooltip != "" ? root.tooltip : @tr("按钮"));
     accessible-action-default => {
         root.clicked();
     }

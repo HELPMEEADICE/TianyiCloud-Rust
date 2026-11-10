@@ -10,8 +10,8 @@ import { FluentButton } from "button.slint";
 export component FluentContentDialog inherits Rectangle {
     in property <string> title: "";
     in property <string> message: "";
-    in property <string> confirm-text: "确定";
-    in property <string> cancel-text: "取消";
+    in property <string> confirm-text: @tr("确定");
+    in property <string> cancel-text: @tr("取消");
     /// 危险操作：确认按钮使用危险配色并显示警示图标
     in property <bool> danger: false;
 

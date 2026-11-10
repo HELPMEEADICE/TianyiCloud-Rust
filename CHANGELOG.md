@@ -31,6 +31,9 @@
 - **七条独立 UI 断言**：`crates/tianyi-app/src/ui_tests.rs` 新增 7 个独立 `#[test]`（`check_batch_bar_a11y` / `check_login_input_survives_mode_switch` / `check_toast_clears_status_bar` / `check_dialog_focus_closure` / `check_selection_index_brings_row_into_view` / `check_tooltip_clears_on_page_switch` / `check_arrow_key_moves_selection`），失败时测试名本身就是结论，不必从汇总输出里倒推红的是哪一条。
 - **三个视觉场景与 25 张基线**：新增 `23-cloud-narrow-actions`（960×760）、`24-cloud-inline-error`（1180×760）、`25-login-invalid`（900×760），`screenshots/after/` 由 22 张增至 25 张。
 - **本轮优化报告**：`docs/ROUND3_REPORT.md`，含缺陷清单、五类验证方式、已知偏差与残余限制。
+- **四语国际化（简中 / 繁中 / 英 / 日）**：界面文案与运行时文案各一套词表——`.slint` 的 `@tr` 走编译期打包的 `lang/<lang>/LC_MESSAGES/tianyi-app.po`（msgid = 简中原文，简中即翻译表索引 0，故无 `zh-Hans` 目录），控制器 `format!` 拼出来的状态栏/提示条/任务状态走 `i18n/rs/<lang>.json`（键 → 简中原文，缺词按「当前语种 → 简中 → 键名」回退）。设置页「外观 → 语言」即时切换、无需重启，选择写入 `config.json` 的 `language` 字段；「自动」模式按系统 locale 解析（繁体优先，其它语言回退英文）。详见 `docs/I18N.md`。
+- **i18n 目录完整性回归测试**：新增 `crates/tianyi-app/tests/i18n_catalog.rs`，扫描 `ui/**/*.slint` 的 `@tr` 与三份 `.po`、四份运行时词表做互校（全覆盖 / 双向无多余 / 键集与占位符一致 / `lang/` 目录卫生）。漏翻此前只会静默回退成中文，现在直接红灯。
+- **文案抽取脚本**：`tools/i18n-extract.ps1` 从 `.slint` 抽 msgid（跳过 `ui/dev/`、正确解 `\"`），`-Count` 输出总数/去重数，`-Skeleton <lang>` 生成 `.po` 骨架。
 
 ### Changed
 
@@ -52,6 +55,7 @@
 - **颜色字面量收敛为令牌**：`ui/` 下 8 处颜色字面量收敛为 7 个新令牌（`segmented-track`、`switch-knob`、`qr-surface`、`state-icon-bg`、`state-icon-bg-busy`、`drag-tint`、`flyout-scrim`），取值逐字符相同、渲染零变化；组件层颜色字面量归 **0**。
 - **导航折叠断点单点化**：断点收敛到 `ui/types.slint` 的 `LayoutMetrics.nav-compact-of`，README 与代码统一为 **960px**（此前 README 写 1040px，与代码不符）。
 - **UI 测试后端改为线程局部哨兵**：从进程级 `init_integration_test_with_mock_time()`（含 proxy，第二个测试线程必然 `AlreadySet` panic）改为线程局部哨兵 + `init_no_event_loop()`，多个 `#[test]` 才可能真正并行。
+- **`config.json` 结构版本升到 v2**：新增 `language` 字段（默认 `auto`），缺 `version` 的历史配置按迁移链逐级升级到 v2，字段兼容由 `#[serde(default)]` 兜底，**不需要手动删配置**；读到比当前更高的版本号只记 warn 并按现有结构尽力解析。
 
 ### Fixed
 

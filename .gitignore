@@ -6,6 +6,9 @@
 *.json
 !Cargo.lock
 
+# i18n 词表是源码资产，必须入库（上面的 *.json 只为排除应用数据）
+!crates/tianyi-app/i18n/**/*.json
+
 # IDE / 编辑器
 .vscode/
 .idea/

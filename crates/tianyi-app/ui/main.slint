@@ -36,7 +36,7 @@ export { Theme } from "theme/tokens.slint";
 export { DragOutApi, InputMode, ModalsApi, ModifiersApi, TooltipState } from "types.slint";
 
 export component MainWindow inherits Window {
-    title: "天翼云盘";
+    title: @tr("天翼云盘");
     preferred-width: 1180px;
     preferred-height: 760px;
     min-width: 900px;
@@ -114,6 +114,8 @@ export component MainWindow inherits Window {
 
     // ==================== 设置 ====================
     in-out property <int> theme-index: 0;
+    /// 0 = 自动（跟随系统），1 = 简中，2 = 繁中，3 = 英文，4 = 日文
+    in-out property <int> language-index: 0;
     in property <bool> reduce-motion: false;
     in property <string> download-dir: "";
     in property <string> upload-thread: "";
@@ -137,7 +139,7 @@ export component MainWindow inherits Window {
     in-out property <bool> dialog-open: false;
     in property <string> dialog-title: "";
     in property <string> dialog-message: "";
-    in property <string> dialog-confirm-text: "确定";
+    in property <string> dialog-confirm-text: @tr("确定");
     in property <bool> dialog-danger: false;
 
     // ==================== Tooltip 浮层（渲染端私有状态） ====================
@@ -205,6 +207,8 @@ export component MainWindow inherits Window {
     /// 复制全部直链（每行一条）
     callback copy_all_links();
     callback theme_changed(int);
+    /// 0=自动 1=简中 2=繁中 3=英文 4=日文；落盘与切包由控制器负责
+    callback language_changed(int);
     callback reduce_motion_changed(bool);
     /// (下载分片数, 上传分片数)：越界值由控制器钳制到 1..=8
     callback thread_count_changed(int, int);
@@ -452,7 +456,7 @@ export component MainWindow inherits Window {
             width: root.nav-compact ? Theme.nav-width-compact : Theme.nav-width;
             // 无障碍：把导航栏标成一个导航区域，辅助技术可以整体跳过或整体进入
             accessible-role: navigation;
-            accessible-label: "主导航";
+            accessible-label: @tr("主导航");
             background: Theme.layer-bg;
             border-width: 1px;
             border-color: Theme.divider;
@@ -497,7 +501,7 @@ export component MainWindow inherits Window {
                         y: 0;
                         width: parent.width - 48px;
                         height: parent.height;
-                        text: "天翼云盘";
+                        text: @tr("天翼云盘");
                         font-family: Theme.font-family;
                         font-size: Theme.font-subtitle;
                         font-weight: Theme.weight-semibold;
@@ -515,7 +519,7 @@ export component MainWindow inherits Window {
 
                 FluentNavItem {
                     icon: IconName.home;
-                    label: "个人云";
+                    label: @tr("个人云");
                     compact: root.nav-compact;
                     selected: root.current-page == 0;
                     clicked => {
@@ -526,7 +530,7 @@ export component MainWindow inherits Window {
 
                 FluentNavItem {
                     icon: IconName.people;
-                    label: "家庭云";
+                    label: @tr("家庭云");
                     compact: root.nav-compact;
                     selected: root.current-page == 1;
                     clicked => {
@@ -537,7 +541,7 @@ export component MainWindow inherits Window {
 
                 FluentNavItem {
                     icon: IconName.transfer;
-                    label: "传输任务";
+                    label: @tr("传输任务");
                     compact: root.nav-compact;
                     selected: root.current-page == 2;
                     badge: root.active-transfers;
@@ -548,7 +552,7 @@ export component MainWindow inherits Window {
 
                 FluentNavItem {
                     icon: IconName.link;
-                    label: "下载直链";
+                    label: @tr("下载直链");
                     compact: root.nav-compact;
                     selected: root.current-page == 3;
                     badge: root.links.length;
@@ -559,7 +563,7 @@ export component MainWindow inherits Window {
 
                 FluentNavItem {
                     icon: IconName.settings;
-                    label: "设置";
+                    label: @tr("设置");
                     compact: root.nav-compact;
                     selected: root.current-page == 4;
                     clicked => {
@@ -600,7 +604,7 @@ export component MainWindow inherits Window {
                             }
 
                             Text {
-                                text: "存储";
+                                text: @tr("存储");
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
                                 color: Theme.text-tertiary;
@@ -625,7 +629,7 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: root.total-space == "" ? "未获取到容量信息" : root.capacity-text;
+                            text: root.total-space == "" ? @tr("未获取到容量信息") : root.capacity-text;
                             font-family: Theme.font-family;
                             font-size: Theme.font-caption;
                             color: Theme.text-tertiary;
@@ -653,8 +657,8 @@ export component MainWindow inherits Window {
                         changed has-hover => {
                             if (self.has-hover) {
                                 TooltipState.owner = "storage";
-                                TooltipState.text = root.total-space == "" ? "未获取到容量信息"
-                                    : ("存储 " + root.capacity-percent + "% · " + root.capacity-text);
+                                TooltipState.text = root.total-space == "" ? @tr("未获取到容量信息")
+                                    : @tr("存储 {0}% · {1}", root.capacity-percent, root.capacity-text);
                                 TooltipState.x = self.absolute-position.x + self.width + 8px;
                                 TooltipState.y = self.absolute-position.y;
                                 TooltipState.visible = true;
@@ -775,7 +779,7 @@ export component MainWindow inherits Window {
                         }
 
                         Text {
-                            text: "进行中的传输 " + root.active-transfers;
+                            text: @tr("进行中的传输 {0}", root.active-transfers);
                             font-family: Theme.font-family;
                             font-size: Theme.font-body;
                             font-weight: Theme.weight-semibold;
@@ -790,7 +794,7 @@ export component MainWindow inherits Window {
                         }
 
                         FluentButton {
-                            text: "全部任务";
+                            text: @tr("全部任务");
                             subtle: true;
                             clicked => {
                                 root.current-page = 2;
@@ -800,7 +804,7 @@ export component MainWindow inherits Window {
 
                         FluentIconButton {
                             icon: IconName.chevron-down;
-                            tooltip: "收起传输面板";
+                            tooltip: @tr("收起传输面板");
                             clicked => {
                                 root.transfer-panel-open = false;
                             }
@@ -852,7 +856,7 @@ export component MainWindow inherits Window {
                             x: 0;
                             y: (parent.height - self.height) / 2;
                             width: parent.width;
-                            text: "当前没有进行中的传输任务";
+                            text: @tr("当前没有进行中的传输任务");
                             font-family: Theme.font-family;
                             font-size: Theme.font-small;
                             color: Theme.text-tertiary;
@@ -883,7 +887,7 @@ export component MainWindow inherits Window {
                     width: parent.width;
                     height: parent.height;
                     visible: root.current-page < 2;
-                    space-label: root.current-page == 1 ? "家庭云" : "个人云";
+                    space-label: root.current-page == 1 ? @tr("家庭云") : @tr("个人云");
                     crumbs: root.crumbs;
                     rows: root.file-list;
                     renaming-id: root.renaming-id;
@@ -1067,6 +1071,7 @@ export component MainWindow inherits Window {
                     visible: root.current-page == 4;
                     account-name: root.account-name;
                     theme-index: root.theme-index;
+                    language-index: root.language-index;
                     reduce-motion: root.reduce-motion;
                     download-dir: root.download-dir;
                     upload-thread: root.upload-thread;
@@ -1079,6 +1084,9 @@ export component MainWindow inherits Window {
 
                     theme-changed(idx) => {
                         root.theme_changed(idx);
+                    }
+                    language-changed(idx) => {
+                        root.language_changed(idx);
                     }
                     reduce-motion-changed(on) => {
                         root.reduce_motion_changed(on);
@@ -1180,7 +1188,7 @@ export component MainWindow inherits Window {
 
             FluentIconButton {
                 icon: IconName.close;
-                tooltip: "关闭提示";
+                tooltip: @tr("关闭提示");
                 size: 24px;
                 icon-size: Theme.icon-xs;
                 clicked => {
@@ -1285,7 +1293,7 @@ export component MainWindow inherits Window {
             FluentMenuItem {
                 modal: true;
                 icon: IconName.settings;
-                label: "设置";
+                label: @tr("设置");
                 triggered => {
                     root.account-menu-open = false;
                     root.current-page = 4;
@@ -1295,7 +1303,7 @@ export component MainWindow inherits Window {
             FluentMenuItem {
                 modal: true;
                 icon: IconName.folder-open;
-                label: "下载目录";
+                label: @tr("下载目录");
                 triggered => {
                     root.account-menu-open = false;
                     root.open_download_dir();
@@ -1308,7 +1316,7 @@ export component MainWindow inherits Window {
             FluentMenuItem {
                 modal: true;
                 icon: IconName.logout;
-                label: "退出登录";
+                label: @tr("退出登录");
                 danger: true;
                 triggered => {
                     root.account-menu-open = false;
@@ -1445,7 +1453,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 0;
                     icon: root.context-is-dir ? IconName.folder-open : IconName.file;
-                    label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
+                    label: root.context-is-dir ? @tr("打开文件夹") : @tr("预览 / 打开");
                     triggered => {
                         root.ctx-open();
                     }
@@ -1455,7 +1463,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 1;
                     icon: IconName.download;
-                    label: "下载到本地";
+                    label: @tr("下载到本地");
                     triggered => {
                         root.ctx-download();
                     }
@@ -1468,7 +1476,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 2;
                     icon: IconName.rename;
-                    label: "重命名";
+                    label: @tr("重命名");
                     shortcut: "F2";
                     enabled: root.selected-count == 1;
                     triggered => {
@@ -1480,7 +1488,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 3;
                     icon: IconName.copy;
-                    label: "复制到当前目录";
+                    label: @tr("复制到当前目录");
                     triggered => {
                         root.ctx-copy();
                     }
@@ -1490,7 +1498,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 4;
                     icon: IconName.folder;
-                    label: "移动到上级目录";
+                    label: @tr("移动到上级目录");
                     enabled: root.crumbs.length > 1;
                     triggered => {
                         root.ctx-move-to-parent();
@@ -1501,7 +1509,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 5;
                     icon: IconName.link;
-                    label: "提取直链";
+                    label: @tr("提取直链");
                     triggered => {
                         root.ctx-link();
                     }
@@ -1514,7 +1522,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 6;
                     icon: IconName.select-all;
-                    label: "全选";
+                    label: @tr("全选");
                     shortcut: "Ctrl+A";
                     triggered => {
                         root.ctx-select-all();
@@ -1525,7 +1533,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 7;
                     icon: IconName.close;
-                    label: "取消选择";
+                    label: @tr("取消选择");
                     shortcut: "Esc";
                     enabled: root.selected-count > 0;
                     triggered => {
@@ -1540,7 +1548,7 @@ export component MainWindow inherits Window {
                     modal: true;
                     highlighted: root.ctx-highlight == 8;
                     icon: IconName.delete;
-                    label: "删除";
+                    label: @tr("删除");
                     shortcut: "Del";
                     danger: true;
                     triggered => {

@@ -5,6 +5,7 @@ mod backend;
 mod controller;
 #[cfg(windows)]
 mod dragout;
+mod i18n;
 mod logging;
 
 #[cfg(test)]
@@ -190,6 +191,20 @@ fn main() -> anyhow::Result<()> {
     );
 
     let ui = MainWindow::new()?;
+    // 界面语种由配置里的 language 字段决定，读取路径与控制器完全同源——都走
+    // `ConfigStore::open()` 加 `load_config()`，主目录不可写时一起退到临时目录，
+    // 不会出现"日志说配置在 A、界面按 B 里的语言切"这种错位。
+    //
+    // 位置不能动，三条理由：
+    // ① `i18n::apply` 内部要调 `slint::select_bundled_translation`，翻译包是随**首个
+    //    组件**一起注册进运行时的，早于 `MainWindow::new()` 调用只会拿到
+    //    `NoTranslationsBundled`，切了个寂寞。
+    // ② 必须早于 `Controller::new`：控制器构造时会 `initial_sync()`，版本号、配置目录、
+    //    字体名、传输列表这些 Rust 侧文案都是当场按当前语种查表拼出来的；语种晚一步定，
+    //    首屏就是半中半英。
+    // ③ 窗口在 `ui.run()` 之前不绘制，所以这里切语不会"先画一帧简中再跳变"。
+    let language = controller::startup_language();
+    i18n::apply(i18n::resolve(language));
     let ui_handle = ui.as_weak();
 
     let backend = Arc::new(Backend::new(ui_handle.clone()));

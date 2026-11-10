@@ -204,7 +204,7 @@ export component FluentEmptyState inherits Rectangle {
 
 /// 加载状态：内容尚未就绪。可提供取消入口。
 export component FluentLoadingState inherits Rectangle {
-    in property <string> title: "正在加载…";
+    in property <string> title: @tr("正在加载…");
     in property <string> description: "";
     in property <string> cancel-text: "";
 
@@ -223,9 +223,9 @@ export component FluentLoadingState inherits Rectangle {
 
 /// 错误状态：加载或操作失败，给出可理解的原因与恢复入口
 export component FluentErrorState inherits Rectangle {
-    in property <string> title: "出错了";
+    in property <string> title: @tr("出错了");
     in property <string> description: "";
-    in property <string> retry-text: "重试";
+    in property <string> retry-text: @tr("重试");
     in property <string> secondary-text: "";
 
     callback retry();

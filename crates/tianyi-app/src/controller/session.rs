@@ -203,7 +203,7 @@ impl Controller {
         let saved = match self.store.save_config(&cfg) {
             Ok(()) => true,
             Err(e) => {
-                self.notice("error", format!("保存并发设置失败：{e}"));
+                self.notice("error", tf("error.save_threads_failed", &[("e", &e)]));
                 false
             }
         };
@@ -219,14 +219,14 @@ impl Controller {
             if self.store.is_persistent() {
                 self.notice(
                     "success",
-                    format!("并发分片数已保存：下载 {download_thread} · 上传 {upload_thread}"),
+                    tf(
+                        "toast.threads_saved",
+                        &[("download", &download_thread), ("upload", &upload_thread)],
+                    ),
                 );
             } else {
                 // 内存态：值在本进程内生效，但没有落盘，必须如实说明
-                self.notice(
-                    "warning",
-                    "并发分片数已在本次运行内生效；配置目录不可写，重启后会恢复默认值",
-                );
+                self.notice("warning", t("toast.threads_saved_memory"));
             }
         }
     }
@@ -238,7 +238,7 @@ impl Controller {
             .map(|c| c.download_dir)
             .unwrap_or_else(|_| PathBuf::from("."));
         let Some(dir) = rfd::FileDialog::new()
-            .set_title("选择默认下载目录")
+            .set_title(t("dialog.choose_download_dir_title"))
             .set_directory(&current)
             .pick_folder()
         else {
@@ -247,20 +247,20 @@ impl Controller {
         if let Ok(mut cfg) = self.store.load_config() {
             cfg.download_dir = dir.clone();
             if let Err(e) = self.store.save_config(&cfg) {
-                self.notice("error", format!("保存配置失败：{e}"));
+                self.notice("error", tf("error.save_config_failed", &[("e", &e)]));
                 return;
             }
         }
         let text = dir.display().to_string();
         self.set_ui_state(move |ui| ui.set_download_dir(SharedString::from(text)));
-        self.notice("success", "默认下载目录已更新");
+        self.notice("success", t("toast.download_dir_updated"));
     }
 
     pub(super) fn open_config_dir(self: &Arc<Self>) {
         let dir = self.store.root();
         let _ = std::fs::create_dir_all(dir.as_path());
         if let Err(e) = file::open_with_system(dir.as_path()) {
-            self.notice("error", format!("无法打开配置目录：{e}"));
+            self.notice("error", tf("error.open_config_dir_failed", &[("e", &e)]));
         }
     }
 
@@ -272,7 +272,7 @@ impl Controller {
         let dir = crate::logging::log_dir();
         let _ = std::fs::create_dir_all(dir.as_path());
         if let Err(e) = file::open_with_system(dir.as_path()) {
-            self.notice("error", format!("无法打开日志目录：{e}"));
+            self.notice("error", tf("error.open_log_dir_failed", &[("e", &e)]));
         }
     }
 
@@ -284,7 +284,7 @@ impl Controller {
             .unwrap_or_else(|_| PathBuf::from("."));
         let _ = std::fs::create_dir_all(dir.as_path());
         if let Err(e) = file::open_with_system(dir.as_path()) {
-            self.notice("error", format!("无法打开下载目录：{e}"));
+            self.notice("error", tf("error.open_download_dir_failed", &[("e", &e)]));
         }
     }
 
@@ -298,7 +298,7 @@ impl Controller {
             ui.set_qr_mode(qr);
             ui.set_login_error(SharedString::default());
             if qr {
-                ui.set_qr_status(SharedString::from("正在获取二维码…"));
+                ui.set_qr_status(SharedString::from(t("status.qr_fetching")));
                 ui.set_qr_state(SharedString::from("loading"));
                 ui.set_login_loading(true);
             } else {
@@ -315,7 +315,7 @@ impl Controller {
         let gen = self.login_gen.fetch_add(1, Ordering::SeqCst) + 1;
         self.set_ui_state(|ui| {
             ui.set_login_error(SharedString::default());
-            ui.set_qr_status(SharedString::from("正在获取二维码…"));
+            ui.set_qr_status(SharedString::from(t("status.qr_fetching")));
             ui.set_qr_state(SharedString::from("loading"));
             ui.set_login_loading(true);
         });
@@ -332,7 +332,7 @@ impl Controller {
             let http = match reqwest::Client::builder().cookie_store(true).build() {
                 Ok(c) => c,
                 Err(e) => {
-                    this.login_failed(gen, format!("初始化网络失败：{e}"));
+                    this.login_failed(gen, tf("error.network_init_failed", &[("e", &e)]));
                     return;
                 }
             };
@@ -361,7 +361,7 @@ impl Controller {
         }
         let accounts = self.store.load_accounts().unwrap_or_default();
         let Some(acc) = accounts.find(username).cloned() else {
-            let msg = format!("未找到账号 {username} 的登录信息，请手动登录");
+            let msg = tf("error.account_not_found", &[("name", &username)]);
             self.set_ui_state(move |ui| {
                 ui.set_login_error(SharedString::from(msg));
             });
@@ -369,7 +369,7 @@ impl Controller {
         };
         if acc.token.access_token.is_empty() && acc.token.session_key.is_empty() {
             self.set_ui_state(|ui| {
-                ui.set_login_error(SharedString::from("该账号没有有效登录态，请重新登录"));
+                ui.set_login_error(SharedString::from(t("error.no_valid_session")));
             });
             return;
         }
@@ -400,7 +400,7 @@ impl Controller {
         if last.is_empty() {
             return;
         }
-        self.set_status(format!("正在恢复账号 {last} 的登录状态…"));
+        self.set_status(tf("status.restoring_login", &[("name", &last)]));
         self.handle_quick_login(&last);
     }
 
@@ -430,7 +430,7 @@ impl Controller {
             "error"
         };
         let friendly = if msg.contains("NEED_CAPTCHA") {
-            "请输入图片验证码后重试".to_string()
+            t("error.need_captcha").to_string()
         } else {
             msg
         };
@@ -453,7 +453,7 @@ impl Controller {
     ) {
         if username.trim().is_empty() || password.is_empty() {
             self.set_ui_state(|ui| {
-                ui.set_login_error(SharedString::from("请输入账号和密码"));
+                ui.set_login_error(SharedString::from(t("error.credentials_required")));
             });
             return;
         }
@@ -480,7 +480,7 @@ impl Controller {
             let http = match reqwest::Client::builder().cookie_store(true).build() {
                 Ok(c) => c,
                 Err(e) => {
-                    this.login_failed(gen, format!("初始化网络失败：{e}"));
+                    this.login_failed(gen, tf("error.network_init_failed", &[("e", &e)]));
                     return;
                 }
             };
@@ -614,9 +614,9 @@ impl Controller {
             ui.set_show_captcha(false);
             ui.set_login_loading(false);
             ui.set_file_error(SharedString::default());
-            ui.set_notice_text(SharedString::from("已退出登录"));
+            ui.set_notice_text(SharedString::from(t("toast.logged_out")));
             ui.set_notice_kind(SharedString::from("info"));
-            ui.set_status_text(SharedString::from("已退出登录"));
+            ui.set_status_text(SharedString::from(t("toast.logged_out")));
             ui.set_transfer_panel_open(false);
         });
     }
@@ -699,15 +699,12 @@ impl ConfigStore {
         match pick_store_root(None, &fallback) {
             StoreRoot::Primary(root) => (Self::open_disk(root), None),
             StoreRoot::Fallback(root) => {
-                let msg = format!(
-                    "配置目录不可写，已改用临时目录 {}：设置会写在那里，可能被系统清理",
-                    root.display()
-                );
+                let msg = tf("state.config_fallback", &[("dir", &root.display())]);
                 (Self::open_disk(root), Some(msg))
             }
             StoreRoot::Memory => (
                 Self::memory(fallback),
-                Some("配置目录不可写，本次运行不会保存设置".to_string()),
+                Some(t("state.config_memory").to_string()),
             ),
         }
     }

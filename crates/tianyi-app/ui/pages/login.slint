@@ -143,7 +143,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "天翼云盘";
+                            text: @tr("天翼云盘");
                             font-family: Theme.font-family;
                             font-size: Theme.font-title;
                             font-weight: Theme.weight-semibold;
@@ -152,7 +152,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "登录以同步和管理您的云端文件";
+                            text: @tr("登录以同步和管理您的云端文件");
                             font-family: Theme.font-family;
                             font-size: Theme.font-small;
                             color: Theme.text-tertiary;
@@ -163,7 +163,7 @@ export component LoginPage inherits Rectangle {
 
                     // ---------------- 登录方式 ----------------
                     FluentSegmented {
-                        items: ["密码登录", "扫码登录"];
+                        items: [@tr("密码登录"), @tr("扫码登录")];
                         current: root.qr-mode ? 1 : 0;
                         enabled: !root.login-loading;
                         changed(idx) => {
@@ -180,7 +180,7 @@ export component LoginPage inherits Rectangle {
                             spacing: Theme.space-1;
 
                             Text {
-                                text: "已保存的账号";
+                                text: @tr("已保存的账号");
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
                                 color: Theme.text-tertiary;
@@ -226,7 +226,7 @@ export component LoginPage inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: root.login-loading ? "…" : "继续登录";
+                                        text: root.login-loading ? "…" : @tr("继续登录");
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-caption;
                                         color: Theme.accent;
@@ -251,7 +251,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         user-field := FluentTextField {
-                            placeholder: "手机号 / 邮箱";
+                            placeholder: @tr("手机号 / 邮箱");
                             icon: IconName.account;
                             clearable: true;
                             enabled: !root.login-loading;
@@ -263,7 +263,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         pass-field := FluentTextField {
-                            placeholder: "密码";
+                            placeholder: @tr("密码");
                             password: true;
                             enabled: !root.login-loading;
                             invalid: root.pass-invalid;
@@ -301,7 +301,7 @@ export component LoginPage inherits Rectangle {
                             }
 
                             captcha-field := FluentTextField {
-                                placeholder: "请输入图片验证码";
+                                placeholder: @tr("请输入图片验证码");
                                 enabled: !root.login-loading;
                                 text <=> root.captcha-text;
                                 accepted => {
@@ -311,7 +311,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         FluentCheckBox {
-                            text: "保存账号";
+                            text: @tr("保存账号");
                             checked: root.save-account;
                             enabled: !root.login-loading;
                             toggled => {
@@ -350,7 +350,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         FluentButton {
-                            text: root.login-loading ? "正在登录…" : "登录";
+                            text: root.login-loading ? @tr("正在登录…") : @tr("登录");
                             accent: true;
                             busy: root.login-loading;
                             enabled: !root.login-loading;
@@ -406,7 +406,7 @@ export component LoginPage inherits Rectangle {
 
                                     Text {
                                         width: 160px;
-                                        text: root.qr-state == "expired" ? "二维码已过期" : "二维码获取失败";
+                                        text: root.qr-state == "expired" ? @tr("二维码已过期") : @tr("二维码获取失败");
                                         font-family: Theme.font-family;
                                         font-size: Theme.font-small;
                                         color: Theme.text-secondary;
@@ -431,7 +431,7 @@ export component LoginPage inherits Rectangle {
                             }
 
                             Text {
-                                text: root.qr-state == "loading" ? "正在获取二维码…" : "等待扫码…";
+                                text: root.qr-state == "loading" ? @tr("正在获取二维码…") : @tr("等待扫码…");
                                 font-family: Theme.font-family;
                                 font-size: Theme.font-caption;
                                 color: Theme.text-tertiary;
@@ -456,7 +456,7 @@ export component LoginPage inherits Rectangle {
                             alignment: center;
 
                             FluentButton {
-                                text: "刷新二维码";
+                                text: @tr("刷新二维码");
                                 icon: IconName.refresh;
                                 enabled: !root.login-loading;
                                 min-w: 132px;
@@ -467,7 +467,7 @@ export component LoginPage inherits Rectangle {
                         }
 
                         Text {
-                            text: "打开天翼云盘 App → 扫一扫";
+                            text: @tr("打开天翼云盘 App → 扫一扫");
                             font-family: Theme.font-family;
                             font-size: Theme.font-caption;
                             color: Theme.text-tertiary;
@@ -481,7 +481,7 @@ export component LoginPage inherits Rectangle {
                         alignment: center;
 
                         Text {
-                            text: "正在与天翼云盘通信…";
+                            text: @tr("正在与天翼云盘通信…");
                             font-family: Theme.font-family;
                             font-size: Theme.font-caption;
                             color: Theme.text-tertiary;

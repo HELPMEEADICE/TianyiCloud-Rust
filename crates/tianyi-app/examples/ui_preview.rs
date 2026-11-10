@@ -297,6 +297,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }))?;
 
     let ui = MainWindow::new()?;
+    // 打包了语言包之后，Slint 会在首个组件创建时按系统 locale 自动选包（本机 zh-CN 的
+    // 主标签 zh 会命中 zh-Hant），预览图会莫名其妙变成繁体。这里显式钉回索引 0（空串
+    // = 简中原文）。example 是独立 crate，拿不到 `crate::i18n`，只能直接调 slint 的接口。
+    let _ = slint::select_bundled_translation("");
+    // 允许采其它语种的截图：TIANYI_PREVIEW_LANG=en|zh-Hant|ja（有值就覆盖上面的简中）
+    if let Ok(lang) = std::env::var("TIANYI_PREVIEW_LANG") {
+        let _ = slint::select_bundled_translation(&lang);
+    }
     ui.show()?;
 
     // ---------------- 静态数据 ----------------

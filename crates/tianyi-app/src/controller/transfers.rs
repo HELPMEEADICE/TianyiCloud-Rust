@@ -28,11 +28,11 @@ impl Controller {
     // ==================================================================
     pub(super) fn upload_files(self: &Arc<Self>) {
         if self.client().is_none() {
-            self.notice("error", "请先登录");
+            self.notice("error", t("toast.login_required"));
             return;
         }
         let Some(paths) = rfd::FileDialog::new()
-            .set_title("选择要上传的文件（可多选）")
+            .set_title(t("dialog.choose_upload_files_title"))
             .pick_files()
         else {
             return;
@@ -47,15 +47,15 @@ impl Controller {
     pub(super) fn create_folder(self: &Arc<Self>) {
         let Some(client) = self.client() else { return };
         let folder_id = lock_or_recover(&self.folder_id).clone();
-        let name = "新建文件夹";
+        let name = t("state.default_folder_name");
         let this = Arc::clone(self);
         self.backend.spawn(move || async move {
             match client.create_folder(&folder_id, name).await {
                 Ok(_) => {
-                    this.notice("success", "文件夹已创建，可按 F2 重命名");
+                    this.notice("success", t("toast.folder_created"));
                     this.refresh_files();
                 }
-                Err(e) => this.notice("error", format!("创建文件夹失败：{e}")),
+                Err(e) => this.notice("error", tf("error.create_folder_failed", &[("e", &e)])),
             }
         });
     }
@@ -63,7 +63,7 @@ impl Controller {
     /// 批量上传本地路径到指定云端目录
     pub fn upload_paths(self: &Arc<Self>, paths: Vec<PathBuf>, folder_id: &str) {
         if self.client().is_none() {
-            self.notice("error", "请先登录");
+            self.notice("error", t("toast.login_required"));
             return;
         }
         // 去重：同一批里重复出现的路径只上传一次（避免拖拽多文件时重复入队）。
@@ -124,7 +124,7 @@ impl Controller {
         }
         self.set_ui_state(|ui| ui.set_transfer_panel_open(true));
         self.refresh_transfers();
-        self.notice("info", format!("已加入 {count} 个上传任务"));
+        self.notice("info", tf("toast.uploads_added", &[("count", &count)]));
     }
 
     /// 目录大小统计：扔进 tokio 的 blocking 线程池，算完回填并置脏
@@ -155,7 +155,7 @@ impl Controller {
             return;
         }
         if self.client().is_none() {
-            self.notice("error", "请先登录后再拖入文件");
+            self.notice("error", t("toast.login_required_for_drop"));
             return;
         }
         let folder_id = lock_or_recover(&self.folder_id).clone();
@@ -195,7 +195,7 @@ impl Controller {
                     this.finish_task(
                         task_id,
                         TaskStatus::Failed,
-                        Some("调度器已关闭".to_string()),
+                        Some(t("error.scheduler_closed").to_string()),
                     );
                     return;
                 }
@@ -227,7 +227,11 @@ impl Controller {
     pub(super) async fn run_transfer(self: &Arc<Self>, task: Task, control: TransferControl) {
         let task_id = task.id;
         let Some(client) = self.client() else {
-            self.finish_task(task_id, TaskStatus::Failed, Some("未登录".to_string()));
+            self.finish_task(
+                task_id,
+                TaskStatus::Failed,
+                Some(t("state.not_logged_in").to_string()),
+            );
             lock_or_recover(&self.controls).remove(&task_id);
             return;
         };
@@ -326,11 +330,17 @@ impl Controller {
                 lock_or_recover(&self.controls).remove(&task_id);
                 lock_or_recover(&self.rate_samples).remove(&task_id);
                 let label = if task.direction == TaskDirection::Upload {
-                    "上传完成"
+                    t("toast.upload_done")
                 } else {
-                    "下载完成"
+                    t("toast.download_done")
                 };
-                self.notice("success", format!("{label}：{}", task.file_name));
+                self.notice(
+                    "success",
+                    tf(
+                        "toast.transfer_done",
+                        &[("label", &label), ("name", &task.file_name)],
+                    ),
+                );
                 if task.direction == TaskDirection::Upload {
                     self.refresh_files();
                 }
@@ -375,7 +385,10 @@ impl Controller {
                 .get(task_id)
                 .map(|t| t.file_name)
                 .unwrap_or_default();
-            self.notice("error", format!("{name} 传输失败：{e}"));
+            self.notice(
+                "error",
+                tf("toast.transfer_failed", &[("name", &name), ("e", &e)]),
+            );
         }
     }
 
@@ -415,12 +428,12 @@ impl Controller {
                 ctl.pause();
                 self.tasks.transition(id, TaskStatus::Paused);
                 self.tasks.update(id, |t| t.speed = 0);
-                self.notice("info", format!("已暂停：{}", task.file_name));
+                self.notice("info", tf("toast.paused", &[("name", &task.file_name)]));
             }
             None => {
                 // 没有控制句柄（例如上次进程遗留的任务）：标记为暂停即可
                 self.tasks.transition(id, TaskStatus::Paused);
-                self.notice("info", format!("已暂停：{}", task.file_name));
+                self.notice("info", tf("toast.paused", &[("name", &task.file_name)]));
             }
         }
         self.refresh_transfers();
@@ -439,7 +452,7 @@ impl Controller {
                 // 会话仍在：唤醒挂起的传输
                 self.tasks.transition(id, TaskStatus::Running);
                 ctl.resume();
-                self.notice("info", format!("已继续：{}", task.file_name));
+                self.notice("info", tf("toast.resumed", &[("name", &task.file_name)]));
                 self.refresh_transfers();
             }
             None => {
@@ -449,7 +462,7 @@ impl Controller {
                     t.status = TaskStatus::Pending;
                 });
                 self.spawn_transfer(id);
-                self.notice("info", format!("已重新开始：{}", task.file_name));
+                self.notice("info", tf("toast.restarted", &[("name", &task.file_name)]));
                 self.refresh_transfers();
             }
         }
@@ -484,7 +497,7 @@ impl Controller {
             self.tasks.transition(id, status);
         }
         lock_or_recover(&self.rate_samples).remove(&id);
-        self.notice("info", format!("已取消：{}", task.file_name));
+        self.notice("info", tf("toast.canceled", &[("name", &task.file_name)]));
         self.refresh_transfers();
     }
 
@@ -502,7 +515,7 @@ impl Controller {
             t.last_speed_time = 0;
         });
         self.spawn_transfer(id);
-        self.notice("info", format!("已重试：{}", task.file_name));
+        self.notice("info", tf("toast.retried", &[("name", &task.file_name)]));
         self.refresh_transfers();
     }
 
@@ -531,7 +544,7 @@ impl Controller {
                 .unwrap_or_else(|_| PathBuf::from("."))
         };
         if let Err(e) = file::open_with_system(&target) {
-            self.notice("error", format!("无法打开目录：{e}"));
+            self.notice("error", tf("error.open_dir_failed", &[("e", &e)]));
         }
     }
 
@@ -541,9 +554,9 @@ impl Controller {
         let removed = before - self.tasks.list().len();
         self.refresh_transfers();
         if removed == 0 {
-            self.notice("info", "没有可清理的已结束任务");
+            self.notice("info", t("toast.no_finished_tasks"));
         } else {
-            self.notice("success", format!("已清理 {removed} 个已结束任务"));
+            self.notice("success", tf("toast.cleaned_tasks", &[("count", &removed)]));
         }
     }
 
@@ -718,7 +731,7 @@ pub(super) fn to_transfer_entry(t: &Task) -> TransferEntry {
     };
     let remaining = t.file_size.saturating_sub(t.bytes_done);
     let eta = if t.status == TaskStatus::Running && t.speed > 0 {
-        file::format_eta(remaining, t.speed)
+        crate::i18n::format_eta(remaining, t.speed)
     } else {
         String::new()
     };
@@ -743,7 +756,7 @@ pub(super) fn to_transfer_entry(t: &Task) -> TransferEntry {
         size_text: file::format_size(t.file_size).into(),
         progress: file::percent(t.bytes_done, t.file_size),
         status: t.status.as_key().into(),
-        status_text: t.status.label_zh().into(),
+        status_text: crate::i18n::label_status(t.status).into(),
         speed: if t.status == TaskStatus::Running && t.speed > 0 {
             file::format_speed(t.speed).into()
         } else {

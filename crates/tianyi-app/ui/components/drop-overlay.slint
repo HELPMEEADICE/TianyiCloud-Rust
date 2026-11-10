@@ -44,7 +44,7 @@ export component DropOverlay inherits Rectangle {
 
         Text {
             width: Math.min(root.width - 64px, 420px);
-            text: "松开上传到 " + (root.target-name == "" ? "当前目录" : root.target-name);
+            text: @tr("松开上传到 {0}", root.target-name == "" ? @tr("当前目录") : root.target-name);
             font-family: Theme.font-family;
             font-size: Theme.font-subtitle;
             font-weight: Theme.weight-semibold;
@@ -55,7 +55,7 @@ export component DropOverlay inherits Rectangle {
 
         Text {
             width: Math.min(root.width - 64px, 420px);
-            text: "支持文件与文件夹，文件夹会自动创建同名云端目录";
+            text: @tr("支持文件与文件夹，文件夹会自动创建同名云端目录");
             font-family: Theme.font-family;
             font-size: Theme.font-small;
             color: Theme.text-secondary;

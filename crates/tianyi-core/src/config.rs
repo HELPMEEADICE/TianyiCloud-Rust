@@ -31,6 +31,9 @@ pub struct AppConfig {
     /// 是否减少动画（无障碍/低性能设备）
     #[serde(default)]
     pub reduce_motion: bool,
+    /// 界面语言："auto"（跟随系统）/ "zh-Hans" / "zh-Hant" / "en" / "ja"
+    #[serde(default)]
+    pub language: String,
 }
 
 impl AppConfig {
@@ -39,11 +42,14 @@ impl AppConfig {
     /// 迁移链：
     /// - **v0**（无 `version` 字段）：历史格式。字段级兼容由各字段的 `#[serde(default)]`
     ///   与 [`AppConfig::default_config`] 的默认值承担，因此 v0 → v1 只需补版本号。
-    /// - **v1**：当前格式（`version` / `theme` / `reduce_motion`）。
+    /// - **v1**（`version` / `theme` / `reduce_motion`）：v1 → v2 同样只补版本号，
+    ///   新增的 `language` 字段靠 `#[serde(default)]` 落到 `""`（再由
+    ///   `LanguageMode::parse` 兜底成 `Auto`）。
+    /// - **v2**：当前格式（新增 `language`）。
     ///
     /// 以后新增字段时：把 `CURRENT_VERSION` +1，并在 [`AppConfig::migrate`] 的
     /// 迁移链里补一个 `match` 分支。
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
     pub fn default_config() -> Self {
         let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -58,6 +64,7 @@ impl AppConfig {
             last_account: String::new(),
             theme: "system".to_string(),
             reduce_motion: false,
+            language: "auto".to_string(),
         }
     }
 
@@ -91,12 +98,13 @@ impl AppConfig {
             );
         }
 
-        // 迁移链：每一步把版本 +1。v0 -> v1 只补版本号（字段兼容交给 serde 默认值），
-        // 新增版本时在这里追加分支。
+        // 迁移链：每一步把版本 +1。v0 -> v1、v1 -> v2 都只补版本号（字段兼容交给
+        // serde 默认值），新增版本时在这里追加分支。
         let mut v = raw_version.min(Self::CURRENT_VERSION);
         while v < Self::CURRENT_VERSION {
             match v {
                 0 => {}
+                1 => {}
                 _ => break,
             }
             v += 1;
@@ -143,6 +151,64 @@ impl ThemeMode {
             ThemeMode::System => "system",
             ThemeMode::Light => "light",
             ThemeMode::Dark => "dark",
+        }
+    }
+}
+
+/// 界面语言模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LanguageMode {
+    /// 跟随系统
+    Auto,
+    /// 简体中文
+    ZhHans,
+    /// 繁体中文
+    ZhHant,
+    /// 英文
+    En,
+    /// 日文
+    Ja,
+}
+
+impl LanguageMode {
+    /// 解析配置字符串
+    ///
+    /// `""` / `"auto"` → `Auto`；简繁两套接受脚本标签与地区标签两种写法
+    /// （`zh-Hans`/`zh_CN`/`zh-CN`、`zh-Hant`/`zh_TW`/`zh-TW`/`zh_HK`）；
+    /// 其它未知值一律回退为 `Auto`——与 [`ThemeMode::parse`] 同一条原则：
+    /// 配置被人手改坏时不能让界面无法启动。
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "zh-hans" | "zh_cn" | "zh-cn" => LanguageMode::ZhHans,
+            "zh-hant" | "zh_tw" | "zh-tw" | "zh-hk" => LanguageMode::ZhHant,
+            "en" => LanguageMode::En,
+            "ja" => LanguageMode::Ja,
+            _ => LanguageMode::Auto,
+        }
+    }
+
+    /// 序列化为配置字符串
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LanguageMode::Auto => "auto",
+            LanguageMode::ZhHans => "zh-Hans",
+            LanguageMode::ZhHant => "zh-Hant",
+            LanguageMode::En => "en",
+            LanguageMode::Ja => "ja",
+        }
+    }
+
+    /// Slint 翻译目录名（`lang/<code>/LC_MESSAGES/tianyi-app.po` 里的 `<code>`）
+    ///
+    /// `Auto` / `ZhHans` 都是空串：`Auto` 表示还没解析成具体语种，简中则压根没有
+    /// 目录——`.po` 的 msgid 本身就是简体中文，它由索引 0（回退语言）承担，
+    /// 空串传给 `select_bundled_translation` 正是「选回退语言」。
+    pub fn code(&self) -> &'static str {
+        match self {
+            LanguageMode::Auto | LanguageMode::ZhHans => "",
+            LanguageMode::ZhHant => "zh-Hant",
+            LanguageMode::En => "en",
+            LanguageMode::Ja => "ja",
         }
     }
 }
@@ -344,6 +410,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_language_mode_parse() {
+        // 空串与 auto 都是「跟随系统」
+        assert_eq!(LanguageMode::parse(""), LanguageMode::Auto);
+        assert_eq!(LanguageMode::parse("auto"), LanguageMode::Auto);
+        // 简体：脚本标签 + 两种地区标签写法
+        assert_eq!(LanguageMode::parse("zh-Hans"), LanguageMode::ZhHans);
+        assert_eq!(LanguageMode::parse("zh_CN"), LanguageMode::ZhHans);
+        assert_eq!(LanguageMode::parse("zh-CN"), LanguageMode::ZhHans);
+        // 繁体：脚本标签 + 台/港地区
+        assert_eq!(LanguageMode::parse("zh-Hant"), LanguageMode::ZhHant);
+        assert_eq!(LanguageMode::parse("zh_TW"), LanguageMode::ZhHant);
+        assert_eq!(LanguageMode::parse("zh-TW"), LanguageMode::ZhHant);
+        assert_eq!(LanguageMode::parse("zh-HK"), LanguageMode::ZhHant);
+        assert_eq!(LanguageMode::parse("en"), LanguageMode::En);
+        assert_eq!(LanguageMode::parse("ja"), LanguageMode::Ja);
+        // 大小写与前后空白都要容错（配置文件是人手可改的）
+        assert_eq!(LanguageMode::parse(" ZH-HANT "), LanguageMode::ZhHant);
+        assert_eq!(LanguageMode::parse("JA"), LanguageMode::Ja);
+        // 未知值回退为跟随系统
+        assert_eq!(LanguageMode::parse("de-DE"), LanguageMode::Auto);
+        assert_eq!(LanguageMode::parse("简体中文"), LanguageMode::Auto);
+        // 四种往返
+        for mode in [
+            LanguageMode::Auto,
+            LanguageMode::ZhHans,
+            LanguageMode::ZhHant,
+            LanguageMode::En,
+            LanguageMode::Ja,
+        ] {
+            assert_eq!(LanguageMode::parse(mode.as_str()), mode);
+        }
+        // Slint 目录名：简中走索引 0，没有自己的目录
+        assert_eq!(LanguageMode::Auto.code(), "");
+        assert_eq!(LanguageMode::ZhHans.code(), "");
+        assert_eq!(LanguageMode::ZhHant.code(), "zh-Hant");
+        assert_eq!(LanguageMode::En.code(), "en");
+        assert_eq!(LanguageMode::Ja.code(), "ja");
+    }
+
+    /// 默认配置的语言必须是 auto，否则新装用户会被钉死在某个语种上
+    #[test]
+    fn test_config_language_default() {
+        assert_eq!(AppConfig::default_config().language, "auto");
+    }
+
     /// 新增配置字段必须带 serde 默认，旧版 config.json 才能继续加载
     #[test]
     fn test_config_theme_defaults_and_compat() {
@@ -351,7 +463,7 @@ mod tests {
         assert_eq!(cfg.theme, "system");
         assert!(!cfg.reduce_motion);
 
-        // 旧版 config.json：没有 theme / reduce_motion 字段
+        // 旧版 config.json：没有 theme / reduce_motion / language 字段
         let old = r#"{"download_dir":"C:\\Downloads","upload_thread":3,"download_thread":4,
             "speed_limit":0,"rapid_upload":true,"generate_torrent":false,"last_account":"u"}"#;
         let parsed: AppConfig = serde_json::from_str(old).expect("旧配置应能加载");
@@ -361,6 +473,11 @@ mod tests {
         );
         assert!(!parsed.reduce_motion);
         assert_eq!(ThemeMode::parse(&parsed.theme), ThemeMode::System);
+        assert_eq!(
+            parsed.language, "",
+            "缺失语言时保持空串，交给 LanguageMode::parse 处理"
+        );
+        assert_eq!(LanguageMode::parse(&parsed.language), LanguageMode::Auto);
 
         // 新字段往返
         let mut cfg = AppConfig::default_config();
@@ -381,7 +498,7 @@ mod tests {
             "last_account":"13800138000","theme":"dark","reduce_motion":true}"#;
         let cfg = AppConfig::from_json_str(old).expect("旧配置应能加载");
         assert_eq!(cfg.version, AppConfig::CURRENT_VERSION);
-        assert_eq!(cfg.version, 1);
+        assert_eq!(cfg.version, 2);
         assert_eq!(cfg.upload_thread, 7);
         assert_eq!(cfg.download_thread, 5);
         assert_eq!(cfg.speed_limit, 1_048_576);
@@ -390,6 +507,8 @@ mod tests {
         assert_eq!(cfg.last_account, "13800138000");
         assert_eq!(cfg.theme, "dark");
         assert!(cfg.reduce_motion);
+        // v1 → v2 只补版本号，字段级兼容交给 serde 默认值
+        assert_eq!(cfg.language, "");
     }
 
     /// 未来版本号：不崩、按当前结构尽力解析，并把版本号归一
@@ -433,7 +552,7 @@ mod tests {
 
         let raw = std::fs::read_to_string(dir.join("config.json")).expect("read config.json");
         assert!(
-            raw.contains("\"version\": 1"),
+            raw.contains("\"version\": 2"),
             "磁盘上必须带版本号，实际: {raw}"
         );
         let loaded = store.load_config().expect("load config");

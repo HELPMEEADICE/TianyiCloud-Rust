@@ -59,10 +59,10 @@ impl Controller {
         self.backend.spawn(move || async move {
             match client.move_to(&file, &folder_id).await {
                 Ok(_) => {
-                    this.notice("success", format!("已移动 {name}"));
+                    this.notice("success", tf("toast.moved", &[("name", &name)]));
                     this.refresh_files();
                 }
-                Err(e) => this.notice("error", format!("移动失败：{e}")),
+                Err(e) => this.notice("error", tf("error.move_failed", &[("e", &e)])),
             }
         });
     }
@@ -70,7 +70,7 @@ impl Controller {
     #[cfg(windows)]
     pub(super) fn handle_drag_out(self: &Arc<Self>, id: &str, name: &str) {
         if self.client().is_none() {
-            self.notice("error", "请先登录");
+            self.notice("error", t("toast.login_required"));
             return;
         }
         let Some(file) = self.find_visible(id) else {
@@ -84,7 +84,7 @@ impl Controller {
         let ui = self.ui.clone();
         let id = id.to_string();
         self.set_ui_state(move |win| {
-            win.set_status_text(SharedString::from("正在准备文件，拖到本地文件夹即可下载…"));
+            win.set_status_text(SharedString::from(t("status.preparing_drag_out")));
             let api = win.global::<DragOutApi>();
             api.set_active(true);
             api.set_active_id(SharedString::from(id.as_str()));
@@ -107,7 +107,7 @@ impl Controller {
             if !ok {
                 this.clear_drag_out_active();
                 this.drag_out_busy.store(false, Ordering::SeqCst);
-                this.notice("error", "拖出下载失败：无法获取文件");
+                this.notice("error", t("error.drag_out_failed"));
                 return;
             }
             let temp_refs = [temp_path.clone()];
@@ -126,9 +126,9 @@ impl Controller {
                         button: PointerEventButton::Left,
                     });
                 let msg = if dropped {
-                    format!("已拖出 {name}")
+                    tf("status.dragged_out", &[("name", &name)])
                 } else {
-                    "已取消拖拽".to_string()
+                    t("status.drag_canceled").to_string()
                 };
                 win.set_status_text(SharedString::from(msg));
             });
@@ -137,7 +137,7 @@ impl Controller {
 
     #[cfg(not(windows))]
     fn handle_drag_out(self: &Arc<Self>, _id: &str, _name: &str) {
-        self.notice("info", "当前系统暂不支持拖出下载");
+        self.notice("info", t("toast.drag_out_unsupported"));
     }
 
     #[cfg(windows)]

@@ -1,0 +1,431 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: ja\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "“跟随系统”会读取操作系统的浅色/深色偏好，系统切换时自动同步"
+msgstr "“システム設定”は OS のライト/ダーク設定を読み取り、システムの切り替え時に自動で同期します"
+
+msgid "“自动”按系统语言选择；切换后立即生效，无需重启"
+msgstr "“自動”はシステム言語に従います。切り替えは即時反映されます"
+
+msgid "按钮"
+msgstr "ボタン"
+
+msgid "把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”"
+msgstr "ファイルをここにドラッグしてアップロード、または右上の“アップロード”“新しいフォルダー”を使用"
+
+msgid "版本"
+msgstr "バージョン"
+
+msgid "保存账号"
+msgstr "アカウントを保存"
+
+msgid "并发分片数"
+msgstr "同時接続数"
+
+msgid "查看全部"
+msgstr "すべて表示"
+
+msgid "出错了"
+msgstr "エラーが発生しました"
+
+msgid "传输"
+msgstr "転送"
+
+msgid "传输任务"
+msgstr "転送タスク"
+
+msgid "传输中 {0}"
+msgstr "転送中 {0}"
+
+msgid "从列表中移除"
+msgstr "リストから削除"
+
+msgid "从云盘文件解析出的下载直链，可复制到浏览器或下载工具使用"
+msgstr "クラウドのファイルから解析したダウンロードリンクです。ブラウザーやダウンロードツールで使用できます"
+
+msgid "存储"
+msgstr "ストレージ"
+
+msgid "存储 {0}% · {1}"
+msgstr "使用量 {0}% · {1}"
+
+msgid "打开"
+msgstr "開く"
+
+msgid "打开所在文件夹"
+msgstr "ファイルの場所を開く"
+
+msgid "打开天翼云盘 App → 扫一扫"
+msgstr "Tianyi Cloud アプリを開く → スキャン"
+
+msgid "打开文件夹"
+msgstr "フォルダーを開く"
+
+msgid "打开下载目录"
+msgstr "ダウンロードフォルダーを開く"
+
+msgid "大小"
+msgstr "サイズ"
+
+msgid "当前没有进行中的传输任务"
+msgstr "進行中の転送はありません"
+
+msgid "当前目录"
+msgstr "現在のフォルダー"
+
+msgid "当前页面"
+msgstr "現在のページ"
+
+msgid "当前账号"
+msgstr "現在のアカウント"
+
+msgid "登录"
+msgstr "ログイン"
+
+msgid "登录以同步和管理您的云端文件"
+msgstr "ログインしてクラウド上のファイルを同期・管理します"
+
+msgid "等待扫码…"
+msgstr "スキャン待ち…"
+
+msgid "二维码获取失败"
+msgstr "QR コードの取得に失敗しました"
+
+msgid "二维码已过期"
+msgstr "QR コードの有効期限が切れました"
+
+msgid "返回上级目录 (Alt+←)"
+msgstr "上の階層へ戻る (Alt+←)"
+
+msgid "返回云盘"
+msgstr "クラウドに戻る"
+
+msgid "分片并发越高占用带宽越多，网络不稳定时建议下调"
+msgstr "同時接続数を増やすほど帯域を消費します。不安定な回線では下げてください"
+
+msgid "复制"
+msgstr "コピー"
+
+msgid "复制到当前目录"
+msgstr "現在のフォルダーにコピー"
+
+msgid "复制路径"
+msgstr "パスをコピー"
+
+msgid "复制全部"
+msgstr "すべてコピー"
+
+msgid "复制直链"
+msgstr "直接リンクをコピー"
+
+msgid "该分类下没有任务"
+msgstr "このカテゴリにタスクはありません"
+
+msgid "个人云"
+msgstr "個人クラウド"
+
+msgid "根目录"
+msgstr "ルート"
+
+msgid "跟随系统"
+msgstr "システム設定"
+
+msgid "更改目录"
+msgstr "フォルダーを変更"
+
+msgid "共 {0} 个项目"
+msgstr "全 {0} 項目"
+
+msgid "关闭界面过渡与进度动画，适合远程桌面或低性能设备"
+msgstr "画面遷移と進捗のアニメーションを無効にします。リモートデスクトップや低スペック端末に適しています"
+
+msgid "关闭提示"
+msgstr "ヒントを閉じる"
+
+msgid "关于"
+msgstr "バージョン情報"
+
+msgid "还没有传输任务"
+msgstr "転送タスクはまだありません"
+
+msgid "还没有提取过直链"
+msgstr "まだ直接リンクを取得していません"
+
+msgid "换个关键词试试，或退出搜索回到当前目录"
+msgstr "別のキーワードを試すか、検索を終了して現在のフォルダーに戻ってください"
+
+msgid "继续登录"
+msgstr "ログインを続行"
+
+msgid "继续任务"
+msgstr "再開"
+
+msgid "加载失败"
+msgstr "読み込みに失敗しました"
+
+msgid "家庭云"
+msgstr "ファミリークラウド"
+
+msgid "减少动画"
+msgstr "視差効果を減らす"
+
+msgid "进行中"
+msgstr "進行中"
+
+msgid "进行中 {0} · 已结束 {1}"
+msgstr "進行中 {0} · 終了 {1}"
+
+msgid "进行中的传输 {0}"
+msgstr "進行中の転送 {0}"
+
+msgid "类型"
+msgstr "種類"
+
+msgid "没有找到匹配的文件"
+msgstr "一致するファイルがありません"
+
+msgid "密码"
+msgstr "パスワード"
+
+msgid "密码登录"
+msgstr "パスワードログイン"
+
+msgid "名称"
+msgstr "名前"
+
+msgid "默认下载目录"
+msgstr "既定のダウンロードフォルダー"
+
+msgid "配置目录"
+msgstr "設定フォルダー"
+
+msgid "浅色"
+msgstr "ライト"
+
+msgid "切换到“全部”查看其他任务"
+msgstr "“すべて”に切り替えて他のタスクを表示"
+
+msgid "清除"
+msgstr "クリア"
+
+msgid "清理列表"
+msgstr "リストを空にする"
+
+msgid "清理已完成"
+msgstr "完了分を削除"
+
+msgid "请输入图片验证码"
+msgstr "画像の確認コードを入力してください"
+
+msgid "取消"
+msgstr "キャンセル"
+
+msgid "取消任务"
+msgstr "キャンセル"
+
+msgid "取消选择"
+msgstr "選択を解除"
+
+msgid "去个人云"
+msgstr "個人クラウドへ"
+
+msgid "全部"
+msgstr "すべて"
+
+msgid "全部任务"
+msgstr "すべてのタスク"
+
+msgid "全选"
+msgstr "すべて選択"
+
+msgid "确定"
+msgstr "OK"
+
+msgid "日志目录"
+msgstr "ログフォルダー"
+
+msgid "扫码登录"
+msgstr "QR コードログイン"
+
+msgid "删除"
+msgstr "削除"
+
+msgid "上传"
+msgstr "アップロード"
+
+msgid "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
+msgstr "ファイルをアップロードまたはダウンロードすると、ここに進捗が表示され、いつでも一時停止・再開できます"
+
+msgid "上传文件"
+msgstr "ファイルをアップロード"
+
+msgid "设置"
+msgstr "設定"
+
+msgid "深色"
+msgstr "ダーク"
+
+msgid "失败/取消"
+msgstr "失敗・キャンセル"
+
+msgid "收起传输面板"
+msgstr "転送パネルを閉じる"
+
+msgid "手机号 / 邮箱"
+msgstr "電話番号 / メールアドレス"
+
+msgid "刷新 (F5)"
+msgstr "更新 (F5)"
+
+msgid "刷新二维码"
+msgstr "QR コードを更新"
+
+msgid "松开上传到 {0}"
+msgstr "ドロップして {0} にアップロード"
+
+msgid "搜索"
+msgstr "検索"
+
+msgid "搜索云盘文件"
+msgstr "クラウド内を検索"
+
+msgid "提取直链"
+msgstr "直接リンクを取得"
+
+msgid "天翼云盘"
+msgstr "Tianyi Cloud"
+
+msgid "退出登录"
+msgstr "ログアウト"
+
+msgid "退出搜索"
+msgstr "検索を終了"
+
+msgid "外观"
+msgstr "外観"
+
+msgid "未登录"
+msgstr "未ログイン"
+
+msgid "未获取到容量信息"
+msgstr "容量情報を取得できませんでした"
+
+msgid "下载"
+msgstr "ダウンロード"
+
+msgid "下载到本地"
+msgstr "ローカルにダウンロード"
+
+msgid "下载目录"
+msgstr "ダウンロードフォルダー"
+
+msgid "下载目录与并发设置来源于本地配置文件"
+msgstr "ダウンロードフォルダーと同時接続数はローカル設定ファイルから読み込みます"
+
+msgid "下载任务的默认保存位置"
+msgstr "ダウンロードの既定の保存先"
+
+msgid "下载直链"
+msgstr "ダウンロードリンク"
+
+msgid "显示密码"
+msgstr "パスワードを表示"
+
+msgid "新建文件夹"
+msgstr "新しいフォルダー"
+
+msgid "修改时间"
+msgstr "更新日時"
+
+msgid "移动到上级"
+msgstr "上の階層へ移動"
+
+msgid "移动到上级目录"
+msgstr "上のフォルダーへ移動"
+
+msgid "已保存的账号"
+msgstr "保存済みアカウント"
+
+msgid "已完成"
+msgstr "完了"
+
+msgid "已选择 {0} 项"
+msgstr "{0} 件選択中"
+
+msgid "隐藏密码"
+msgstr "パスワードを隠す"
+
+msgid "语言"
+msgstr "言語"
+
+msgid "预览 / 打开"
+msgstr "プレビュー / 開く"
+
+msgid "运行日志按天滚动保存，只保留最近 7 天"
+msgstr "実行ログは日単位で切り替えて保存し、直近 7 日分のみ保持します"
+
+msgid "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果"
+msgstr "個人クラウドまたはファミリークラウドでファイルを選択し、“直接リンクを取得”を使うとここに結果が表示されます"
+
+msgid "暂停任务"
+msgstr "一時停止"
+
+msgid "账号"
+msgstr "アカウント"
+
+msgid "账号、任务与配置文件的存放位置"
+msgstr "アカウント・タスク・設定ファイルの保存場所"
+
+msgid "这里还没有文件"
+msgstr "まだファイルがありません"
+
+msgid "正在从云端读取目录内容"
+msgstr "クラウドからフォルダーの内容を読み込み中"
+
+msgid "正在登录…"
+msgstr "ログイン中…"
+
+msgid "正在获取二维码…"
+msgstr "QR コードを取得中…"
+
+msgid "正在加载…"
+msgstr "読み込み中…"
+
+msgid "正在加载目录…"
+msgstr "フォルダーを読み込み中…"
+
+msgid "正在搜索…"
+msgstr "検索中…"
+
+msgid "正在与天翼云盘通信…"
+msgstr "Tianyi Cloud と通信中…"
+
+msgid "正在云端检索匹配的文件"
+msgstr "クラウド上で一致するファイルを検索中"
+
+msgid "支持文件与文件夹，文件夹会自动创建同名云端目录"
+msgstr "ファイルとフォルダーに対応、フォルダーは同名のクラウドフォルダーを自動作成します"
+
+msgid "重命名"
+msgstr "名前の変更"
+
+msgid "重试"
+msgstr "再試行"
+
+msgid "重试任务"
+msgstr "再試行"
+
+msgid "主导航"
+msgstr "メインナビゲーション"
+
+msgid "主题"
+msgstr "テーマ"
+
+msgid "自动"
+msgstr "自動"
+
+msgid "Ctrl+单击多选 · Shift+单击范围选择"
+msgstr "Ctrl+クリックで複数選択 · Shift+クリックで範囲選択"

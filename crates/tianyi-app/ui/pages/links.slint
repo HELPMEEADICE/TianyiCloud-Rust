@@ -44,7 +44,7 @@ export component LinksPage inherits Rectangle {
             cross-axis-alignment: center;
 
             Text {
-                text: "下载直链";
+                text: @tr("下载直链");
                 font-family: Theme.font-family;
                 font-size: Theme.font-subtitle;
                 font-weight: Theme.weight-semibold;
@@ -53,7 +53,7 @@ export component LinksPage inherits Rectangle {
             }
 
             Text {
-                text: "从云盘文件解析出的下载直链，可复制到浏览器或下载工具使用";
+                text: @tr("从云盘文件解析出的下载直链，可复制到浏览器或下载工具使用");
                 font-family: Theme.font-family;
                 font-size: Theme.font-caption;
                 color: Theme.text-tertiary;
@@ -63,7 +63,7 @@ export component LinksPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "复制全部";
+                text: @tr("复制全部");
                 icon: IconName.copy;
                 subtle: true;
                 enabled: root.links.length > 0;
@@ -73,7 +73,7 @@ export component LinksPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "清理列表";
+                text: @tr("清理列表");
                 subtle: true;
                 enabled: root.links.length > 0;
                 clicked => {
@@ -82,7 +82,7 @@ export component LinksPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "返回云盘";
+                text: @tr("返回云盘");
                 icon: IconName.back;
                 subtle: true;
                 clicked => {
@@ -178,7 +178,7 @@ export component LinksPage inherits Rectangle {
 
                                 FluentIconButton {
                                     icon: IconName.copy;
-                                    tooltip: "复制直链";
+                                    tooltip: @tr("复制直链");
                                     clicked => {
                                         root.copy-link(item.url);
                                     }
@@ -194,9 +194,9 @@ export component LinksPage inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     icon: IconName.link;
-                    title: "还没有提取过直链";
-                    description: "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果";
-                    action-text: "去个人云";
+                    title: @tr("还没有提取过直链");
+                    description: @tr("在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果");
+                    action-text: @tr("去个人云");
                     action => {
                         root.go-personal();
                     }

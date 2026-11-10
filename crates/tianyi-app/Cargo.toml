@@ -22,6 +22,9 @@ dirs.workspace = true
 uuid.workspace = true
 rfd = "0.15"
 arboard.workspace = true
+# 读取系统界面语言（"auto" 语言模式用）。只是 slint 的传递依赖的直连化，
+# 版本跟 slint 自己解析到的那一份保持一致，避免引入第二份 icu 依赖。
+sys-locale = "0.3"
 
 # Windows 专有依赖：拖出下载（COM DoDragDrop）与系统 API
 [target.'cfg(windows)'.dependencies]

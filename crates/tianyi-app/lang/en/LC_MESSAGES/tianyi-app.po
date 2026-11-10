@@ -1,0 +1,431 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: en\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "“跟随系统”会读取操作系统的浅色/深色偏好，系统切换时自动同步"
+msgstr "System follows the OS light/dark preference and updates automatically when the system changes"
+
+msgid "“自动”按系统语言选择；切换后立即生效，无需重启"
+msgstr "Auto follows the system language; changes apply immediately"
+
+msgid "按钮"
+msgstr "Button"
+
+msgid "把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”"
+msgstr "Drag files here to upload, or use Upload / New folder at the top right"
+
+msgid "版本"
+msgstr "Version"
+
+msgid "保存账号"
+msgstr "Remember account"
+
+msgid "并发分片数"
+msgstr "Concurrent chunks"
+
+msgid "查看全部"
+msgstr "View all"
+
+msgid "出错了"
+msgstr "Something went wrong"
+
+msgid "传输"
+msgstr "Transfers"
+
+msgid "传输任务"
+msgstr "Transfer task"
+
+msgid "传输中 {0}"
+msgstr "Transferring {0}"
+
+msgid "从列表中移除"
+msgstr "Remove from list"
+
+msgid "从云盘文件解析出的下载直链，可复制到浏览器或下载工具使用"
+msgstr "Direct links resolved from cloud drive files; copy one into a browser or download manager"
+
+msgid "存储"
+msgstr "Storage"
+
+msgid "存储 {0}% · {1}"
+msgstr "{0}% of {1} used"
+
+msgid "打开"
+msgstr "Open"
+
+msgid "打开所在文件夹"
+msgstr "Open containing folder"
+
+msgid "打开天翼云盘 App → 扫一扫"
+msgstr "Open the Tianyi Cloud app → Scan"
+
+msgid "打开文件夹"
+msgstr "Open folder"
+
+msgid "打开下载目录"
+msgstr "Open download folder"
+
+msgid "大小"
+msgstr "Size"
+
+msgid "当前没有进行中的传输任务"
+msgstr "No transfers in progress"
+
+msgid "当前目录"
+msgstr "Current folder"
+
+msgid "当前页面"
+msgstr "Current page"
+
+msgid "当前账号"
+msgstr "Current account"
+
+msgid "登录"
+msgstr "Sign in"
+
+msgid "登录以同步和管理您的云端文件"
+msgstr "Sign in to sync and manage your cloud files"
+
+msgid "等待扫码…"
+msgstr "Waiting for scan…"
+
+msgid "二维码获取失败"
+msgstr "Failed to get QR code"
+
+msgid "二维码已过期"
+msgstr "QR code expired"
+
+msgid "返回上级目录 (Alt+←)"
+msgstr "Back to parent folder (Alt+←)"
+
+msgid "返回云盘"
+msgstr "Back to cloud drive"
+
+msgid "分片并发越高占用带宽越多，网络不稳定时建议下调"
+msgstr "More concurrent chunks use more bandwidth; lower this on unstable networks"
+
+msgid "复制"
+msgstr "Copy"
+
+msgid "复制到当前目录"
+msgstr "Copy to current folder"
+
+msgid "复制路径"
+msgstr "Copy path"
+
+msgid "复制全部"
+msgstr "Copy all"
+
+msgid "复制直链"
+msgstr "Copy direct link"
+
+msgid "该分类下没有任务"
+msgstr "No tasks in this category"
+
+msgid "个人云"
+msgstr "Personal Cloud"
+
+msgid "根目录"
+msgstr "Root folder"
+
+msgid "跟随系统"
+msgstr "System"
+
+msgid "更改目录"
+msgstr "Change folder"
+
+msgid "共 {0} 个项目"
+msgstr "{0} items"
+
+msgid "关闭界面过渡与进度动画，适合远程桌面或低性能设备"
+msgstr "Turn off view transitions and progress animations; suited to remote desktops or low-end devices"
+
+msgid "关闭提示"
+msgstr "Dismiss"
+
+msgid "关于"
+msgstr "About"
+
+msgid "还没有传输任务"
+msgstr "No transfers yet"
+
+msgid "还没有提取过直链"
+msgstr "No direct links extracted yet"
+
+msgid "换个关键词试试，或退出搜索回到当前目录"
+msgstr "Try another keyword, or exit search to return to the current folder"
+
+msgid "继续登录"
+msgstr "Continue sign-in"
+
+msgid "继续任务"
+msgstr "Resume"
+
+msgid "加载失败"
+msgstr "Failed to load"
+
+msgid "家庭云"
+msgstr "Family Cloud"
+
+msgid "减少动画"
+msgstr "Reduce motion"
+
+msgid "进行中"
+msgstr "Active"
+
+msgid "进行中 {0} · 已结束 {1}"
+msgstr "{0} active · {1} finished"
+
+msgid "进行中的传输 {0}"
+msgstr "Ongoing transfers {0}"
+
+msgid "类型"
+msgstr "Type"
+
+msgid "没有找到匹配的文件"
+msgstr "No matching files"
+
+msgid "密码"
+msgstr "Password"
+
+msgid "密码登录"
+msgstr "Password sign-in"
+
+msgid "名称"
+msgstr "Name"
+
+msgid "默认下载目录"
+msgstr "Default download folder"
+
+msgid "配置目录"
+msgstr "Config folder"
+
+msgid "浅色"
+msgstr "Light"
+
+msgid "切换到“全部”查看其他任务"
+msgstr "Switch to All to see other tasks"
+
+msgid "清除"
+msgstr "Clear"
+
+msgid "清理列表"
+msgstr "Clear list"
+
+msgid "清理已完成"
+msgstr "Clear completed"
+
+msgid "请输入图片验证码"
+msgstr "Enter the image captcha"
+
+msgid "取消"
+msgstr "Cancel"
+
+msgid "取消任务"
+msgstr "Cancel"
+
+msgid "取消选择"
+msgstr "Deselect"
+
+msgid "去个人云"
+msgstr "Go to Personal Cloud"
+
+msgid "全部"
+msgstr "All"
+
+msgid "全部任务"
+msgstr "All tasks"
+
+msgid "全选"
+msgstr "Select all"
+
+msgid "确定"
+msgstr "OK"
+
+msgid "日志目录"
+msgstr "Log folder"
+
+msgid "扫码登录"
+msgstr "QR sign-in"
+
+msgid "删除"
+msgstr "Delete"
+
+msgid "上传"
+msgstr "Upload"
+
+msgid "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
+msgstr "Progress appears here after an upload or download; pause and resume any time"
+
+msgid "上传文件"
+msgstr "Upload files"
+
+msgid "设置"
+msgstr "Settings"
+
+msgid "深色"
+msgstr "Dark"
+
+msgid "失败/取消"
+msgstr "Failed/Cancelled"
+
+msgid "收起传输面板"
+msgstr "Collapse transfers panel"
+
+msgid "手机号 / 邮箱"
+msgstr "Phone / Email"
+
+msgid "刷新 (F5)"
+msgstr "Refresh (F5)"
+
+msgid "刷新二维码"
+msgstr "Refresh QR code"
+
+msgid "松开上传到 {0}"
+msgstr "Release to upload to {0}"
+
+msgid "搜索"
+msgstr "Search"
+
+msgid "搜索云盘文件"
+msgstr "Search cloud drive files"
+
+msgid "提取直链"
+msgstr "Extract direct link"
+
+msgid "天翼云盘"
+msgstr "Tianyi Cloud"
+
+msgid "退出登录"
+msgstr "Sign out"
+
+msgid "退出搜索"
+msgstr "Exit search"
+
+msgid "外观"
+msgstr "Appearance"
+
+msgid "未登录"
+msgstr "Not signed in"
+
+msgid "未获取到容量信息"
+msgstr "Storage info unavailable"
+
+msgid "下载"
+msgstr "Download"
+
+msgid "下载到本地"
+msgstr "Download locally"
+
+msgid "下载目录"
+msgstr "Download folder"
+
+msgid "下载目录与并发设置来源于本地配置文件"
+msgstr "Download folder and concurrency come from the local config file"
+
+msgid "下载任务的默认保存位置"
+msgstr "Default save location for downloads"
+
+msgid "下载直链"
+msgstr "Direct Links"
+
+msgid "显示密码"
+msgstr "Show password"
+
+msgid "新建文件夹"
+msgstr "New folder"
+
+msgid "修改时间"
+msgstr "Modified"
+
+msgid "移动到上级"
+msgstr "Move to parent"
+
+msgid "移动到上级目录"
+msgstr "Move to parent folder"
+
+msgid "已保存的账号"
+msgstr "Saved accounts"
+
+msgid "已完成"
+msgstr "Completed"
+
+msgid "已选择 {0} 项"
+msgstr "{0} selected"
+
+msgid "隐藏密码"
+msgstr "Hide password"
+
+msgid "语言"
+msgstr "Language"
+
+msgid "预览 / 打开"
+msgstr "Preview / Open"
+
+msgid "运行日志按天滚动保存，只保留最近 7 天"
+msgstr "Run logs roll over daily and keep only the last 7 days"
+
+msgid "在个人云或家庭云中选中文件，使用“提取直链”即可在这里看到结果"
+msgstr "Select a file in Personal Cloud or Family Cloud and use Extract direct link to see it here"
+
+msgid "暂停任务"
+msgstr "Pause"
+
+msgid "账号"
+msgstr "Account"
+
+msgid "账号、任务与配置文件的存放位置"
+msgstr "Where accounts, tasks and the config file are stored"
+
+msgid "这里还没有文件"
+msgstr "No files here yet"
+
+msgid "正在从云端读取目录内容"
+msgstr "Reading folder contents from the cloud"
+
+msgid "正在登录…"
+msgstr "Signing in…"
+
+msgid "正在获取二维码…"
+msgstr "Getting QR code…"
+
+msgid "正在加载…"
+msgstr "Loading…"
+
+msgid "正在加载目录…"
+msgstr "Loading folder…"
+
+msgid "正在搜索…"
+msgstr "Searching…"
+
+msgid "正在与天翼云盘通信…"
+msgstr "Contacting Tianyi Cloud…"
+
+msgid "正在云端检索匹配的文件"
+msgstr "Searching the cloud for matching files"
+
+msgid "支持文件与文件夹，文件夹会自动创建同名云端目录"
+msgstr "Files and folders are supported; folders create a cloud folder with the same name"
+
+msgid "重命名"
+msgstr "Rename"
+
+msgid "重试"
+msgstr "Retry"
+
+msgid "重试任务"
+msgstr "Retry"
+
+msgid "主导航"
+msgstr "Main navigation"
+
+msgid "主题"
+msgstr "Theme"
+
+msgid "自动"
+msgstr "Auto"
+
+msgid "Ctrl+单击多选 · Shift+单击范围选择"
+msgstr "Ctrl+click to multi-select · Shift+click to select a range"

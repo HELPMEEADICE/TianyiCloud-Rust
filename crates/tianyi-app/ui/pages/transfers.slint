@@ -45,7 +45,7 @@ export component TransfersPage inherits Rectangle {
             cross-axis-alignment: center;
 
             Text {
-                text: "传输任务";
+                text: @tr("传输任务");
                 font-family: Theme.font-family;
                 font-size: Theme.font-subtitle;
                 font-weight: Theme.weight-semibold;
@@ -55,7 +55,7 @@ export component TransfersPage inherits Rectangle {
 
             FluentSegmented {
                 width: 300px;
-                items: ["全部", "进行中", "已完成", "失败/取消"];
+                items: [@tr("全部"), @tr("进行中"), @tr("已完成"), @tr("失败/取消")];
                 current: root.filter;
                 changed(idx) => {
                     root.filter = idx;
@@ -70,7 +70,7 @@ export component TransfersPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "打开下载目录";
+                text: @tr("打开下载目录");
                 icon: IconName.folder-open;
                 subtle: true;
                 clicked => {
@@ -79,7 +79,7 @@ export component TransfersPage inherits Rectangle {
             }
 
             FluentButton {
-                text: "清理已完成";
+                text: @tr("清理已完成");
                 icon: IconName.delete;
                 subtle: true;
                 enabled: root.finished-count > 0;
@@ -145,11 +145,11 @@ export component TransfersPage inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     icon: IconName.transfer;
-                    title: root.filter == 0 ? "还没有传输任务" : "该分类下没有任务";
+                    title: root.filter == 0 ? @tr("还没有传输任务") : @tr("该分类下没有任务");
                     description: root.filter == 0
-                        ? "上传或下载文件后，任务进度会显示在这里，可随时暂停与继续"
-                        : "切换到“全部”查看其他任务";
-                    action-text: root.filter == 0 ? "" : "查看全部";
+                        ? @tr("上传或下载文件后，任务进度会显示在这里，可随时暂停与继续")
+                        : @tr("切换到“全部”查看其他任务");
+                    action-text: root.filter == 0 ? "" : @tr("查看全部");
                     action => {
                         root.filter = 0;
                         root.filter-changed(0);
@@ -175,7 +175,7 @@ export component TransfersPage inherits Rectangle {
             }
 
             Text {
-                text: "进行中 " + root.active-count + " · 已结束 " + root.finished-count;
+                text: @tr("进行中 {0} · 已结束 {1}", root.active-count, root.finished-count);
                 font-family: Theme.font-family;
                 font-size: Theme.font-caption;
                 color: Theme.text-tertiary;

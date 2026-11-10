@@ -115,7 +115,7 @@ export component FluentTextField inherits Rectangle {
 
         if root.password: FluentIconButton {
             icon: root.revealed ? IconName.password-hide : IconName.password-show;
-            tooltip: root.revealed ? "隐藏密码" : "显示密码";
+            tooltip: root.revealed ? @tr("隐藏密码") : @tr("显示密码");
             size: 28px;
             icon-size: Theme.icon-sm;
             enabled: root.enabled;
@@ -126,7 +126,7 @@ export component FluentTextField inherits Rectangle {
 
         if root.clearable && root.text != "" && !root.password: FluentIconButton {
             icon: IconName.close;
-            tooltip: "清除";
+            tooltip: @tr("清除");
             size: 28px;
             icon-size: Theme.icon-xs;
             enabled: root.enabled;

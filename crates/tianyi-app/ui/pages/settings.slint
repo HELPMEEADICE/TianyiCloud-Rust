@@ -104,7 +104,7 @@ component PathRow inherits HorizontalLayout {
 
         FluentIconButton {
             icon: IconName.copy;
-            tooltip: "复制路径";
+            tooltip: @tr("复制路径");
             enabled: root.value != "";
             clicked => {
                 root.copy();
@@ -174,6 +174,8 @@ export component SettingsPage inherits Rectangle {
     in property <string> account-name: "";
     /// 0 = 跟随系统，1 = 浅色，2 = 深色
     in-out property <int> theme-index: 0;
+    /// 0 = 自动（跟随系统），1 = 简中，2 = 繁中，3 = 英文，4 = 日文
+    in-out property <int> language-index: 0;
     in property <bool> reduce-motion: false;
     in property <string> download-dir: "";
     in property <string> upload-thread: "";
@@ -188,6 +190,8 @@ export component SettingsPage inherits Rectangle {
     in property <string> log-dir: "";
 
     callback theme-changed(int);
+    /// 0=自动 1=简中 2=繁中 3=英文 4=日文；落盘与切包由控制器负责
+    callback language-changed(int);
     callback reduce-motion-changed(bool);
     callback choose-download-dir();
     /// (下载分片数, 上传分片数)：值可能越界，钳制由控制器负责
@@ -212,7 +216,7 @@ export component SettingsPage inherits Rectangle {
             cross-axis-alignment: center;
 
             Text {
-                text: "设置";
+                text: @tr("设置");
                 font-family: Theme.font-family;
                 font-size: Theme.font-subtitle;
                 font-weight: Theme.weight-semibold;
@@ -237,15 +241,15 @@ export component SettingsPage inherits Rectangle {
 
                     // ---- 外观 ----
                     SettingsSection {
-                        title: "外观";
-                        description: "“跟随系统”会读取操作系统的浅色/深色偏好，系统切换时自动同步";
+                        title: @tr("外观");
+                        description: @tr("“跟随系统”会读取操作系统的浅色/深色偏好，系统切换时自动同步");
 
                         SettingsRow {
-                            label: "主题";
+                            label: @tr("主题");
 
                             FluentSegmented {
                                 width: 248px;
-                                items: ["跟随系统", "浅色", "深色"];
+                                items: [@tr("跟随系统"), @tr("浅色"), @tr("深色")];
                                 current: root.theme-index;
                                 changed(idx) => {
                                     root.theme-index = idx;
@@ -257,14 +261,41 @@ export component SettingsPage inherits Rectangle {
                         SettingsDivider {
                         }
 
+                        // 语言：语言自称（简体中文 / 繁體中文 / English / 日本語）
+                        // 一律不包 @tr —— 一种语言永远以自己的文字显示自己，否则在
+                        // 英文界面上"简体中文"会被翻成 "Simplified Chinese"，用户反而
+                        // 认不出自己母语那一项。只有「自动」是真正的界面文案，走 @tr。
                         SettingsRow {
-                            label: "减少动画";
-                            description: "关闭界面过渡与进度动画，适合远程桌面或低性能设备";
+                            label: @tr("语言");
+                            description: @tr("“自动”按系统语言选择；切换后立即生效，无需重启");
+
+                            // 420px 而不是 480px：设置列上限 880px，减去分组卡片左右
+                            // 各 space-4 的 padding 只剩 848px，480px 的控件会把左侧
+                            // 说明压到 352px（远低于 SettingsRow 给的 560px 上限），
+                            // 这句 24 字的说明就要折行；420px 留出 412px，一行放得下，
+                            // 而五段的文字总宽约 230px，420px 仍有余量不会被 elide。
+                            FluentSegmented {
+                                width: 420px;
+                                items: [@tr("自动"), "简体中文", "繁體中文", "English", "日本語"];
+                                current: root.language-index;
+                                changed(idx) => {
+                                    root.language-index = idx;
+                                    root.language-changed(idx);
+                                }
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        SettingsRow {
+                            label: @tr("减少动画");
+                            description: @tr("关闭界面过渡与进度动画，适合远程桌面或低性能设备");
 
                             FluentSwitch {
                                 checked: root.reduce-motion;
                                 // 开关自己没有文字，可读名称由行标题提供
-                                accessible-label: "减少动画";
+                                accessible-label: @tr("减少动画");
                                 toggled => {
                                     root.reduce-motion-changed(!root.reduce-motion);
                                 }
@@ -274,14 +305,14 @@ export component SettingsPage inherits Rectangle {
 
                     // ---- 传输 ----
                     SettingsSection {
-                        title: "传输";
-                        description: "下载目录与并发设置来源于本地配置文件";
+                        title: @tr("传输");
+                        description: @tr("下载目录与并发设置来源于本地配置文件");
 
                         PathRow {
-                            label: "默认下载目录";
+                            label: @tr("默认下载目录");
                             value: root.download-dir;
-                            hint: "下载任务的默认保存位置";
-                            action-text: "更改目录";
+                            hint: @tr("下载任务的默认保存位置");
+                            action-text: @tr("更改目录");
                             copy => {
                                 root.copy-text(root.download-dir);
                             }
@@ -294,17 +325,17 @@ export component SettingsPage inherits Rectangle {
                         }
 
                         SettingsRow {
-                            label: "并发分片数";
+                            label: @tr("并发分片数");
                             // 说明文案保持与改动前逐字一致：多出的"仅对新任务生效"写在
                             // 控制器注释里，避免窄窗口下说明折行把行高撑高
-                            description: "分片并发越高占用带宽越多，网络不稳定时建议下调";
+                            description: @tr("分片并发越高占用带宽越多，网络不稳定时建议下调");
 
                             HorizontalLayout {
                                 spacing: Theme.space-3;
                                 cross-axis-alignment: center;
 
                                 ThreadStepper {
-                                    label: "下载";
+                                    label: @tr("下载");
                                     value: root.download-thread;
                                     count: root.download-thread-count;
                                     step(delta) => {
@@ -314,7 +345,7 @@ export component SettingsPage inherits Rectangle {
                                 }
 
                                 ThreadStepper {
-                                    label: "上传";
+                                    label: @tr("上传");
                                     value: root.upload-thread;
                                     count: root.upload-thread-count;
                                     step(delta) => {
@@ -327,17 +358,17 @@ export component SettingsPage inherits Rectangle {
 
                     // ---- 账号 ----
                     SettingsSection {
-                        title: "账号";
+                        title: @tr("账号");
 
                         SettingsRow {
-                            label: "当前账号";
+                            label: @tr("当前账号");
 
                             HorizontalLayout {
                                 spacing: Theme.space-3;
                                 cross-axis-alignment: center;
 
                                 Text {
-                                    text: root.account-name == "" ? "未登录" : root.account-name;
+                                    text: root.account-name == "" ? @tr("未登录") : root.account-name;
                                     font-family: Theme.font-family;
                                     font-size: Theme.font-small;
                                     color: Theme.text-secondary;
@@ -347,7 +378,7 @@ export component SettingsPage inherits Rectangle {
                                 }
 
                                 FluentButton {
-                                    text: "退出登录";
+                                    text: @tr("退出登录");
                                     icon: IconName.logout;
                                     danger: true;
                                     subtle: true;
@@ -362,10 +393,10 @@ export component SettingsPage inherits Rectangle {
 
                     // ---- 关于 ----
                     SettingsSection {
-                        title: "关于";
+                        title: @tr("关于");
 
                         SettingsRow {
-                            label: "版本";
+                            label: @tr("版本");
 
                             Text {
                                 text: root.version-text;
@@ -380,10 +411,10 @@ export component SettingsPage inherits Rectangle {
                         }
 
                         PathRow {
-                            label: "配置目录";
+                            label: @tr("配置目录");
                             value: root.config-dir;
-                            hint: "账号、任务与配置文件的存放位置";
-                            action-text: "打开";
+                            hint: @tr("账号、任务与配置文件的存放位置");
+                            action-text: @tr("打开");
                             copy => {
                                 root.copy-text(root.config-dir);
                             }
@@ -398,10 +429,10 @@ export component SettingsPage inherits Rectangle {
                         // 用户报问题时需要拿到日志文件：这里给出真实路径，并提供
                         // “打开”与“复制”，省掉“日志到底在哪”的来回确认。
                         PathRow {
-                            label: "日志目录";
+                            label: @tr("日志目录");
                             value: root.log-dir;
-                            hint: "运行日志按天滚动保存，只保留最近 7 天";
-                            action-text: "打开";
+                            hint: @tr("运行日志按天滚动保存，只保留最近 7 天");
+                            action-text: @tr("打开");
                             copy => {
                                 root.copy-text(root.log-dir);
                             }

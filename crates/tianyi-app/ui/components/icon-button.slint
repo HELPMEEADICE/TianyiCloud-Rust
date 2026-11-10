@@ -35,7 +35,7 @@ export component FluentIconButton inherits Rectangle {
     // 无障碍：图标按钮没有文字，可读名称取 tooltip；tooltip 为空时退化成通用的"按钮"，
     // 避免屏幕阅读器读出一个空名称的按钮。
     accessible-role: button;
-    accessible-label: root.tooltip != "" ? root.tooltip : "按钮";
+    accessible-label: root.tooltip != "" ? root.tooltip : @tr("按钮");
     accessible-action-default => {
         root.clicked();
     }

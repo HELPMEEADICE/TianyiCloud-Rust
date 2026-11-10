@@ -8,7 +8,7 @@ import { FluentTextField } from "text-field.slint";
 
 export component FluentSearchBox inherits Rectangle {
     in-out property <string> text <=> field.text;
-    in property <string> placeholder: "搜索";
+    in property <string> placeholder: @tr("搜索");
     in property <bool> enabled: true;
     /// 输入停止多久后自动搜索
     in property <duration> debounce: 260ms;

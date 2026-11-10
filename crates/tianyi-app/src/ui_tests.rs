@@ -78,6 +78,11 @@ fn ensure_backend() {
 fn boot(size: (f32, f32)) -> crate::app::MainWindow {
     ensure_backend();
     let ui = crate::app::MainWindow::new().expect("主窗口构造失败");
+    // 打包了语言包之后，Slint 会在首个组件创建时按系统 locale 自动选包（匹配策略是
+    // "先全等、再只比语言主标签"）：本机 locale 是 zh-CN，而 lang/ 下只有 en / ja /
+    // zh-Hant，主标签 zh 就命中了 zh-Hant，界面被翻成繁体。下面是按简中字面量查控件的
+    // 几何断言，不钉回索引 0（简中原文）就会全灭。必须在 new() 之后调用。
+    crate::i18n::apply(crate::i18n::Lang::ZhHans);
     ui.window()
         .set_size(slint::LogicalSize::new(size.0, size.1));
     ui.show().expect("窗口显示失败");
@@ -1787,6 +1792,74 @@ fn check_arrow_key_moves_selection() {
     assert!(
         failures.is_empty(),
         "T7 方向键选择失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ==================== H. 运行时切语（设置页"无需重启"的技术前提） ====================
+//
+// 切语靠的是 `slint::select_bundled_translation`：它置脏之后，所有 `@tr` 绑定（含
+// `accessible-label` 上的）在下一帧重算。`crate::i18n::apply` 内部做的正是这一次调用。
+//
+// 这里刻意直接打底层接口、而不是走 `i18n::apply`：`i18n::CURRENT` 是**进程级** atomic，
+// 改它会和并行跑的其它 `#[test]` 抢（那些断言要查 Rust 侧中文文案）；而
+// `select_bundled_translation` 只作用于本线程的 `GLOBAL_CONTEXT`，天然隔离。
+//
+// 这条同时是 `boot()` 那句"钉简中"的守门员：那句的注释解释了 build.rs 打包语言包之后
+// Slint 会按系统 locale 自动选包（本机 zh-CN 的主标签命中 zh-Hant），这里从另一头验证
+// "选哪个包 → 界面就是哪个语种"，两边合起来才算把这件事钉住。
+#[test]
+fn check_language_switch_retranslates_ui() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(4);
+    settle();
+
+    let zh = a11y_hits(&ui, "减少动画");
+    println!("H1 简中：按「减少动画」命中 {} 个元素", zh.len());
+    expect(&mut failures, !zh.is_empty(), || {
+        "H1: 简中下按 accessible-label=\"减少动画\" 一个元素都找不到 —— \
+         boot() 的钉简中失效了"
+            .to_string()
+    });
+
+    // 切英文：同一棵**已经建好**的组件树上的 @tr 必须当场重算
+    let switched = slint::select_bundled_translation("en");
+    let ok = switched.is_ok();
+    let why = format!("{:?}", switched.err());
+    expect(&mut failures, ok, || format!("H2: 切到 en 失败：{why}"));
+    settle();
+
+    let en = a11y_hits(&ui, "Reduce motion");
+    let stale = a11y_hits(&ui, "减少动画");
+    println!(
+        "H2 英文：\"Reduce motion\" 命中 {} 个元素，残留的「减少动画」{} 个",
+        en.len(),
+        stale.len()
+    );
+    expect(&mut failures, !en.is_empty(), || {
+        format!(
+            "H2: 切到英文后按 \"Reduce motion\" 命中 {} 个元素（期望 ≥1）—— \
+             select_bundled_translation 之后 @tr 绑定没有重算",
+            en.len()
+        )
+    });
+    expect(&mut failures, stale.is_empty(), || {
+        format!(
+            "H3: 切到英文后仍能按「减少动画」命中 {} 个元素 —— 旧语种文案没被替换",
+            stale.len()
+        )
+    });
+
+    // 复原本线程的语种：本文件里 boot() 会被反复调用，留成英文会让后面的断言拿到错语种
+    let _ = slint::select_bundled_translation("");
+
+    assert!(
+        failures.is_empty(),
+        "运行时切语失败 {} 项：\n{}",
         failures.len(),
         failures.join("\n")
     );

@@ -36,7 +36,7 @@ export component FluentNavItem inherits Rectangle {
     // 选中态用描述字段说明"当前页面"，而不是依赖左侧那条纯视觉的指示条。
     accessible-role: button;
     accessible-label: root.label;
-    accessible-description: root.selected ? "当前页面" : "";
+    accessible-description: root.selected ? @tr("当前页面") : "";
     accessible-action-default => {
         root.clicked();
     }

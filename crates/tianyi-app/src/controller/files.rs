@@ -16,9 +16,9 @@ impl Controller {
     // ==================================================================
     fn space_label(&self) -> &'static str {
         if lock_or_recover(&self.space).as_str() == "family" {
-            "家庭云"
+            t("space.family")
         } else {
-            "个人云"
+            t("space.personal")
         }
     }
 
@@ -170,10 +170,15 @@ impl Controller {
         let (key, asc) = self.sort_key_pair();
         self.push_sort_state();
         self.push_rows(&rows);
-        self.set_status(format!(
-            "已按{} {}排序",
-            sort_label(key),
-            if asc { "升序" } else { "降序" }
+        let field = sort_label(key);
+        let order = if asc {
+            t("status.sort_asc")
+        } else {
+            t("status.sort_desc")
+        };
+        self.set_status(tf(
+            "status.sort_applied",
+            &[("field", &field), ("order", &order)],
         ));
     }
 
@@ -197,8 +202,8 @@ impl Controller {
             self.set_selection(Vec::new());
         }
         let Some(client) = self.client() else {
-            self.set_list_state("error", "未登录");
-            self.set_file_error("未登录");
+            self.set_list_state("error", t("state.not_logged_in"));
+            self.set_file_error(t("state.not_logged_in"));
             return;
         };
         let had_rows = !lock_or_recover(&self.visible_rows).is_empty();
@@ -217,9 +222,9 @@ impl Controller {
         self.set_list_state(
             if silent { "refreshing" } else { "loading" },
             if silent {
-                "正在刷新目录…"
+                t("status.refreshing_dir")
             } else {
-                "正在加载目录…"
+                t("status.loading_dir")
             },
         );
 
@@ -238,14 +243,14 @@ impl Controller {
                     this.push_rows(&files);
                     this.set_list_state(
                         if count == 0 { "empty" } else { "ready" },
-                        &format!("{count} 个项目"),
+                        &tf("status.item_count", &[("count", &count)]),
                     );
                 }
                 Err(e) => {
                     if this.dir_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
-                    let msg = format!("加载目录失败：{e}");
+                    let msg = tf("error.load_dir_failed", &[("e", &e)]);
                     this.set_file_error(msg.clone());
                     this.set_list_state("error", &msg);
                 }
@@ -277,14 +282,17 @@ impl Controller {
         };
         if searching {
             self.clear_search();
-            self.notice("info", "已退出搜索");
+            self.notice("info", t("toast.search_exited"));
             return;
         }
         self.dir_gen.fetch_add(1, Ordering::SeqCst);
         self.search_gen.fetch_add(1, Ordering::SeqCst);
         let count = lock_or_recover(&self.visible_rows).len();
-        self.set_list_state(cancelled_list_state(count), &format!("{count} 个项目"));
-        self.notice("info", "已取消加载");
+        self.set_list_state(
+            cancelled_list_state(count),
+            &tf("status.item_count", &[("count", &count)]),
+        );
+        self.notice("info", t("toast.load_canceled"));
     }
 
     pub(super) fn load_capacity(self: &Arc<Self>) {
@@ -426,7 +434,7 @@ impl Controller {
             ui.set_renaming_id(SharedString::default());
             ui.set_file_error(SharedString::default());
         });
-        self.set_list_state("loading", "正在切换云空间…");
+        self.set_list_state("loading", t("status.switching_space"));
         self.push_crumbs();
 
         if space == "personal" {
@@ -458,7 +466,7 @@ impl Controller {
                     this.set_ui_state(|ui| {
                         ui.set_current_page(0);
                     });
-                    this.notice("error", format!("家庭云不可用，已返回个人云：{e}"));
+                    this.notice("error", tf("error.family_unavailable", &[("e", &e)]));
                     this.load_dir(false);
                     this.load_capacity();
                 }
@@ -575,7 +583,7 @@ impl Controller {
         }
         let count = ids.len();
         self.set_selection(ids);
-        self.set_status(format!("已全选 {count} 项"));
+        self.set_status(tf("status.select_all", &[("count", &count)]));
     }
 
     pub(super) fn handle_context(
@@ -626,7 +634,7 @@ impl Controller {
     pub(super) fn download_selected(self: &Arc<Self>) {
         let targets: Vec<FileObject> = self.targets().into_iter().filter(|f| !f.is_dir).collect();
         if targets.is_empty() {
-            self.notice("info", "请先选择要下载的文件（文件夹请进入后再选择文件）");
+            self.notice("info", t("toast.select_files_to_download"));
             return;
         }
         let default_dir = self
@@ -637,7 +645,7 @@ impl Controller {
         if targets.len() == 1 {
             let f = &targets[0];
             let Some(dest) = rfd::FileDialog::new()
-                .set_title("选择下载位置")
+                .set_title(t("dialog.download_location_title"))
                 .set_directory(&default_dir)
                 .set_file_name(&f.name)
                 .save_file()
@@ -649,7 +657,10 @@ impl Controller {
         }
         // 多选：选一个目录，按文件名保存
         let Some(dir) = rfd::FileDialog::new()
-            .set_title(format!("选择下载目录（{} 个文件）", targets.len()))
+            .set_title(tf(
+                "dialog.download_dir_multi_title",
+                &[("count", &targets.len())],
+            ))
             .set_directory(&default_dir)
             .pick_folder()
         else {
@@ -660,7 +671,7 @@ impl Controller {
             let dest = dir.join(sanitize_file_name(&f.name));
             self.enqueue_download(f, dest);
         }
-        self.notice("info", format!("已加入 {count} 个下载任务"));
+        self.notice("info", tf("toast.downloads_added", &[("count", &count)]));
     }
 
     fn enqueue_download(self: &Arc<Self>, file: FileObject, dest: PathBuf) {
@@ -691,13 +702,13 @@ impl Controller {
     pub(super) fn rename_selected(self: &Arc<Self>) {
         let targets = self.targets();
         if targets.len() != 1 {
-            self.notice("info", "重命名只支持单个文件");
+            self.notice("info", t("toast.rename_single_only"));
             return;
         }
         let id = targets[0].id.clone();
         self.set_ui_state(move |ui| {
             ui.set_renaming_id(SharedString::from(id));
-            ui.set_status_text(SharedString::from("输入新名称后按回车保存"));
+            ui.set_status_text(SharedString::from(t("status.rename_hint")));
         });
     }
 
@@ -711,7 +722,7 @@ impl Controller {
             self.set_ui_state(|ui| {
                 ui.set_renaming_id(SharedString::default());
             });
-            self.notice("error", "名称不能为空");
+            self.notice("error", t("error.name_empty"));
             return;
         }
         if new_name == file.name {
@@ -724,12 +735,12 @@ impl Controller {
             match client.rename(&file, &new_name).await {
                 Ok(_) => {
                     this.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
-                    this.notice("success", format!("已重命名为 {new_name}"));
+                    this.notice("success", tf("toast.renamed", &[("name", &new_name)]));
                     this.refresh_files();
                 }
                 Err(e) => {
                     this.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
-                    this.notice("error", format!("重命名失败：{e}"));
+                    this.notice("error", tf("error.rename_failed", &[("e", &e)]));
                 }
             }
         });
@@ -765,10 +776,13 @@ impl Controller {
                 }
             }
             if failed.is_empty() {
-                this.notice("success", format!("已复制 {count} 项到当前目录"));
+                this.notice("success", tf("toast.copied_items", &[("count", &count)]));
                 this.refresh_files();
             } else {
-                this.notice("error", format!("部分复制失败：{}", failed.join("；")));
+                this.notice(
+                    "error",
+                    tf("error.copy_partial_failed", &[("list", &failed.join("；"))]),
+                );
                 this.refresh_files();
             }
         });
@@ -802,9 +816,12 @@ impl Controller {
                 }
             }
             if failed.is_empty() {
-                this.notice("success", format!("已移动 {count} 项到上级目录"));
+                this.notice("success", tf("toast.moved_items", &[("count", &count)]));
             } else {
-                this.notice("error", format!("部分移动失败：{}", failed.join("；")));
+                this.notice(
+                    "error",
+                    tf("error.move_partial_failed", &[("list", &failed.join("；"))]),
+                );
             }
             this.refresh_files();
         });
@@ -815,35 +832,32 @@ impl Controller {
     pub(super) fn delete_selected(self: &Arc<Self>) {
         let targets = self.targets();
         if targets.is_empty() {
-            self.notice("info", "请先选择要删除的项目");
+            self.notice("info", t("toast.select_items_to_delete"));
             return;
         }
         let message = if targets.len() == 1 {
             let t = &targets[0];
             if t.is_dir {
-                format!(
-                    "确定要删除文件夹「{}」吗？其中的内容会一并删除，且无法恢复。",
-                    t.name
-                )
+                tf("dialog.delete_folder_message", &[("name", &t.name)])
             } else {
-                format!("确定要删除「{}」吗？此操作无法恢复。", t.name)
+                tf("dialog.delete_file_message", &[("name", &t.name)])
             }
         } else {
-            format!(
-                "确定要删除选中的 {} 个项目吗？此操作无法恢复。",
-                targets.len()
-            )
+            tf("dialog.delete_items_message", &[("count", &targets.len())])
         };
         let title = if targets.len() == 1 {
-            "确认删除".to_string()
+            t("dialog.confirm_delete_title").to_string()
         } else {
-            format!("确认删除 {} 个项目", targets.len())
+            tf(
+                "dialog.confirm_delete_items_title",
+                &[("count", &targets.len())],
+            )
         };
         *lock_or_recover(&self.pending_confirm) = Some(PendingConfirm::DeleteFiles(targets));
         self.set_ui_state(move |ui| {
             ui.set_dialog_title(SharedString::from(title));
             ui.set_dialog_message(SharedString::from(message));
-            ui.set_dialog_confirm_text(SharedString::from("删除"));
+            ui.set_dialog_confirm_text(SharedString::from(t("dialog.delete_action")));
             ui.set_dialog_danger(true);
             ui.set_dialog_open(true);
         });
@@ -867,7 +881,7 @@ impl Controller {
         let Some(client) = self.client() else { return };
         let count = targets.len();
         let this = Arc::clone(self);
-        self.set_status(format!("正在删除 {count} 项…"));
+        self.set_status(tf("status.deleting", &[("count", &count)]));
         self.backend.spawn(move || async move {
             let mut failed = Vec::new();
             for f in targets {
@@ -876,9 +890,15 @@ impl Controller {
                 }
             }
             if failed.is_empty() {
-                this.notice("success", format!("已删除 {count} 项"));
+                this.notice("success", tf("toast.deleted", &[("count", &count)]));
             } else {
-                this.notice("error", format!("部分删除失败：{}", failed.join("；")));
+                this.notice(
+                    "error",
+                    tf(
+                        "error.delete_partial_failed",
+                        &[("list", &failed.join("；"))],
+                    ),
+                );
             }
             this.refresh_files();
         });
@@ -887,7 +907,7 @@ impl Controller {
     pub(super) fn link_selected(self: &Arc<Self>) {
         let targets: Vec<FileObject> = self.targets().into_iter().filter(|f| !f.is_dir).collect();
         if targets.is_empty() {
-            self.notice("info", "请选择文件（文件夹没有直链）");
+            self.notice("info", t("toast.select_file_for_link"));
             return;
         }
         let Some(client) = self.client() else { return };
@@ -902,15 +922,15 @@ impl Controller {
                         ok += 1;
                     }
                     Err(e) => {
-                        this.notice("error", format!("{} 获取直链失败：{e}", f.name));
+                        this.notice(
+                            "error",
+                            tf("error.direct_link_failed", &[("name", &f.name), ("e", &e)]),
+                        );
                     }
                 }
             }
             if ok > 0 {
-                this.notice(
-                    "success",
-                    format!("已提取 {ok} 个下载直链，可在“下载直链”页复制"),
-                );
+                this.notice("success", tf("toast.links_extracted", &[("ok", &ok)]));
                 this.set_ui_state(|ui| ui.set_current_page(3));
             }
         });
@@ -935,7 +955,7 @@ impl Controller {
             }
         }
         if copied {
-            self.set_status(format!("{name} 的直链已复制到剪贴板"));
+            self.set_status(tf("status.link_copied", &[("name", &name)]));
         }
         self.push_links();
     }
@@ -949,22 +969,22 @@ impl Controller {
 
     pub(super) fn copy_link(&self, url: &str) {
         match copy_to_clipboard(url) {
-            Ok(()) => self.notice("success", "直链已复制到剪贴板"),
-            Err(e) => self.notice("error", format!("复制失败：{e}")),
+            Ok(()) => self.notice("success", t("toast.link_copied")),
+            Err(e) => self.notice("error", tf("error.copy_failed", &[("e", &e)])),
         }
     }
 
     pub(super) fn clear_links(self: &Arc<Self>) {
         lock_or_recover(&self.links).clear();
         self.push_links();
-        self.notice("info", "已清空直链列表");
+        self.notice("info", t("toast.links_cleared"));
     }
 
     /// 用系统默认浏览器打开一条直链
     pub(super) fn open_link(&self, url: &str) {
         match open_url_in_browser(url) {
-            Ok(()) => self.set_status(format!("已在浏览器中打开：{url}")),
-            Err(e) => self.notice("error", format!("无法在浏览器中打开：{e}")),
+            Ok(()) => self.set_status(tf("status.opened_in_browser", &[("url", &url)])),
+            Err(e) => self.notice("error", tf("error.open_browser_failed", &[("e", &e)])),
         }
     }
 
@@ -973,12 +993,15 @@ impl Controller {
         let links = lock_or_recover(&self.links).clone();
         let text = join_links(&links);
         if links.is_empty() {
-            self.notice("info", "还没有可复制的直链");
+            self.notice("info", t("toast.no_links"));
             return;
         }
         match copy_to_clipboard(&text) {
-            Ok(()) => self.notice("success", format!("已复制 {} 条直链", links.len())),
-            Err(e) => self.notice("error", format!("复制失败：{e}")),
+            Ok(()) => self.notice(
+                "success",
+                tf("toast.links_copied", &[("count", &links.len())]),
+            ),
+            Err(e) => self.notice("error", tf("error.copy_failed", &[("e", &e)])),
         }
     }
 
@@ -1005,7 +1028,7 @@ impl Controller {
         self.set_ui_state(|ui| {
             ui.set_searching(true);
         });
-        self.set_list_state("loading", "搜索中…");
+        self.set_list_state("loading", t("status.searching"));
         // 去抖已在 UI 侧完成；这里只做乱序丢弃
         self.backend.spawn(move || async move {
             if this.search_gen.load(Ordering::SeqCst) != gen {
@@ -1026,14 +1049,17 @@ impl Controller {
                     });
                     this.set_list_state(
                         if count == 0 { "empty-search" } else { "ready" },
-                        &format!("“{keyword}”的搜索结果：{count} 项"),
+                        &tf(
+                            "status.search_result",
+                            &[("keyword", &keyword), ("count", &count)],
+                        ),
                     );
                 }
                 Err(e) => {
                     if this.search_gen.load(Ordering::SeqCst) != gen {
                         return;
                     }
-                    let msg = format!("搜索失败：{e}");
+                    let msg = tf("error.search_failed", &[("e", &e)]);
                     this.set_file_error(msg.clone());
                     this.set_list_state("error", &msg);
                     this.notice("error", msg);
@@ -1057,7 +1083,7 @@ impl Controller {
         });
         self.set_list_state(
             if count == 0 { "empty" } else { "ready" },
-            &format!("{count} 个项目"),
+            &tf("status.item_count", &[("count", &count)]),
         );
     }
 
@@ -1070,20 +1096,20 @@ impl Controller {
         let id = id.to_string();
         let name = name.to_string();
         let this = Arc::clone(self);
-        self.set_status(format!("正在打开 {name}…"));
+        self.set_status(tf("status.opening", &[("name", &name)]));
         self.backend.spawn(move || async move {
             let url = match client.get_download_url(&id).await {
                 Ok(u) => u,
                 Err(e) => {
-                    this.notice("error", format!("获取直链失败：{e}"));
+                    this.notice("error", tf("error.get_link_failed", &[("e", &e)]));
                     return;
                 }
             };
             // 音视频：交给系统播放器流式播放，不落盘
             if matches!(kind, FileKind::Video | FileKind::Audio) {
                 match file::open_media_url_with_player(&name, &url) {
-                    Ok(()) => this.set_status(format!("已用系统播放器打开 {name}")),
-                    Err(e) => this.notice("error", format!("打开播放器失败：{e}")),
+                    Ok(()) => this.set_status(tf("status.opened_with_player", &[("name", &name)])),
+                    Err(e) => this.notice("error", tf("error.open_player_failed", &[("e", &e)])),
                 }
                 return;
             }
@@ -1091,12 +1117,12 @@ impl Controller {
             match this.download_preview(&client, &url, &name).await {
                 Ok(path) => {
                     if let Err(e) = file::open_with_system(&path) {
-                        this.notice("error", format!("打开文件失败：{e}"));
+                        this.notice("error", tf("error.open_file_failed", &[("e", &e)]));
                     } else {
-                        this.set_status(format!("已打开 {name}"));
+                        this.set_status(tf("status.opened", &[("name", &name)]));
                     }
                 }
-                Err(e) => this.notice("error", format!("预览失败：{e}")),
+                Err(e) => this.notice("error", tf("error.preview_failed", &[("e", &e)])),
             }
         });
     }
@@ -1146,9 +1172,9 @@ pub(super) fn files_to_entries(files: &[FileObject], selected: &HashSet<String>)
                 }
             };
             let kind_text = if f.is_dir {
-                "文件夹".to_string()
+                t("kind.folder").to_string()
             } else {
-                file::classify(&f.name).label().to_string()
+                crate::i18n::label_kind(file::classify(&f.name)).to_string()
             };
             FileEntry {
                 id: f.id.clone().into(),
@@ -1227,12 +1253,12 @@ fn selection_index(rows: &[FileObject], anchor: &str, selected: &HashSet<String>
     }
 }
 
-/// 排序键的中文名称（状态栏提示用）
+/// 排序键的显示名称（状态栏提示用）
 fn sort_label(key: i32) -> &'static str {
     match key {
-        1 => "大小",
-        2 => "修改时间",
-        _ => "名称",
+        1 => t("status.sort_size"),
+        2 => t("status.sort_mtime"),
+        _ => t("status.sort_name"),
     }
 }
 
@@ -1343,7 +1369,7 @@ pub(super) fn sanitize_file_name(name: &str) -> String {
 /// 抽成纯函数，让"取消之后 renaming-id 必定为空"这条约定能被单元测试钉住：
 /// 重命名输入框原本只有 accepted 一个出口，Esc 必须走同一条清空路径。
 pub(super) fn rename_cancelled_state() -> (SharedString, &'static str) {
-    (SharedString::default(), "已取消重命名")
+    (SharedString::default(), t("status.rename_canceled"))
 }
 
 /// 把直链列表拼成一段多行文本（每行一条，无尾随换行）
@@ -1371,7 +1397,7 @@ fn is_openable_url(url: &str) -> bool {
 /// “URL 交给系统打开程序”单独实现，且刻意放在本层，不去改 core 的既有行为。
 fn open_url_in_browser(url: &str) -> Result<(), String> {
     if !is_openable_url(url) {
-        return Err(format!("不是可用的直链：{url}"));
+        return Err(tf("error.invalid_link", &[("url", &url)]));
     }
 
     #[cfg(target_os = "windows")]

@@ -48,6 +48,7 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
   配方与取舍见 [docs/MOTION_REPORT.md](docs/MOTION_REPORT.md)
 - 支持“减少动画”，关闭全部过渡动画
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
+- **四语自适应**：简体中文 / 繁體中文 / English / 日本語；首次启动按系统语言自动选择（其它语言回退英文），设置页「外观 → 语言」可即时切换、无需重启，选择写入 `config.json`。两套词表的分工、切语链路与新增文案/语种的步骤见 [docs/I18N.md](docs/I18N.md)
 
 ## 技术栈
 

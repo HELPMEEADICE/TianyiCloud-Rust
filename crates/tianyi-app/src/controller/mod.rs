@@ -22,6 +22,7 @@ use self::session::ConfigStore;
 use self::transfers::TransferSnapshot;
 use crate::app::{DirectLink, DragOutApi, FileEntry, MainWindow, Theme};
 use crate::backend::Backend;
+use crate::i18n::{t, tf};
 use slint::{ComponentHandle, SharedString, Weak};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -29,7 +30,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tianyi_core::client::TianyiClient;
-use tianyi_core::config::{AppConfig, ThemeMode};
+use tianyi_core::config::{AppConfig, AppStore, LanguageMode, ThemeMode};
 use tianyi_core::models::FileObject;
 use tianyi_core::task::{TaskManager, TransferControl};
 
@@ -58,8 +59,12 @@ const MIN_THREADS: i32 = 1;
 const MAX_THREADS: i32 = 8;
 /// 主配置目录不可用时的降级目录（位于系统临时目录下）
 const FALLBACK_CONFIG_DIR: &str = "tianyi-cloud-fallback";
-/// 内存态配置（不落盘）时设置页「配置目录」一栏的显示文案
-const MEMORY_CONFIG_LABEL: &str = "（配置目录不可写，本次运行不保存设置）";
+/// 内存态（配置目录不可写）时设置页「配置目录」一栏的显示文案
+///
+/// 不能留成 `const`：这段文字要跟着界面语种走，而查表只有运行时才做得了。
+fn memory_config_label() -> &'static str {
+    t("state.config_label_memory")
+}
 
 /// 配置根目录：与 `Controller::new` 里 `ConfigStore::open()` 完全同一条降级链
 ///
@@ -72,6 +77,55 @@ const MEMORY_CONFIG_LABEL: &str = "（配置目录不可写，本次运行不保
 /// 同一条信息仍会通过 `Controller::new` 返回的降级提示条呈现给用户，行为不变。
 pub(crate) fn config_root() -> PathBuf {
     ConfigStore::open().0.root().clone()
+}
+
+/// 启动时该用哪种界面语言（用户没选过时是 `Auto`）
+///
+/// 与 [`config_root`] 同一个道理：语言偏好也得走**同一条** `ConfigStore::open()` 降级链，
+/// 否则主目录不可写时会出现"日志与设置页说配置在临时目录、界面却按主目录里那份旧配置
+/// 选语种"的错位。
+///
+/// 读取失败（文件缺失 / JSON 坏了 / 目录不可写）一律按 `Auto`：语言偏好读不出来不该
+/// 影响启动，`Controller::new` 随后会把降级提示条推给用户。
+pub(crate) fn startup_language() -> LanguageMode {
+    let (store, _degraded) = ConfigStore::open();
+    store
+        .load_config()
+        .map(|cfg| LanguageMode::parse(&cfg.language))
+        .unwrap_or(LanguageMode::Auto)
+}
+
+/// 设置页的语言索引 → 配置里的语言模式
+///
+/// 索引是 UI 的语言（0=自动 1=简中 2=繁中 3=英文 4=日文），`LanguageMode` 是配置的语言。
+/// 两者一一对应，越界值由调用方钳制；这里仍让 `_` 落到 `Auto` 而不是 panic——控制器是
+/// 唯一事实来源，别处（将来的快捷键、命令行参数）传来的脏值不该让它崩。
+fn language_mode_from_index(idx: i32) -> LanguageMode {
+    match idx {
+        1 => LanguageMode::ZhHans,
+        2 => LanguageMode::ZhHant,
+        3 => LanguageMode::En,
+        4 => LanguageMode::Ja,
+        _ => LanguageMode::Auto,
+    }
+}
+
+/// 配置里的语言模式 → 设置页的语言索引（[`language_mode_from_index`] 的逆）
+///
+/// 注意这是**用户选的模式**的索引，不是解析后的语种：选「自动」时回填 0，绝不能把
+/// `detect_system()` 的结果算成索引——那样设置页会显示 "English" 却是跟随系统，用户
+/// 再点一下就把偏好钉死了。
+///
+/// 也不用 `LanguageMode::code()` 做映射：它对 `Auto` 与 `ZhHans` 都返回空串（两者共用
+/// Slint 的索引 0 语言包），拿它当索引用会把两个模式塌成一个。
+fn language_index_of(mode: LanguageMode) -> i32 {
+    match mode {
+        LanguageMode::Auto => 0,
+        LanguageMode::ZhHans => 1,
+        LanguageMode::ZhHant => 2,
+        LanguageMode::En => 3,
+        LanguageMode::Ja => 4,
+    }
 }
 
 /// 应用控制器
@@ -230,7 +284,7 @@ impl Controller {
         let config_dir = if self.store.is_persistent() {
             self.store.root().display().to_string()
         } else {
-            MEMORY_CONFIG_LABEL.to_string()
+            memory_config_label().to_string()
         };
         let log_dir = crate::logging::log_dir().display().to_string();
         let font = platform_ui_font();
@@ -246,6 +300,8 @@ impl Controller {
         let upload_count = cfg.upload_thread as i32;
         let download_count = cfg.download_thread as i32;
         let download_dir = cfg.download_dir.display().to_string();
+        // 回填的是「用户选的模式」而不是「解析后的语种」：Auto 对应的索引是 0
+        let lang_index = language_index_of(LanguageMode::parse(&cfg.language));
         self.set_ui_state(move |ui| {
             ui.set_version_text(SharedString::from(version));
             ui.set_config_dir(SharedString::from(config_dir));
@@ -255,6 +311,7 @@ impl Controller {
             ui.set_upload_thread_count(upload_count);
             ui.set_download_thread_count(download_count);
             ui.set_download_dir(SharedString::from(download_dir));
+            ui.set_language_index(lang_index);
             let theme = ui.global::<Theme>();
             theme.set_font_family(SharedString::from(font.as_str()));
             theme.set_mono_font_family(SharedString::from(mono.as_str()));
@@ -661,6 +718,16 @@ impl Controller {
             });
         });
 
+        // 界面语言：Slint 只上报"点了第几段"，钳制/落盘/切包/重推文案全在控制器里，
+        // 保证设置页高亮的段位永远等于 AppConfig 里真正生效的那个模式。
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_language_changed(move |idx| {
+                let c = c.clone();
+                c.set_language_index(idx);
+            });
+        });
+
         // 并发分片数：Slint 只上报"+/-被点了一下"的目标值，钳制/落盘/回填都在控制器里，
         // 保证"界面上显示的数字"永远等于 AppConfig 里真正生效的数字。
         let c = Arc::clone(&this);
@@ -704,8 +771,8 @@ impl Controller {
                     return;
                 }
                 match copy_to_clipboard(&text) {
-                    Ok(()) => c.notice("success", "已复制到剪贴板"),
-                    Err(e) => c.notice("error", format!("复制失败：{e}")),
+                    Ok(()) => c.notice("success", t("toast.copied")),
+                    Err(e) => c.notice("error", tf("error.copy_failed", &[("e", &e)])),
                 }
             });
         });
@@ -884,6 +951,71 @@ impl Controller {
         self.set_ui_state(move |ui| {
             ui.set_status_text(SharedString::from(text));
         });
+    }
+
+    /// 把语言偏好写回 config.json
+    ///
+    /// 与 `set_theme_index` / `set_thread_counts` 的目标一致，只是位置不同：那两个在
+    /// `session.rs` 里，能直接调 `ConfigStore::save_config`；本文件是它的父模块，够不到
+    /// 那个私有方法。所以这里复用**同一个** `ConfigStore` 的根目录（`is_persistent()` 决定
+    /// 到底有没有磁盘可写）再落盘——目录解析仍然只有 `ConfigStore::open()` 这一份，
+    /// 不存在"另起一套降级链"。
+    ///
+    /// 内存态（配置目录不可写）直接返回 `Ok`：那儿本来就写不进去，启动期的提示条已经
+    /// 告诉用户"设置不会保存"，再报一次保存失败只会变成噪声。
+    fn save_language(&self, cfg: &AppConfig) -> Result<(), String> {
+        if !self.store.is_persistent() {
+            return Ok(());
+        }
+        let store = AppStore::new(Some(self.store.root().clone())).map_err(|e| e.to_string())?;
+        store.save_config(cfg).map_err(|e| e.to_string())
+    }
+
+    /// 设置页「语言」：0=自动 1=简中 2=繁中 3=英文 4=日文
+    ///
+    /// 六步顺序不能改，每一步都在修上一步留下的问题：
+    /// 1. 钳制索引并落盘——配置是唯一事实来源，重启后还得是这个语种；
+    /// 2. 清掉旧语种的**瞬时**文案（提示条 / 状态栏 / 列表加载错误）。它们不是 `@tr`
+    ///    绑定，切语时不会自己重算，留着就是一句中文一句英文并排。必须早于切语，
+    ///    否则会把下面要发的新提示一并清掉；
+    /// 3. `i18n::apply` 让所有 `@tr` 绑定重算（内部 `select_bundled_translation`）；
+    /// 4. 重推 Rust 侧拼出来的字符串——`initial_sync` 末尾已经包含
+    ///    `refresh_transfers()`，所以这里只补它不管的「已保存账号」；
+    /// 5. 回填「用户选的模式」给 UI（`Auto` 回 0，而不是解析出来的语种索引）；
+    /// 6. 保存失败的提示放到最后：这样它是**新**语种的，也不会被第 2 步吃掉。
+    fn set_language_index(self: &Arc<Self>, idx: i32) {
+        let idx = idx.clamp(0, 4);
+        let mode = language_mode_from_index(idx);
+        let mut cfg = self
+            .store
+            .load_config()
+            .unwrap_or_else(|_| AppConfig::default_config());
+        cfg.language = mode.as_str().to_string();
+        let saved = self.save_language(&cfg);
+
+        // 第 2 步：旧语种的瞬时文案一律清空（`dismiss_notice` 顺带让在途的自动消失
+        // 计时器失效，否则它几秒后会把新提示清掉）。
+        self.dismiss_notice();
+        self.set_status("");
+        self.set_file_error("");
+
+        // 第 3 步：切包。此前的 `Lang` 只影响 Rust 侧查表，`@tr` 由这一步置脏。
+        crate::i18n::apply(crate::i18n::resolve(mode));
+
+        // 第 4 步：重推 Rust 侧文案（版本号 / 配置目录 / 字体 / 主题 / 传输列表）
+        self.initial_sync();
+        // 登录页的已保存账号列表也确实由 Rust 生成，initial_sync 不碰它
+        self.refresh_saved_accounts();
+
+        // 第 5 步
+        self.set_ui_state(move |ui| {
+            ui.set_language_index(idx);
+        });
+
+        // 第 6 步：落盘失败的提示（文案已经是新语种）
+        if let Err(e) = saved {
+            self.notice("error", tf("error.save_config_failed", &[("e", &e)]));
+        }
     }
 }
 

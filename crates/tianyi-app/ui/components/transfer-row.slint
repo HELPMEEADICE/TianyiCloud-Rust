@@ -154,7 +154,7 @@ export component TransferRow inherits Rectangle {
 
             if root.running: FluentIconButton {
                 icon: IconName.pause;
-                tooltip: "暂停任务";
+                tooltip: @tr("暂停任务");
                 clicked => {
                     root.pause-clicked();
                 }
@@ -164,7 +164,7 @@ export component TransferRow inherits Rectangle {
                 icon: IconName.play;
                 filled: true;
                 accent: true;
-                tooltip: "继续任务";
+                tooltip: @tr("继续任务");
                 clicked => {
                     root.resume-clicked();
                 }
@@ -172,7 +172,7 @@ export component TransferRow inherits Rectangle {
 
             if root.failed || root.canceled: FluentIconButton {
                 icon: IconName.retry;
-                tooltip: "重试任务";
+                tooltip: @tr("重试任务");
                 clicked => {
                     root.retry-clicked();
                 }
@@ -180,7 +180,7 @@ export component TransferRow inherits Rectangle {
 
             if root.done: FluentIconButton {
                 icon: IconName.folder-open;
-                tooltip: "打开所在文件夹";
+                tooltip: @tr("打开所在文件夹");
                 clicked => {
                     root.reveal-clicked();
                 }
@@ -189,7 +189,7 @@ export component TransferRow inherits Rectangle {
             if root.running || root.paused: FluentIconButton {
                 icon: IconName.cancel;
                 danger: true;
-                tooltip: "取消任务";
+                tooltip: @tr("取消任务");
                 clicked => {
                     root.cancel-clicked();
                 }
@@ -197,7 +197,7 @@ export component TransferRow inherits Rectangle {
 
             if root.failed || root.canceled || root.done: FluentIconButton {
                 icon: IconName.delete;
-                tooltip: "从列表中移除";
+                tooltip: @tr("从列表中移除");
                 clicked => {
                     root.remove-clicked();
                 }
