@@ -1085,6 +1085,37 @@ fn check_shortcuts_yield_to_rename(failures: &mut Vec<String>) {
 // 所以每条函数的注释里都写清了"回退什么 → 红在哪里"。
 //
 // 全部按独立 `#[test]` 拆开：失败时测试名本身就是结论（见文件头的线程局部后端说明）。
+//
+// ---------------------------------------------------------------------------
+// 变异对照表（每一项都**实测跑过**，不是推演；结果记录于本轮轨道报告）
+// ---------------------------------------------------------------------------
+//
+// 回退动作                                              → 变红的断言
+// ─────────────────────────────────────────────────────────────────────────────
+// cloud.slint：删掉批量栏 7 处 `tooltip:`                → check_batch_bar_a11y
+//   （窄档下 accessible-label 退化成 "按钮"，5 个标签全查不到；宽档对照不受影响，
+//     这正是"判别力来自窄档"的证据）
+// main.slint：删掉 Toast y 里的 statusbar 补偿           → check_toast_clears_status_bar
+//   （下边缘 716→752，压过胶囊顶端 726，被盖住 26px）
+// main.slint：`ModalsApi.blocking = false`（恒 false）  → check_dialog_focus_closure
+//   （第一截"blocking 取值"立刻红：无浮层/对话框开/关/右键菜单开 全是 false）
+// dialog.slint：删掉 @keys(Tab)/@keys(Shift+Tab)/@keys(Backtab) **且** blocking 恒 false
+//                                                     → check_dialog_focus_closure
+//   （第二截红：Tab×5 + Space 把 current-page 从 0 切到 2。这一档才是 A-03 之前的
+//     真实状态。**单独**去掉其中任何一道防线都会保持绿色——两道防线各自都够用，
+//     这也是 T4 必须有第一截的原因：行为断言抓不到"只回退一道"）
+// cloud.slint：删掉 `changed selection-index { … }`     → check_selection_index_brings_row_into_view
+//   （row-30 始终没被实例化，可见行停在 row-00…row-14）
+// cloud.slint：删掉 `@keys(DownArrow)` KeyBinding       → check_arrow_key_moves_selection
+//   （move-selection 一次都不响，selection-index 停在 -1）
+// main.slint：删掉 `changed current-page` 里的          → check_tooltip_clears_on_page_switch
+//   `TooltipState.visible = false`                       （切页后 visible 仍为 true）
+//
+// 没有覆盖到的回退（诚实记录）：
+//  · T2（登录输入保留）的"真回退"是 `pages/login.slint` 里把 `text <=> root.user-text`
+//    断掉。这个文件不在本轮轨道允许编辑的清单里，所以没做运行时变异；作为替代，
+//    T2 断言了"切到扫码后**原输入框实例必须失效**"，从而保证这条断言走的确实是
+//    "子树被销毁重建"这条路径，而不是一次空转的往返。
 
 /// 在小步推进的 mock 时间里反复采样同一个几何量，直到它不再变化（动效收敛）
 ///
