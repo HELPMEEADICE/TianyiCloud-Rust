@@ -103,6 +103,20 @@ export global ModifiersApi {
     in-out property <bool> alt: false;
 }
 
+/// 浮层遮罩是否正在阻止背景控件进入 Tab 序列
+///
+/// 只回答一个问题："现在有模态浮层挡在上面吗"。判定累在 `main.slint` 的窗口根部
+/// （唯一的写入点），消费方只有 `ActivateScope`：
+///   `enabled: active && (!ModalsApi.blocking || modal)`
+///
+/// 为什么需要它：Slint 的 `FocusScope` **不拦 Tab**——`window.rs` 的 Tab 分支直接调
+/// `focus_next_item()` / `move_focus()`，后者沿整棵 item 树找下一个可聚焦元素
+/// （i-slint-core-1.17.1 window.rs:1315-1343）。对话框/菜单只是视觉上的"模态"，
+/// 不加这层判定时连按 Tab 就能走到背景导航项并被空格激活。
+export global ModalsApi {
+    in-out property <bool> blocking: false;
+}
+
 /// 拖出下载（Ctrl/Shift + 拖动文件行）的跨线程状态
 export global DragOutApi {
     in property <bool> mod-pressed: false;

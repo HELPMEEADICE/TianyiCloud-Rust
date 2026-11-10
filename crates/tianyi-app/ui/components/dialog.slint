@@ -42,18 +42,48 @@ export component FluentContentDialog inherits Rectangle {
 
     background: Theme.overlay-scrim;
 
-    // 点击遮罩等同取消
-    dismiss := TouchArea {
-        clicked => {
-            root.cancel();
+    /// 两个按钮之间的 Tab 循环
+    ///
+    /// 为什么必须自己做：Slint 的 `FocusScope` **不拦 Tab**。`window.rs` 在按键
+    /// 走完 item 链之后才处理 Tab 分支，直接调 `focus_next_item()` → `move_focus()`
+    /// 沿整棵 item 树找下一个可聚焦元素（i-slint-core-1.17.1 window.rs:1315-1343）。
+    /// 背景控件那侧由 `ActivateScope` 的 `ModalsApi.blocking` 挡掉了，但普通的
+    /// `FocusScope`（例如云盘页的 `list-area`）不在 `ActivateScope` 的管辖内，
+    /// 不截住 Tab 的话焦点仍会从对话框里溜出去。
+    ///
+    /// 顺序：取消 → 确认 → 回到取消；反向（Shift+Tab / Backtab）对称。
+    /// 焦点还停在外层 Scope 上（刚打开）时，正向落到"取消"、反向落到"确认"，
+    /// 与 WinUI 对话框"默认焦点在撤销项"的约定一致。
+    function focus-step(forward: bool) {
+        if (forward) {
+            if (cancel-btn.has-keyboard-focus()) {
+                confirm-btn.take-focus();
+            } else {
+                cancel-btn.take-focus();
+            }
+        } else if (confirm-btn.has-keyboard-focus()) {
+            cancel-btn.take-focus();
+        } else {
+            confirm-btn.take-focus();
         }
     }
 
+    // 遮罩与卡片整体包在一层 FocusScope 里。
+    //
+    // 包起来（而不是像原先那样让 FocusScope 与卡片平级）是为了让这层成为**卡片内
+    // 所有可聚焦控件的祖先**：Slint 沿焦点元素的祖先链派发 key_event
+    // （window.rs:1108-1120），只有祖先上的 KeyBinding 才收得到 Tab。
+    // FocusScope 不渲染，给足父级几何后布局与原来逐像素一致。
     focus-scope := FocusScope {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+
         init => {
             self.focus();
         }
-        // 这层只负责收 Esc / Enter，不是可点的东西：不管焦点在哪，
+        // 这层只负责收 Esc / Enter / Tab，不是可点的东西：不管焦点在哪，
         // 点遮罩都必须真的执行"取消"，不能被它当成"点我一下给你焦点"吞掉。
         focus-on-click: false;
 
@@ -76,90 +106,127 @@ export component FluentContentDialog inherits Rectangle {
                 }
             }
         }
-    }
 
-    HorizontalLayout {
-        alignment: center;
+        // Tab 拦截必须放在 enabled 上而不是 activated 里 if：KeyBinding 在捕获阶段
+        // 判定，条件不成立时按键要能正常往下传（同 pages/cloud.slint 里的总表注释）。
+        KeyBinding {
+            keys: @keys(Tab);
+            activated => {
+                root.focus-step(true);
+            }
+        }
 
-        VerticalLayout {
+        // Shift+Tab 在 Windows 上以「Tab + shift 修饰键」送达（winit 没有 Backtab
+        // 这个 NamedKey，见 i-slint-common key_codes.rs:33/36 与 backend-winit
+        // event_loop.rs 的 winit_key_to_char：Tab 有 winit 码，Backtab 一栏是空的），
+        // 而 `Keys::matches` 是**精确比对修饰键**（input.rs:764-780）。
+        // 某些 X11 布局会直接送 Backtab 的键码，因此两种都绑，行为一致。
+        KeyBinding {
+            keys: @keys(Shift+Tab);
+            activated => {
+                root.focus-step(false);
+            }
+        }
+
+        KeyBinding {
+            keys: @keys(Backtab);
+            activated => {
+                root.focus-step(false);
+            }
+        }
+
+        // 点击遮罩等同取消
+        dismiss := TouchArea {
+            clicked => {
+                root.cancel();
+            }
+        }
+
+        HorizontalLayout {
             alignment: center;
 
-            card := Rectangle {
-                width: Math.min(420px, root.width - 48px);
-                border-radius: Theme.radius-card;
-                background: Theme.flyout-bg;
-                border-width: 1px;
-                border-color: Theme.stroke-strong;
+            VerticalLayout {
+                alignment: center;
 
-                // 卡片自身吞掉点击，避免穿透到遮罩
-                TouchArea {
-                }
+                card := Rectangle {
+                    width: Math.min(420px, root.width - 48px);
+                    border-radius: Theme.radius-card;
+                    background: Theme.flyout-bg;
+                    border-width: 1px;
+                    border-color: Theme.stroke-strong;
 
-                VerticalLayout {
-                    padding-left: Theme.space-6;
-                    padding-right: Theme.space-6;
-                    padding-top: Theme.space-5;
-                    padding-bottom: Theme.space-4;
-                    spacing: Theme.space-2;
+                    // 卡片自身吞掉点击，避免穿透到遮罩
+                    TouchArea {
+                    }
 
-                    HorizontalLayout {
+                    VerticalLayout {
+                        padding-left: Theme.space-6;
+                        padding-right: Theme.space-6;
+                        padding-top: Theme.space-5;
+                        padding-bottom: Theme.space-4;
                         spacing: Theme.space-2;
-                        cross-axis-alignment: center;
 
-                        if root.danger: Icon {
-                            name: IconName.warning;
-                            size: Theme.icon-md;
-                            icon-color: Theme.danger;
-                        }
+                        HorizontalLayout {
+                            spacing: Theme.space-2;
+                            cross-axis-alignment: center;
 
-                        Text {
-                            text: root.title;
-                            font-family: Theme.font-family;
-                            font-size: Theme.font-subtitle;
-                            font-weight: Theme.weight-semibold;
-                            color: Theme.text-primary;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
+                            if root.danger: Icon {
+                                name: IconName.warning;
+                                size: Theme.icon-md;
+                                icon-color: Theme.danger;
+                            }
 
-                    Text {
-                        text: root.message;
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-body;
-                        color: Theme.text-secondary;
-                        wrap: word-wrap;
-                        vertical-alignment: center;
-                    }
-
-                    Rectangle {
-                        height: Theme.space-4;
-                        width: 1px;
-                        background: transparent;
-                    }
-
-                    HorizontalLayout {
-                        alignment: end;
-                        cross-axis-alignment: center;
-                        spacing: Theme.space-2;
-                        height: Theme.control-height;
-
-                        FluentButton {
-                            text: root.cancel-text;
-                            min-w: 80px;
-                            clicked => {
-                                root.cancel();
+                            Text {
+                                text: root.title;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-subtitle;
+                                font-weight: Theme.weight-semibold;
+                                color: Theme.text-primary;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                                wrap: word-wrap;
                             }
                         }
 
-                        FluentButton {
-                            text: root.confirm-text;
-                            accent: !root.danger;
-                            danger: root.danger;
-                            min-w: 80px;
-                            clicked => {
-                                root.confirm();
+                        Text {
+                            text: root.message;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-body;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            height: Theme.space-4;
+                            width: 1px;
+                            background: transparent;
+                        }
+
+                        HorizontalLayout {
+                            alignment: end;
+                            cross-axis-alignment: center;
+                            spacing: Theme.space-2;
+                            height: Theme.control-height;
+
+                            cancel-btn := FluentButton {
+                                text: root.cancel-text;
+                                min-w: 80px;
+                                modal: true;
+                                clicked => {
+                                    root.cancel();
+                                }
+                            }
+
+                            confirm-btn := FluentButton {
+                                text: root.confirm-text;
+                                accent: !root.danger;
+                                danger: root.danger;
+                                min-w: 80px;
+                                modal: true;
+                                clicked => {
+                                    root.confirm();
+                                }
                             }
                         }
                     }

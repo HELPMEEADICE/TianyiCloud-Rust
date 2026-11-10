@@ -13,7 +13,7 @@
 import { ListView } from "std-widgets.slint";
 import { Theme } from "theme/tokens.slint";
 import { Icon, IconName } from "theme/icons.slint";
-import { FileEntry, TransferEntry, CrumbEntry, TooltipState, LayoutMetrics } from "types.slint";
+import { FileEntry, TransferEntry, CrumbEntry, ModalsApi, TooltipState, LayoutMetrics } from "types.slint";
 import { FluentButton } from "components/button.slint";
 import { FluentIconButton } from "components/icon-button.slint";
 import { FluentNavItem } from "components/nav-item.slint";
@@ -29,7 +29,7 @@ import { SettingsPage } from "pages/settings.slint";
 
 // 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
 export { Theme } from "theme/tokens.slint";
-export { DragOutApi, InputMode, ModifiersApi } from "types.slint";
+export { DragOutApi, InputMode, ModalsApi, ModifiersApi } from "types.slint";
 
 export component MainWindow inherits Window {
     title: "天翼云盘";
@@ -38,6 +38,21 @@ export component MainWindow inherits Window {
     min-width: 900px;
     min-height: 620px;
     background: Theme.window-bg;
+
+    // 模态浮层的派生状态：对话框 / 账号菜单 / 右键菜单任意一个在场即为真。
+    // 三个分支写在一起而不是嵌进各自的 `changed`：任何一处漏掉复位，
+    // 背景控件就会永久退出 Tab 序列。
+    property <bool> modals-blocking: root.dialog-open || root.account-menu-open || root.context-open;
+
+    // 写入 `ModalsApi.blocking` 的**唯一赋值点**（消费方只有 ActivateScope，
+    // 见 components/activate-scope.slint）。
+    //
+    // 为什么不是一条属性绑定：Slint 不允许在组件作用域写 `Global.prop: expr`（解析直接失败），
+    // 全局属性只能从处理器里赋值。所以表达式留在本地属性上（仍然是响应式的），
+    // 由 changed 把变化推给全局——全 UI 只有这一行写它。
+    changed modals-blocking => {
+        ModalsApi.blocking = root.modals-blocking;
+    }
 
     // ==================== 会话 ====================
     in property <bool> logged-in: false;
@@ -1115,6 +1130,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.settings;
                 label: "设置";
                 triggered => {
@@ -1124,6 +1140,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.folder-open;
                 label: "下载目录";
                 triggered => {
@@ -1136,6 +1153,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.logout;
                 label: "退出登录";
                 danger: true;
@@ -1217,6 +1235,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: root.context-is-dir ? IconName.folder-open : IconName.file;
                 label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
                 triggered => {
@@ -1226,6 +1245,7 @@ export component MainWindow inherits Window {
             }
 
             if !root.context-is-dir: FluentMenuItem {
+                modal: true;
                 icon: IconName.download;
                 label: "下载到本地";
                 triggered => {
@@ -1238,6 +1258,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.rename;
                 label: "重命名";
                 shortcut: "F2";
@@ -1249,6 +1270,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.copy;
                 label: "复制到当前目录";
                 triggered => {
@@ -1258,6 +1280,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.folder;
                 label: "移动到上级目录";
                 enabled: root.crumbs.length > 1;
@@ -1268,6 +1291,7 @@ export component MainWindow inherits Window {
             }
 
             if !root.context-is-dir: FluentMenuItem {
+                modal: true;
                 icon: IconName.link;
                 label: "提取直链";
                 triggered => {
@@ -1280,6 +1304,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.select-all;
                 label: "全选";
                 shortcut: "Ctrl+A";
@@ -1290,6 +1315,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.close;
                 label: "取消选择";
                 shortcut: "Esc";
@@ -1304,6 +1330,7 @@ export component MainWindow inherits Window {
             }
 
             FluentMenuItem {
+                modal: true;
                 icon: IconName.delete;
                 label: "删除";
                 shortcut: "Del";

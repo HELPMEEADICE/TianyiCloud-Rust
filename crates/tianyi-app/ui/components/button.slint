@@ -29,8 +29,24 @@ export component FluentButton inherits Rectangle {
     /// 窄窗口下批量操作按钮会隐藏文字只留图标（`cloud.slint` 的 `root.narrow`），
     /// 此时按钮的可读名称与悬停说明都只能来自这里。
     in property <string> tooltip: "";
+    /// 本按钮是否位于模态浮层（对话框）内部：浮层打开时背景控件要让出 Tab 序列，
+    /// 浮层里的按钮不能一起失效。见 components/activate-scope.slint。
+    in property <bool> modal: false;
 
     callback clicked();
+
+    /// 键盘焦点是否落在本按钮上。
+    ///
+    /// 焦点其实在内部的 FocusScope 上（`root.has-focus` 对 Rectangle 恒为 false），
+    /// 因此对话框的 Tab 循环要问的是这一层。
+    public function has-keyboard-focus() -> bool {
+        fs.has-focus
+    }
+
+    /// 把键盘焦点移交给本按钮（对话框的 Tab 循环用；不改变任何几何或视觉状态）
+    public function take-focus() {
+        fs.focus();
+    }
 
     // Tooltip 归属键：文案 + 本实例的绝对位置（与 icon-button.slint 同一套机制）。
     //
@@ -144,7 +160,8 @@ export component FluentButton inherits Rectangle {
         height: root.height;
         // 禁用/忙时既不可 Tab 到达，也不响应按键（等价于原来在 key-pressed 里判
         // root.busy：busy 时按键照旧被 reject 交回上一级，只是不再响应激活）。
-        enabled: root.enabled && !root.busy;
+        active: root.enabled && !root.busy;
+        modal: root.modal;
         activated => {
             root.clicked();
         }

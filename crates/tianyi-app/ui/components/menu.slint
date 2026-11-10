@@ -14,6 +14,10 @@ export component FluentMenuItem inherits Rectangle {
     in property <string> shortcut: "";
     in property <bool> danger: false;
     in property <bool> enabled: true;
+    /// 菜单项是否位于浮层内部：浮层打开时背景控件要让出 Tab 序列，
+    /// 菜单项必须照常可聚焦、可回车触发（见 components/activate-scope.slint）。
+    /// 每个实例都显式传 true——漏传只会掉键盘可达性（鼠标仍可点），所以不做隐式默认。
+    in property <bool> modal: false;
 
     callback triggered();
 
@@ -97,7 +101,8 @@ export component FluentMenuItem inherits Rectangle {
         y: 0;
         width: root.width;
         height: root.height;
-        enabled: root.enabled;
+        active: root.enabled;
+        modal: root.modal;
         activated => {
             root.triggered();
         }
@@ -120,3 +125,4 @@ export component FluentMenuDivider inherits Rectangle {
     height: 1px;
     background: Theme.divider;
 }
+

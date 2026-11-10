@@ -12,20 +12,44 @@
 // 根本收不到这次点击——控件要点第二次才响应。
 // 因此鼠标点击的焦点改由各控件自己的 TouchArea 在按下时显式移交（`fs.focus()`）。
 //
-// 不套用本组件的三处（语义不同，各自保留原写法）：
+// 不套用本组件的两处（语义不同，各自保留原写法）：
 //   · components/segmented.slint：整组一个 Scope，左右方向键改 current；
-//   · components/dialog.slint：只收 Esc / Enter（KeyBinding），没有"激活"动作；
-//   · main.slint 右键菜单的 FocusScope：只收 Esc。
+//   · components/dialog.slint：只收 Esc / Enter / Tab（KeyBinding），没有"激活"动作；
+//   · main.slint 右键菜单的 FocusScope：只收 Esc 与上下键/回车。
 //
-// 本组件不渲染、不参与布局；几何（x / y / width / height）与 enabled 由实例给。
+// 本组件不渲染、不参与布局；几何（x / y / width / height）由实例给。
 
-import { InputMode } from "../types.slint";
+import { InputMode, ModalsApi } from "../types.slint";
 
 export component ActivateScope inherits FocusScope {
     /// Space / Return 按下时发出，由实例转成 clicked() / triggered() / toggled()
     callback activated();
 
+    /// 控件自身的可用性（原来的 `enabled` 参数）。
+    ///
+    /// 改名是为了把"控件自己禁用"与"被浮层挡在 Tab 序列外"分开：
+    /// `enabled` 已经绑死在本组件的表达式中，实例不能再覆盖它。
+    in property <bool> active: true;
+    /// 本控件是否属于当前浮层（对话框 / 菜单）内部。
+    ///
+    /// 浮层打开时背景控件要让出 Tab 序列，但浮层里的控件必须照常可用，
+    /// 否则对话框一打开自己就先失效了。
+    in property <bool> modal: false;
+
     focus-on-click: false;
+
+    // —— 为什么把模态判定下沉到 enabled ——
+    //
+    // `FocusScope::focus_event`（i-slint-core-1.17.1 items/input_items.rs:637-645）
+    // 在 `!enabled` 时第一步就返回 `FocusIgnored`；而 `window.rs:1315-1343` 的
+    // `move_focus` 只有在 `publish_focus_item` 返回 `FocusAccepted` 时才停下，
+    // 拿到 `FocusIgnored` 就继续走向下一个 item。也就是说 **enabled=false 正好等价于
+    // "从 Tab 序列里消失"**，不需要自己实现一遍焦点遍历。
+    //
+    // 反过来，禁用判定也必须留在这一层：Slint 派发按键时是沿焦点元素的祖先链逐个
+    // 调用 key_event，并不因为 enabled=false 就跳过本元素（window.rs:1108-1120），
+    // 所以"禁用时不触发"只能靠下面的 key-pressed 返回 reject 把按键交回上一级。
+    enabled: root.active && (!ModalsApi.blocking || root.modal);
 
     // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
     focus-changed-event(reason) => {
@@ -33,10 +57,6 @@ export component ActivateScope inherits FocusScope {
     }
 
     // key-pressed 返回 accept = 已处理并终止传递，reject = 交回上一级。
-    //
-    // 禁用判定必须留在这一层：Slint 派发按键时是沿焦点元素的祖先链逐个调用
-    // key_event，并不因为 enabled=false 就跳过本元素（i-slint-core window.rs），
-    // 所以"禁用时不触发"只能靠这里返回 reject 把按键交回上一级。
     key-pressed(event) => {
         if (!root.enabled) {
             return reject;
