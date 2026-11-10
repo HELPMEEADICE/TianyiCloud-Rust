@@ -11,6 +11,7 @@ use crate::client::TianyiClient;
 use crate::crypto;
 use crate::error::{Error, Result};
 use crate::models::*;
+use crate::ratelimit::RateLimiter;
 use crate::task::{ControlState, TransferControl};
 use futures::stream::{FuturesUnordered, StreamExt};
 use log::{info, warn};
@@ -33,6 +34,13 @@ const URL_REFRESH_AFTER: Duration = Duration::from_secs(30);
 /// 单个下载分片的最大尝试次数
 const CHUNK_MAX_ATTEMPTS: u32 = 3;
 
+/// 上传读取节流的步长：64 KiB
+///
+/// 取 64 KiB 的理由：它既是 tokio 定时器精度（约 1 ms）下「1 MiB/s 时每步约
+/// 64 ms」这种不会空转的粒度，又足够小，让桶的租借误差不超过一步。
+/// 再小（4 KiB）会让低速率下的租借次数变成原来的 16 倍，唤醒开销盖过带宽本身。
+const UPLOAD_THROTTLE_STEP: usize = 64 * 1024;
+
 /// 上传选项
 #[derive(Debug, Clone)]
 pub struct UploadOptions {
@@ -41,6 +49,12 @@ pub struct UploadOptions {
     pub thread_count: u32,
     pub part_size: i64,
     pub generate_torrent: bool,
+    /// 上传限速桶（`None` = 不限速，零额外开销）
+    ///
+    /// 放在选项里而不是做成全局单例：限速是「这一批传输」的属性，
+    /// 由调用方按当前配置造一个桶交给整批任务，N 个并发分片才会共享同一份额度
+    /// （挂在分片任务上就变成每片一份，聚合速率会翻 N 倍）。
+    pub rate: Option<Arc<RateLimiter>>,
 }
 
 impl Default for UploadOptions {
@@ -53,6 +67,7 @@ impl Default for UploadOptions {
             // 与 OpenList 189pc 一致，避免大文件分片数超过服务端限制
             part_size: 0,
             generate_torrent: false,
+            rate: None,
         }
     }
 }
@@ -65,6 +80,11 @@ pub struct DownloadOptions {
     /// 分片大小（字节）。每个分片整体读入内存后再按序写入 `.part`，
     /// 决定暂停的响应粒度（默认 [`DEFAULT_CHUNK_SIZE`]，即 4 MiB）
     pub chunk_size: u64,
+    /// 下载限速桶（`None` = 不限速，零额外开销）
+    ///
+    /// 与上传同理放在选项里：`download_round` 的 N 路并发分片必须共享同一个桶，
+    /// 速率才是「整条下载」的上限，而不是「每一路」的上限。
+    pub rate: Option<Arc<RateLimiter>>,
 }
 
 impl Default for DownloadOptions {
@@ -73,6 +93,7 @@ impl Default for DownloadOptions {
             thread_count: 4,
             resume: true,
             chunk_size: DEFAULT_CHUNK_SIZE,
+            rate: None,
         }
     }
 }
@@ -289,6 +310,9 @@ pub async fn upload(
         let uploaded = uploaded.clone();
         let progress = progress.clone();
         let local_path = local_path.clone();
+        // 限速桶按 Arc 克隆：N 个并发分片拿到的是**同一个**桶，
+        // 因此聚合速率是整批上传的上限，而不是每片各一份额度
+        let rate = opts.rate.clone();
         // 每个分片任务各持一份控制器副本（watch 句柄很轻）
         let control = control.clone();
 
@@ -317,10 +341,8 @@ pub async fn upload(
                 part_size_u
             };
 
-            let mut f = tokio::fs::File::open(&local_path).await?;
-            f.seek(SeekFrom::Start(offset)).await?;
-            let mut buf = vec![0u8; len as usize];
-            f.read_exact(&mut buf).await?;
+            // 读分片数据（限速在这里记账：见 read_part_throttled）
+            let buf = read_part_throttled(&local_path, offset, len, rate.as_deref()).await?;
 
             // PUT 上传（带重试）
             let mut attempt = 0u32;
@@ -400,6 +422,52 @@ pub async fn upload(
 
     progress(file_size);
     Ok(UploadOutcome::Completed(commit))
+}
+
+/// 读取一个上传分片的数据，按 [`UPLOAD_THROTTLE_STEP`] 步长逐块租借令牌
+///
+/// 为什么在**读取侧**记账：分片必须先整片读进内存，才能算出与服务端分片一致的
+/// `Content-Length` 再一次性 PUT（流式 body 会变成 chunked 传输，天翼云的分片上传
+/// 接口不接受）。所以限速只能落在「把这一片读进来」这一段：每读一块就按**实际读到的
+/// 字节数**向共享桶租借，N 个并发分片因此共用同一份额度，聚合速率被压在设定值附近。
+///
+/// 代价：租借发生在发送之前，线上速率会略低于设定值（读取与 PUT 串行叠加），
+/// 偏差方向保守——只会更慢，不会超额。粒度是「每 64 KiB 一次租借」，
+/// 而不是「每 64 KiB 一次网络写」。
+///
+/// `rate == None` 走上面那条一次读完的直通分支：不加锁、不 sleep、
+/// 连分块循环都不进，与引入限速前的代码逐行等价。
+async fn read_part_throttled(
+    path: &Path,
+    offset: u64,
+    len: u64,
+    rate: Option<&RateLimiter>,
+) -> Result<Vec<u8>> {
+    let mut f = tokio::fs::File::open(path).await?;
+    f.seek(SeekFrom::Start(offset)).await?;
+    let mut buf = vec![0u8; len as usize];
+    let Some(rate) = rate else {
+        // 不限速：与引入限速前完全一致（含 EOF 的错误种类）
+        f.read_exact(&mut buf).await?;
+        return Ok(buf);
+    };
+
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        let step = UPLOAD_THROTTLE_STEP.min(buf.len() - filled);
+        let n = f.read(&mut buf[filled..filled + step]).await?;
+        if n == 0 {
+            // 文件在传输过程中被截断：按分片数据不足报错（原来是 read_exact 的
+            // UnexpectedEof，语义等价，都不属于「可中断」错误）
+            return Err(Error::Transfer(format!(
+                "分片数据不足：期望 {len} 字节，实读 {filled}"
+            )));
+        }
+        // 按**实际读到的字节数**记账：短读不会多租借
+        rate.acquire(n as u64).await;
+        filled += n;
+    }
+    Ok(buf)
 }
 
 /// 计算整文件 MD5、各分片 MD5、各分片 SHA-1 piece hash
@@ -930,6 +998,8 @@ async fn download_impl(
             written,
             chunk_size,
             concurrency,
+            // 整个 `download()` 只有这一个桶：一轮里的 N 路并发分片共享它
+            opts.rate.as_deref(),
             &progress,
             control,
         )
@@ -977,6 +1047,10 @@ async fn download_impl(
 ///
 /// 暂停/取消都在分片边界生效：已发出的分片最多再完成一个 `chunk_size`
 /// 的数据量，但只有被按序取走并写盘的分片才会出现在 `.part` 里。
+///
+/// 限速：`rate` 只传给取数据的那些 future，N 路并发共享同一个桶
+/// （记账点见 [`fetch_chunk_once`]）。它不改变落盘顺序、不移动检查点位置，
+/// 因此暂停/取消/续传语义与不限速时完全一致，只是每片回来得慢一些。
 #[allow(clippy::too_many_arguments)]
 async fn download_round(
     client: &TianyiClient,
@@ -986,6 +1060,7 @@ async fn download_round(
     start: u64,
     chunk_size: u64,
     concurrency: usize,
+    rate: Option<&RateLimiter>,
     progress: &ProgressCallback,
     control: &TransferControl,
 ) -> Result<(RoundEnd, u64)> {
@@ -997,7 +1072,7 @@ async fn download_round(
             .map(|(offset, len)| {
                 let client = client.clone_for_transfer();
                 let url = dl_url.to_string();
-                async move { fetch_chunk(&client, &url, offset, len).await }
+                async move { fetch_chunk(&client, &url, offset, len, rate).await }
             })
             .buffered(concurrency),
     );
@@ -1030,16 +1105,19 @@ async fn download_round(
 ///
 /// 暂停期间在途请求可能因为连接超时而失败，重试可以把它重新拉起来；
 /// 日志只记录偏移/长度，绝不打印带签名的直链。
+/// 重试期间已经租借掉的令牌不会退回（见 [`RateLimiter::acquire`]），
+/// 所以限速下失败重试会让实际速率略微低于设定值——方向保守，可以接受。
 async fn fetch_chunk(
     client: &TianyiClient,
     dl_url: &str,
     offset: u64,
     len: u64,
+    rate: Option<&RateLimiter>,
 ) -> Result<Vec<u8>> {
     let mut attempt = 0u32;
     loop {
         attempt += 1;
-        match fetch_chunk_once(client, dl_url, offset, len).await {
+        match fetch_chunk_once(client, dl_url, offset, len, rate).await {
             Ok(buf) => return Ok(buf),
             Err(e) if attempt >= CHUNK_MAX_ATTEMPTS => {
                 warn!("download chunk offset={offset} len={len} failed after {attempt} tries: {e}");
@@ -1057,11 +1135,18 @@ async fn fetch_chunk(
 ///
 /// 服务端忽略 `Range` 直接返回整个文件时（200），按窗口截取，绝不把
 /// 多余字节写进 `.part`。
+///
+/// 限速粒度：用 `bytes_stream()` **边收边租借**，每收到一块（reqwest/hyper 给的
+/// 大小，典型 8～64 KiB）就按实际字节数 `acquire` 一次，因此限的是真实吞吐，
+/// 与分片大小无关；代价是每个分片多了一个 await 点，且 `rate == None` 时
+/// 这条路径与原来完全一致——`if let Some(rate)` 直接跳过，不加锁、不 sleep、
+/// 不做无意义的判断。
 async fn fetch_chunk_once(
     client: &TianyiClient,
     dl_url: &str,
     offset: u64,
     len: u64,
+    rate: Option<&RateLimiter>,
 ) -> Result<Vec<u8>> {
     let end = offset.saturating_add(len); // 不含
     let range = format!("bytes={}-{}", offset, end.saturating_sub(1));
@@ -1073,6 +1158,7 @@ async fn fetch_chunk_once(
         .await?;
     let status = resp.status();
     if status != reqwest::StatusCode::PARTIAL_CONTENT && status != reqwest::StatusCode::OK {
+        // 错误响应体很小，不节流：这里必须先读完 body 才能把报错内容带出去
         let body = resp.bytes().await.unwrap_or_default();
         return Err(Error::Api(format!(
             "download chunk http {status}: {}",
@@ -1083,7 +1169,25 @@ async fn fetch_chunk_once(
         )));
     }
 
-    let body = resp.bytes().await?;
+    // 逐块收取并按块租借令牌。缓冲区仍然整片攒齐后再返回，所以
+    // 「服务器忽略 Range 时按窗口截取」的容错逻辑一行都不用改。
+    //
+    // 不限速时**不走**流式分支：直接 `bytes()` 一把读完，与引入限速前的代码
+    // 完全一致——不包 stream、每块也不多一个「要不要租借」的 await 点。
+    let body: Vec<u8> = match rate {
+        None => resp.bytes().await?.to_vec(),
+        Some(rate) => {
+            let mut buf: Vec<u8> = Vec::with_capacity(len as usize);
+            let mut stream = resp.bytes_stream();
+            while let Some(piece) = stream.next().await {
+                let piece = piece?;
+                rate.acquire(piece.len() as u64).await;
+                buf.extend_from_slice(&piece);
+            }
+            buf
+        }
+    };
+
     if status == reqwest::StatusCode::PARTIAL_CONTENT {
         if body.len() as u64 != len {
             return Err(Error::Transfer(format!(
@@ -1091,7 +1195,7 @@ async fn fetch_chunk_once(
                 body.len()
             )));
         }
-        return Ok(body.to_vec());
+        return Ok(body);
     }
 
     let begin =
@@ -1374,6 +1478,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     const MIB: u64 = 1024 * 1024;
+    const KIB_U: u64 = 1024;
 
     #[test]
     fn test_plan_chunks_coverage() {
@@ -1542,6 +1647,9 @@ mod tests {
             thread_count: 4,
             resume: true,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
         let control = TransferControl::new();
         let (progress, seen) = collect_progress();
@@ -1587,6 +1695,9 @@ mod tests {
             thread_count: 2,
             resume: true,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
         let control = TransferControl::new();
         let pauser = control.clone();
@@ -1664,6 +1775,9 @@ mod tests {
             thread_count: 2,
             resume: true,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
         let control = TransferControl::new();
         let canceler = control.clone();
@@ -1710,6 +1824,9 @@ mod tests {
             thread_count: 3,
             resume: true,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
         let control = TransferControl::new();
         let (progress, seen) = collect_progress();
@@ -1760,6 +1877,9 @@ mod tests {
             thread_count: 2,
             resume: false,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
         let progression = TransferControl::new();
         let outcome = download_impl(
@@ -1795,6 +1915,9 @@ mod tests {
             thread_count: 2,
             resume: true,
             chunk_size: MIB,
+            // 这些既有用例验证的是暂停/续传/前缀不变量，不限速时行为必须与
+            // 引入限速前逐字节一致
+            rate: None,
         };
 
         let outcome = download_impl(
@@ -1864,6 +1987,134 @@ mod tests {
         assert_eq!(outcome, DownloadOutcome::Canceled);
         assert!(!dest.exists());
         assert!(!part_path_of(&dest).exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------
+    // 限速
+    // -----------------------------------------------------------------
+
+    /// 端到端：mock 服务下对同一份数据做「不限速 vs 限速」两次下载，
+    /// 限速那次耗时必须 ≥ 字节数 / 速率。
+    ///
+    /// 这是**强断言**（下界）：tokio 定时器不会提前到期，所以下界方向永不为假；
+    /// 反过来「限速一定比不限速慢」也用实际耗时比较了，避免出现「两边一样快
+    /// 但下界恰好蒙混过关」的情况。本用例吃真实时间约 0.5 s。
+    #[tokio::test]
+    async fn test_download_throttled_slower_than_unthrottled() {
+        let size = 2 * MIB;
+        let data: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
+        let (base, server) = spawn_range_server(data.clone(), false).await;
+        let url = format!("{base}/dl");
+        let client = test_client();
+        let dir = tmp_dir("throttle");
+
+        // 对照组：不限速（rate: None 时必须零额外开销）
+        let free_dest = dir.join("free.bin");
+        let free_opts = DownloadOptions {
+            thread_count: 2,
+            resume: true,
+            chunk_size: MIB,
+            rate: None,
+        };
+        let free_start = std::time::Instant::now();
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &free_dest,
+            &free_opts,
+            Arc::new(|_| {}),
+            &TransferControl::new(),
+            Some(&url),
+        )
+        .await
+        .expect("不限速下载应完成");
+        let free_elapsed = free_start.elapsed();
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(std::fs::read(&free_dest).expect("read free"), data);
+
+        // 实验组：2 MiB @ 4 MiB/s → 至少 500 ms
+        let rate = 4 * MIB;
+        let slow_dest = dir.join("slow.bin");
+        let slow_opts = DownloadOptions {
+            thread_count: 2,
+            resume: true,
+            chunk_size: MIB,
+            rate: crate::ratelimit::bucket_for(rate),
+        };
+        let slow_start = std::time::Instant::now();
+        let outcome = download_impl(
+            &client,
+            "file-id",
+            size,
+            &slow_dest,
+            &slow_opts,
+            Arc::new(|_| {}),
+            &TransferControl::new(),
+            Some(&url),
+        )
+        .await
+        .expect("限速下载应完成");
+        let slow_elapsed = slow_start.elapsed();
+        assert_eq!(outcome, DownloadOutcome::Completed);
+        assert_eq!(
+            std::fs::read(&slow_dest).expect("read slow"),
+            data,
+            "限速不能改变落盘的字节"
+        );
+
+        let lower_bound = Duration::from_secs_f64(size as f64 / rate as f64);
+        assert!(
+            slow_elapsed >= lower_bound,
+            "限速下载耗时 {slow_elapsed:?} 必须 ≥ 字节数/速率 {lower_bound:?}"
+        );
+        assert!(
+            slow_elapsed > free_elapsed,
+            "限速必须真的比不限速慢：限速 {slow_elapsed:?} vs 不限速 {free_elapsed:?}"
+        );
+
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 上传侧节流点：分片按 64 KiB 一步读、每步向共享桶租借，
+    /// 因此读一个分片的耗时 ≥ 分片字节数 / 速率，且读到的内容不变。
+    #[tokio::test]
+    async fn test_upload_read_is_throttled() {
+        let dir = tmp_dir("upload-throttle");
+        let path = dir.join("part.bin");
+        let len = 512 * KIB_U;
+        let data: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &data).expect("写测试文件");
+
+        // 不限速：直通路径
+        let free = read_part_throttled(&path, 0, len, None)
+            .await
+            .expect("不限速读取");
+        assert_eq!(free, data);
+
+        // 限速 2 MiB/s：512 KiB 至少 250 ms
+        let rate = crate::ratelimit::bucket_for(2 * MIB);
+        let start = std::time::Instant::now();
+        let slow = read_part_throttled(&path, 0, len, rate.as_deref())
+            .await
+            .expect("限速读取");
+        let elapsed = start.elapsed();
+        assert_eq!(slow, data, "限速不能改变读到的数据");
+
+        let lower_bound = Duration::from_millis(250);
+        assert!(
+            elapsed >= lower_bound,
+            "读 512 KiB @ 2 MiB/s 至少 {lower_bound:?}，实测 {elapsed:?}"
+        );
+
+        // 非零偏移也要正确：从 64 KiB 处读 64 KiB
+        let tail = read_part_throttled(&path, KIB_U, KIB_U, None)
+            .await
+            .expect("带偏移读取");
+        assert_eq!(tail, data[KIB_U as usize..2 * KIB_U as usize].to_vec());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

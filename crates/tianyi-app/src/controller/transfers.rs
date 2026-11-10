@@ -253,6 +253,7 @@ impl Controller {
                     thread_count: cfg.download_thread.max(1),
                     resume: true,
                     chunk_size: 4 * 1024 * 1024,
+                    rate: tianyi_core::ratelimit::bucket_for(cfg.speed_limit),
                 };
                 match transfer::download(
                     &client,
@@ -276,6 +277,7 @@ impl Controller {
                     rapid_upload: cfg.rapid_upload,
                     thread_count: cfg.upload_thread.max(1),
                     generate_torrent: cfg.generate_torrent,
+                    rate: tianyi_core::ratelimit::bucket_for(cfg.speed_limit),
                     ..Default::default()
                 };
                 if task.local_path.is_dir() {

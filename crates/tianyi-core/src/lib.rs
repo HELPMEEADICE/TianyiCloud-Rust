@@ -10,6 +10,7 @@ pub mod error;
 pub mod file;
 mod fsutil;
 pub mod models;
+pub mod ratelimit;
 pub(crate) mod retry;
 pub mod task;
 pub mod theme;
