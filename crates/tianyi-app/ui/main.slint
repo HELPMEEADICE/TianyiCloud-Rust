@@ -1310,6 +1310,7 @@ export component MainWindow inherits Window {
             }
             // 这层只负责收 Esc：焦点一旦被别处拿走（例如用户 Tab 到工具栏），
             // 剩下那一下点击不能被它当成"点我一下给你焦点"吞掉。
+            // 刻意不套用 components/activate-scope.slint：本层没有"激活"动作。
             focus-on-click: false;
 
             KeyBinding {

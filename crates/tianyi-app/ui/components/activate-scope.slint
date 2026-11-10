@@ -1,0 +1,50 @@
+// 可激活控件的键盘层（FocusScope 样板）
+//
+// 这份样板原本在 6 个控件（button / icon-button / nav-item / menu / switch /
+// check-box）里逐字重复，每处约 35 行。抽出来不是为了少写字，而是为了让
+// 「focus-on-click 为什么必须是 false」只留一处解释——它是本仓库反复踩到的坑
+// （"单击要点第二次"「右键菜单点不动」都是这个根因）。
+//
+// 保留默认值（true）时：`FocusScope::input_event`（i-slint-core
+// items/input_items.rs）在「按下 + 本层还没有焦点 + enabled」时会把这次按下
+// 记作"给焦点"并返回 EventAccepted，事件就此终止派发。而这些控件的 FocusScope
+// 覆盖整个控件、且声明在 TouchArea 之后（命中测试在前），后面的 TouchArea
+// 根本收不到这次点击——控件要点第二次才响应。
+// 因此鼠标点击的焦点改由各控件自己的 TouchArea 在按下时显式移交（`fs.focus()`）。
+//
+// 不套用本组件的三处（语义不同，各自保留原写法）：
+//   · components/segmented.slint：整组一个 Scope，左右方向键改 current；
+//   · components/dialog.slint：只收 Esc / Enter（KeyBinding），没有"激活"动作；
+//   · main.slint 右键菜单的 FocusScope：只收 Esc。
+//
+// 本组件不渲染、不参与布局；几何（x / y / width / height）与 enabled 由实例给。
+
+import { InputMode } from "../types.slint";
+
+export component ActivateScope inherits FocusScope {
+    /// Space / Return 按下时发出，由实例转成 clicked() / triggered() / toggled()
+    callback activated();
+
+    focus-on-click: false;
+
+    // 焦点来源判定交给 InputMode 的单一入口（Tab 进入=键盘，其余=鼠标）
+    focus-changed-event(reason) => {
+        InputMode.track-focus(reason);
+    }
+
+    // key-pressed 返回 accept = 已处理并终止传递，reject = 交回上一级。
+    //
+    // 禁用判定必须留在这一层：Slint 派发按键时是沿焦点元素的祖先链逐个调用
+    // key_event，并不因为 enabled=false 就跳过本元素（i-slint-core window.rs），
+    // 所以"禁用时不触发"只能靠这里返回 reject 把按键交回上一级。
+    key-pressed(event) => {
+        if (!root.enabled) {
+            return reject;
+        }
+        if (event.text == Key.Space || event.text == Key.Return) {
+            root.activated();
+            return accept;
+        }
+        return reject;
+    }
+}
