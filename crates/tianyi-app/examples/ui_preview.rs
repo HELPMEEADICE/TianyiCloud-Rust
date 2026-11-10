@@ -263,6 +263,26 @@ fn captcha_demo_image() -> slint::Image {
     slint::Image::from_rgba8(buffer)
 }
 
+/// 真绘一帧，不落盘。
+///
+/// 存在的理由只有一个：让**新建的元素子树**（`if` 分支）、连同它内部的
+/// `changed xxx => { … }` 处理器一起实例化。Slint 的元素树是惰性的，`if` 的分支
+/// 要等到下一次遍历/绘制才真正建出来；在它建出来之前写某个 `in property`，
+/// 新实例看到的初值就是"已经是新值"，于是 `changed` 永远不触发。
+///
+/// 具体踩到的坑：场景 25 先 `set_logged_in(false)`（销毁并等待重建登录页），
+/// 紧接着写 `login-error`。如果没有中间这一帧，重建出来的登录页初值就带着错误文案，
+/// `changed login-error` 一声不响，两个输入框的红框（S-03 的 `invalid`）根本不出现。
+fn render_frame(window: &MinimalSoftwareWindow, width: u32, height: u32) {
+    window.set_size(PhysicalSize::new(width, height));
+    let mut buffer = slint::SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
+    window.request_redraw();
+    window.draw_if_needed(|renderer| {
+        renderer.render(buffer.make_mut_slice(), width as usize);
+    });
+    slint::platform::update_timers_and_animations();
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args()
         .nth(1)
@@ -468,6 +488,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_context_open(true);
     shoot(&ui, &window, &out, "22-context-menu", 1180, 760)?;
     ui.set_context_open(false);
+
+    // ---------------- 23. 窄档批量操作栏（图标按钮 + Tooltip 兜底） ----------------
+    // 960px 是**唯一**能触发窄档的窗口区间（960–1007px）里的最小一档：导航栏在
+    // 整窗 < 960px 时折叠成 56px，内容区因此从 903px 掉到 712px，跨过了
+    // `CloudPage.narrow` 的 760px 断点。这一档下批量操作按钮把文字清空只留图标，
+    // 可读名称与悬停说明只剩 `tooltip:` 一条通道——D-01 的缺陷就死在这里，
+    // 而 22 张旧基线里一张窄档批量栏都没有。
+    let mut narrow_rows = demo_files();
+    narrow_rows.truncate(4);
+    for row in narrow_rows.iter_mut().skip(1) {
+        row.selected = true;
+    }
+    ui.set_current_page(0);
+    ui.set_list_state(SharedString::from("ready"));
+    ui.set_file_list(ModelRc::new(VecModel::from(narrow_rows)));
+    ui.set_selected_count(3);
+    ui.set_status_text(SharedString::from("已选择 3 项"));
+    shoot(&ui, &window, &out, "23-cloud-narrow-actions", 960, 760)?;
+
+    // ---------------- 24. 行内错误条（有数据时的加载失败） ----------------
+    // `list-state = error` + **非空** file-list 才会走 `inline-error` 分支：列表照常
+    // 显示，错误条与「重试」按钮占一行压在表头上方。旧的 07 只覆盖"整页错误"
+    // （列表为空、占据整个列表区），这条路径在基线里完全是空白。
+    ui.set_file_list(ModelRc::new(VecModel::from(demo_files())));
+    ui.set_selected_count(0);
+    ui.set_list_state(SharedString::from("error"));
+    ui.set_file_error(SharedString::from(
+        "刷新目录失败：网络连接超时，已显示上一次成功的结果",
+    ));
+    ui.set_status_text(SharedString::from("刷新失败：网络连接超时"));
+    shoot(&ui, &window, &out, "24-cloud-inline-error", 1180, 760)?;
+
+    // ---------------- 25. 登录页字段红框（S-03 的 invalid） ----------------
+    // `login-error` 非空时登录页把两个输入框一起标成 invalid（`pages/login.slint` 的
+    // `changed login-error`）。旧的 20 是"最窄窗口 + 验证码 + 已保存账号"的复合场景，
+    // 红框在那张图里既小又容易被验证码抢走注意力，这条单独采一档。
+    ui.set_logged_in(false);
+    ui.set_qr_mode(false);
+    ui.set_show_captcha(false);
+    ui.set_saved_accounts(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+    ui.set_status_text(SharedString::default());
+    // 先真绘一帧把重建出来的登录页实例化，再写错误文案：否则新实例的初值直接就是
+    // 错误文案，`changed login-error` 不触发，红框不会出现（见 render_frame 的说明）。
+    render_frame(&window, 900, 760);
+    ui.set_login_error(SharedString::from(
+        "账号或密码不正确，请检查后重试（剩余尝试次数 4）",
+    ));
+    shoot(&ui, &window, &out, "25-login-invalid", 900, 760)?;
 
     Ok(())
 }
