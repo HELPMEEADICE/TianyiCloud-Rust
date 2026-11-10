@@ -6,7 +6,7 @@
 import { Theme } from "../theme/tokens.slint";
 import { Icon, IconName } from "../theme/icons.slint";
 import { FluentSpinner } from "spinner.slint";
-import { InputMode } from "../types.slint";
+import { InputMode, TooltipState } from "../types.slint";
 
 export component FluentButton inherits Rectangle {
     in property <string> text: "";
@@ -23,13 +23,20 @@ export component FluentButton inherits Rectangle {
     in property <IconName> icon: IconName.none;
     /// 最小宽度（主操作按钮用它保持视觉节奏，不应设置成"铺满父容器"）
     in property <length> min-w: 0px;
+    /// 悬停提示 / 无文字时的兜底可读名称（传空字符串不显示气泡）
+    ///
+    /// 窄窗口下批量操作按钮会隐藏文字只留图标（`cloud.slint` 的 `root.narrow`），
+    /// 此时按钮的可读名称与悬停说明都只能来自这里。
+    in property <string> tooltip: "";
 
     callback clicked();
 
-    // 无障碍：暴露 button 角色，可读名称取按钮文字。
+    // 无障碍：暴露 button 角色，可读名称优先取按钮文字，其次取 tooltip。
+    // 两者都为空时退化成通用的"按钮"——屏幕阅读器读到一个空名称的按钮，
+    // 是比读"按钮"更糟的结果（用户无法判断这一格是什么）。
     // 辅助技术触发的"默认动作"等价于鼠标点一下，走同一个 callback。
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.text != "" ? root.text : (root.tooltip != "" ? root.tooltip : "按钮");
     accessible-action-default => {
         root.clicked();
     }
@@ -96,6 +103,21 @@ export component FluentButton inherits Rectangle {
         }
         clicked => {
             root.clicked();
+        }
+
+        // 悬停提示：与 `icon-button.slint` 同一套 TooltipState 归属机制
+        // （owner / text / x / y / visible），收尾只关自己点亮的那盏灯——
+        // 相邻按钮同时收到 has-hover 变化时，谁后熄灭是运行时不保证的顺序。
+        changed has-hover => {
+            if (self.has-hover && root.tooltip != "") {
+                TooltipState.owner = "tip:" + root.tooltip;
+                TooltipState.text = root.tooltip;
+                TooltipState.x = self.absolute-position.x;
+                TooltipState.y = self.absolute-position.y + self.height + 4px;
+                TooltipState.visible = true;
+            } else if (TooltipState.owner == "tip:" + root.tooltip) {
+                TooltipState.visible = false;
+            }
         }
     }
 

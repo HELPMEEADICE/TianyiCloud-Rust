@@ -251,6 +251,9 @@ export component CloudPage inherits Rectangle {
                 cross-axis-alignment: center;
 
                 // ---- 左组：选择状态与批量操作 ----
+                // 窄窗口（内容区 < 760px）下这些按钮只留图标：文字被清空后，
+                // 悬停说明与可读名称都只能由 tooltip 提供，因此每个按钮都固定传一份，
+                // 与 text 的窄窗口取值无关（tooltip 恒定，不是 root.narrow 的三元式）。
                 HorizontalLayout {
                     alignment: start;
                     spacing: Theme.space-2;
@@ -275,6 +278,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: "下载";
+                        tooltip: "下载";
                         icon: IconName.download;
                         subtle: true;
                         clicked => {
@@ -284,6 +288,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection && root.selected-count == 1: FluentButton {
                         text: "重命名";
+                        tooltip: "重命名";
                         icon: IconName.rename;
                         subtle: true;
                         clicked => {
@@ -293,6 +298,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "复制";
+                        tooltip: "复制";
                         icon: IconName.copy;
                         subtle: true;
                         clicked => {
@@ -302,6 +308,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "移动到上级";
+                        tooltip: "移动到上级";
                         icon: IconName.folder;
                         subtle: true;
                         enabled: root.crumbs.length > 1;
@@ -312,6 +319,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "提取直链";
+                        tooltip: "提取直链";
                         icon: IconName.link;
                         subtle: true;
                         clicked => {
@@ -321,6 +329,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "删除";
+                        tooltip: "删除";
                         icon: IconName.delete;
                         danger: true;
                         subtle: true;
@@ -331,6 +340,7 @@ export component CloudPage inherits Rectangle {
 
                     if root.has-selection: FluentButton {
                         text: root.narrow ? "" : "取消选择";
+                        tooltip: "取消选择";
                         subtle: true;
                         clicked => {
                             root.clear-selection();
