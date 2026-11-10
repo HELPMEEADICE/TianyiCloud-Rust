@@ -99,16 +99,40 @@ export component FluentNavItem inherits Rectangle {
         color: root.selected ? Theme.accent : Theme.text-primary;
         vertical-alignment: center;
         overflow: elide;
+
+        // 选中/取消选中时文字换色走过渡，与左侧指示条的淡入同一个节奏
+        animate color {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
     }
 
     // 徽章：宽度显式给定，位置由自身宽度反推，永远在导航项内部
-    if !root.compact && root.badge > 0: Rectangle {
+    // 出现时淡入（配方 A）：`if` 创建 → 定时器在下一帧抬值 → 徽章数字变化时不会硬闪。
+    if !root.compact && root.badge > 0: badge := Rectangle {
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: badge.enter-fade < 1.0;
+            triggered => {
+                badge.enter-fade = 1.0;
+            }
+        }
+
         x: root.width - self.width - 12px;
         y: (root.height - 18px) / 2;
         width: root.badge-w;
         height: 18px;
         border-radius: 9px;
         background: root.selected ? Theme.accent : Theme.control-bg-pressed;
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-fast;
+            easing: ease-out;
+        }
 
         Text {
             width: parent.width;
@@ -124,13 +148,30 @@ export component FluentNavItem inherits Rectangle {
     }
 
     // 折叠态的"有任务"小圆点
-    if root.compact && root.badge > 0: Rectangle {
+    if root.compact && root.badge > 0: dot := Rectangle {
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: dot.enter-fade < 1.0;
+            triggered => {
+                dot.enter-fade = 1.0;
+            }
+        }
+
         x: root.width - 16px;
         y: 7px;
         width: 6px;
         height: 6px;
         border-radius: 3px;
         background: Theme.accent;
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-fast;
+            easing: ease-out;
+        }
     }
 
     touch := TouchArea {

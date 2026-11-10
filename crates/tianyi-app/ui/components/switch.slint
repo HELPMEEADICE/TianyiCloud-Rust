@@ -64,6 +64,12 @@ export component FluentSwitch inherits Rectangle {
                     duration: Theme.motion-fast;
                     easing: ease-out;
                 }
+
+                // 滑块颜色也要跟着过渡：只动画 x 的话，白↔强调色的切换仍是硬跳
+                animate background {
+                    duration: Theme.motion-fast;
+                    easing: ease-out;
+                }
             }
         }
     }

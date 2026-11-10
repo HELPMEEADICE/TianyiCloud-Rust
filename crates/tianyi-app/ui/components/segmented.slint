@@ -42,6 +42,12 @@ export component FluentSegmented inherits Rectangle {
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;
+
+                // 段底色的淡入已经在做，文字颜色也必须一起过；字重无法插值，只能瞬切
+                animate color {
+                    duration: Theme.motion-fast;
+                    easing: ease-out;
+                }
             }
 
             seg-ta := TouchArea {

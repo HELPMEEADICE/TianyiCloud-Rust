@@ -34,6 +34,12 @@ export component FluentMenuItem inherits Rectangle {
         : ta.has-hover ? (root.danger ? Theme.danger-soft : Theme.control-bg-hover)
         : transparent;
 
+    // 菜单行此前完全没有过渡：鼠标划过是硬切。与其它可点控件统一到最快速率。
+    animate background {
+        duration: Theme.motion-fast;
+        easing: ease-out;
+    }
+
     HorizontalLayout {
         padding-left: 8px;
         padding-right: 8px;

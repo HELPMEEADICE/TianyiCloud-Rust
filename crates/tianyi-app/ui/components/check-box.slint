@@ -42,12 +42,26 @@ export component FluentCheckBox inherits Rectangle {
                 easing: ease-out;
             }
 
-            if root.checked: Icon {
+            // 背景在过渡、边框也必须跟着过渡，否则悬停时会出现"底色渐变、描边瞬跳"
+            animate border-color {
+                duration: Theme.motion-fast;
+                easing: ease-out;
+            }
+
+            // 勾一旦出现就常驻，只动画不透明度：`if` 创建/销毁没有中间态，做不出过渡。
+            // 减少动画时 animate 时长为 0，等价于原来的硬切。
+            Icon {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 name: IconName.check;
                 size: Theme.icon-xs;
                 icon-color: Theme.text-on-accent;
+                opacity: root.checked ? 1.0 : 0.0;
+
+                animate opacity {
+                    duration: Theme.motion-fast;
+                    easing: ease-out;
+                }
             }
         }
 
