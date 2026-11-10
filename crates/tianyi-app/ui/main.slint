@@ -928,7 +928,12 @@ export component MainWindow inherits Window {
         width: Math.min(420px, root.width - 32px);
         height: toast-layout.preferred-height;
         x: root.width - self.width - 16px;
-        y: root.height - self.height - 16px + (1 - self.enter-fade) * 8px;
+        // 底部让开状态栏：状态栏右下角是可点的传输胶囊（cloud.slint 的 task-chip，
+        // 点开传输抽屉），Toast 原来恰好盖在它上面 3–8 秒，用户点不到。
+        // 未登录页没有状态栏，保持原来的 16px；入场动效的 8px 上滑仍然叠加在最后。
+        y: root.height - self.height - 16px
+            - (root.logged-in ? Theme.statusbar-height + Theme.space-2 : 0px)
+            + (1 - self.enter-fade) * 8px;
         opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
         border-radius: Theme.radius-card;
         background: Theme.flyout-bg;
