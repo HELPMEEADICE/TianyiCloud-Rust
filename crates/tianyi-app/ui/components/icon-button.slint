@@ -20,6 +20,17 @@ export component FluentIconButton inherits Rectangle {
 
     callback clicked();
 
+    // Tooltip 归属键：文案 + 本实例的绝对位置。
+    //
+    // 只拿文案当键时，文案相同的两个实例会互相关灯——现成的重复文案是 Toast 与
+    // InfoBar 上的两个「关闭提示」：后点亮的一方改写 owner 之后，先悬停的那个实例
+    // 收尾时发现"这不是我的灯"，于是气泡可能常驻；鼠标从 A 直接移到 B 时，两个
+    // `changed has-hover` 的先后顺序又是运行时不保证的，A 的收尾还可能顺手把 B
+    // 刚点亮的气泡关掉。位置让键变成实例唯一，文案仍留在键里，出问题时能一眼认出。
+    // 坐标要除以 1px 才是可拼接的纯数字：Slint 不允许把 length 隐式转成 string。
+    private property <string> tip-owner: "tip:" + root.tooltip + "@"
+        + (self.absolute-position.x / 1px) + "," + (self.absolute-position.y / 1px);
+
     // 无障碍：图标按钮没有文字，可读名称取 tooltip；tooltip 为空时退化成通用的"按钮"，
     // 避免屏幕阅读器读出一个空名称的按钮。
     accessible-role: button;
@@ -75,12 +86,12 @@ export component FluentIconButton inherits Rectangle {
         changed has-hover => {
             if (self.has-hover && root.tooltip != "") {
                 // 抢占 + 归属判定：先认领归属键再点亮，收尾只关自己点亮的那盏
-                TooltipState.owner = "tip:" + root.tooltip;
+                TooltipState.owner = root.tip-owner;
                 TooltipState.text = root.tooltip;
                 TooltipState.x = self.absolute-position.x;
                 TooltipState.y = self.absolute-position.y + self.height + 4px;
                 TooltipState.visible = true;
-            } else if (TooltipState.owner == "tip:" + root.tooltip) {
+            } else if (TooltipState.owner == root.tip-owner) {
                 TooltipState.visible = false;
             }
         }

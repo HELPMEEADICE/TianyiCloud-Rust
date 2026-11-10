@@ -310,8 +310,12 @@ impl Controller {
             }
         };
 
+        let shutting_down = self.shutting_down.load(Ordering::SeqCst);
         match outcome {
             Outcome::Done => {
+                if close_safe_status(shutting_down, TaskStatus::Completed).is_none() {
+                    return; // 关窗中：写「已完成」会把归一化出来的「已暂停」顶掉
+                }
                 self.tasks.update(task_id, |t| {
                     t.status = TaskStatus::Completed;
                     t.progress = 100.0;
@@ -336,6 +340,9 @@ impl Controller {
                 self.tasks.update(task_id, |t| t.speed = 0);
             }
             Outcome::Canceled => {
+                if close_safe_status(shutting_down, TaskStatus::Canceled).is_none() {
+                    return; // 同上：关窗的取消不算用户取消，状态由 begin_close 统一负责
+                }
                 self.tasks.transition(task_id, TaskStatus::Canceled);
                 lock_or_recover(&self.controls).remove(&task_id);
                 lock_or_recover(&self.rate_samples).remove(&task_id);
@@ -350,6 +357,10 @@ impl Controller {
     }
 
     fn finish_task(&self, task_id: u64, status: TaskStatus, err: Option<String>) {
+        let Some(status) = close_safe_status(self.shutting_down.load(Ordering::SeqCst), status)
+        else {
+            return; // 关窗中：失败也不回写，任务保持 begin_close 归一化后的「已暂停」
+        };
         self.tasks.transition(task_id, status);
         self.tasks.update(task_id, |t| {
             t.status = status;
@@ -456,14 +467,21 @@ impl Controller {
             return;
         }
         let control = lock_or_recover(&self.controls).get(&id).cloned();
+        // 关窗中用户已经没有窗口可点：这条分支只是兜底，同样不许抢先写终态
+        let cancel_status = close_safe_status(
+            self.shutting_down.load(Ordering::SeqCst),
+            TaskStatus::Canceled,
+        );
         if let Some(ctl) = control {
             // 取消 → 检查点返回 Canceled → 传输任务自行收尾
             ctl.cancel();
-            self.tasks.transition(id, TaskStatus::Canceled);
-            self.tasks.update(id, |t| t.speed = 0);
+            if let Some(status) = cancel_status {
+                self.tasks.transition(id, status);
+                self.tasks.update(id, |t| t.speed = 0);
+            }
             lock_or_recover(&self.controls).remove(&id);
-        } else {
-            self.tasks.transition(id, TaskStatus::Canceled);
+        } else if let Some(status) = cancel_status {
+            self.tasks.transition(id, status);
         }
         lock_or_recover(&self.rate_samples).remove(&id);
         self.notice("info", format!("已取消：{}", task.file_name));
@@ -614,6 +632,9 @@ impl Controller {
     /// 控制句柄仍然调 `cancel()`：`pause()` 只是把会话挂起，进程退出前它还会占着连接与
     /// socket；关窗要的是"立刻停手"，状态由下面的归一化统一负责。
     pub(super) fn begin_close(self: &Arc<Self>) {
+        // 必须先置位再做归一化：此后任何后台传输的收尾写回都只能留在「已暂停」，
+        // 否则最后几毫秒走到 Canceled 分支的任务会把归一化结果覆盖掉。
+        self.shutting_down.store(true, Ordering::SeqCst);
         {
             let controls = lock_or_recover(&self.controls);
             for ctl in controls.values() {
@@ -655,6 +676,21 @@ pub(super) fn close_transitions(tasks: &[Task]) -> Vec<(u64, TaskStatus)> {
         .iter()
         .filter_map(|t| close_status_for(t.status).map(|s| (t.id, s)))
         .collect()
+}
+
+/// 关窗期间允许写回的目标状态；`None` 表示跳过写回
+///
+/// `begin_close` 把在跑任务归一化成 `Paused` 之后，后台传输任务往往还要跑几毫秒才走到
+/// 收尾分支——它手里的 `Canceled` / `Completed` / `Failed` 会把「已暂停」覆盖掉，进程
+/// 退出后用户看到的就是「已取消」，断点续传能力白丢。所以关窗期间只认 `Paused`。
+///
+/// 只拦后台收尾这一侧：用户点暂停/取消走的是 UI 线程，那时窗口还在，`shutting_down`
+/// 仍是 false，行为与改动前完全一致。
+pub(super) fn close_safe_status(shutting_down: bool, target: TaskStatus) -> Option<TaskStatus> {
+    if !shutting_down {
+        return Some(target);
+    }
+    (target == TaskStatus::Paused).then_some(TaskStatus::Paused)
 }
 
 pub(super) enum Outcome {

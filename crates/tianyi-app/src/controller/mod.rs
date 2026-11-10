@@ -122,6 +122,12 @@ pub struct Controller {
     last_snapshot: Mutex<Vec<TransferSnapshot>>,
     /// 强制推送一次：筛选器切换这类"快照里看不出来"的变化走这里
     force_publish: AtomicBool,
+    /// 关窗收尾是否已开始
+    ///
+    /// `begin_close` 把在跑任务归一化成「已暂停」之后，后台传输任务往往还要跑几毫秒才
+    /// 走到收尾分支；那些写回会把「已暂停」改回终态。这个标志让收尾路径知道"现在是
+    /// 退出流程"，只允许停在「已暂停」。
+    shutting_down: AtomicBool,
 
     // ---------------- 直链 ----------------
     links: Mutex<Vec<DirectLink>>,
@@ -186,6 +192,7 @@ impl Controller {
             last_snapshot: Mutex::new(Vec::new()),
             // 首帧必须推一次：此时 last_snapshot 还是空的，但显式置 true 更稳
             force_publish: AtomicBool::new(true),
+            shutting_down: AtomicBool::new(false),
             links: Mutex::new(Vec::new()),
             theme_mode: Mutex::new(theme_mode),
             notice_slot: Arc::new(Mutex::new(NoticeSlot::default())),
@@ -997,8 +1004,8 @@ mod tests {
     };
     use self::session::{account_initial, clamp_threads, pick_store_root, qr_state_of, StoreRoot};
     use self::transfers::{
-        close_status_for, close_transitions, dedupe_key, dir_size, needs_publish, progress_marker,
-        to_transfer_entry, transfer_snapshot, Outcome,
+        close_safe_status, close_status_for, close_transitions, dedupe_key, dir_size,
+        needs_publish, progress_marker, to_transfer_entry, transfer_snapshot, Outcome,
     };
     use super::*;
     use std::collections::HashSet;
@@ -1686,5 +1693,33 @@ mod tests {
         assert_eq!(applied[2].status, TaskStatus::Paused, "已暂停保持不变");
         assert_eq!(applied[3].status, TaskStatus::Completed, "终态不受影响");
         assert_eq!(applied[4].status, TaskStatus::Failed, "终态不受影响");
+    }
+
+    /// 关窗窗口内的收尾写回：终态一律丢弃，只允许留在「已暂停」
+    #[test]
+    fn close_safe_status_never_overwrites_paused_during_shutdown() {
+        // 不在关窗窗口：与改动前一致，任何目标状态都照常写回
+        assert_eq!(
+            close_safe_status(false, TaskStatus::Completed),
+            Some(TaskStatus::Completed)
+        );
+        assert_eq!(
+            close_safe_status(false, TaskStatus::Canceled),
+            Some(TaskStatus::Canceled)
+        );
+        assert_eq!(
+            close_safe_status(false, TaskStatus::Failed),
+            Some(TaskStatus::Failed)
+        );
+
+        // 关窗中：三个终态全部丢弃（跳过写回，不覆盖 begin_close 归一化出的「已暂停」）
+        assert_eq!(close_safe_status(true, TaskStatus::Completed), None);
+        assert_eq!(close_safe_status(true, TaskStatus::Canceled), None);
+        assert_eq!(close_safe_status(true, TaskStatus::Failed), None);
+        // 「已暂停」本身就是关窗目标，放行
+        assert_eq!(
+            close_safe_status(true, TaskStatus::Paused),
+            Some(TaskStatus::Paused)
+        );
     }
 }
