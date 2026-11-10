@@ -1,7 +1,9 @@
 # 第三轮优化报告
 
-> 基线 `78d90d2` → 本轮代码终点 `e955f52`，外加本文件所在的 docs 提交。
-> **25 个提交**；`git diff --shortstat 78d90d2..e955f52` = **40 files changed, 2644 insertions(+), 498 deletions(-)**。
+> 基线 `78d90d2` → 本轮代码终点 `e955f52`（**25 个提交**）；再加两条文档提交，本轮全区间共 **27 个提交**。
+> `git diff --shortstat 78d90d2..e955f52` = **40 files changed, 2644 insertions(+), 498 deletions(-)**。
+> 含文档提交的全区间规模请现查 `git diff --shortstat 78d90d2..HEAD`——**这里刻意不写死**：
+> 任何"报告自己的 diff 大小"都会在本文件被提交的那一刻失效。
 > 测试从 **106 条增至 126 条**（app 45→61 / core 58→62 / 集成 3→3）。
 > 视觉体系（Fluent 2 令牌、尺寸节奏、组件构成）**未改**；新增颜色字面量 **0**——本轮色彩改动只是把 `ui/` 下 8 处字面量搬进 7 个新令牌，取值逐字符相同，渲染零变化。
 
@@ -195,7 +197,7 @@
 
 ## 8. 提交分布
 
-`fix` 13 / `feat` 6 / `refactor` 3 / `test` 2 / `docs` 1 = **25**（`git log --format=%s 78d90d2..e955f52` 按类型前缀统计可复核）。
+`fix` 13 / `feat` 6 / `refactor` 3 / `test` 2 / `docs` 3 = **27**（`git log --format=%s 78d90d2..HEAD` 按类型前缀统计可复核；代码终点 `e955f52` 之前是 25 条，其中 `docs` 仅 1 条，另两条文档提交即本报告与 CHANGELOG/README 的更新）。
 
 按工作流的归属：
 
