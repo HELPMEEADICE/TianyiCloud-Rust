@@ -196,6 +196,9 @@ msgstr "密碼登入"
 msgid "名称"
 msgstr "名稱"
 
+msgid "排序"
+msgstr "排序"
+
 msgid "默认下载目录"
 msgstr "預設下載目錄"
 

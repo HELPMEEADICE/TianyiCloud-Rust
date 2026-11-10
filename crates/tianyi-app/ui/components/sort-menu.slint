@@ -1,0 +1,161 @@
+// 排序入口：命令栏上的排序图标按钮 + 贴其下方的排序浮层
+//
+// 为什么要有这个入口（而不是只靠列头）：
+//   列头里只有「名称」「大小」是常驻的，「修改时间」那一列要 `detail-level >= 2`
+//   才渲染（内容区 ≥ 1120px，即整窗 ≥ 1368px 且导航展开）。默认 1180px 窗口的
+//   内容区只有 932px，用户**没有任何入口**按修改时间排序（D-12）。命令栏入口与
+//   窗口宽度无关，任何档位都在。
+//
+// 方向语义只由控制器负责：本组件只报「点了哪一列」（`sort-chosen(key)`），
+// 「同列再点就反向」由 `controller/files.rs` 的 `handle_sort_changed` 翻。
+// UI 自己再算一次方向会出现两个事实来源，点一下翻两次。
+
+import { Theme } from "../theme/tokens.slint";
+import { Icon, IconName } from "../theme/icons.slint";
+import { FluentIconButton } from "./icon-button.slint";
+import { FluentMenuItem } from "./menu.slint";
+
+export component SortMenu inherits Rectangle {
+    /// 当前排序列：0=名称 1=大小 2=修改时间（与 `CloudPage.sort-key` 同源）
+    in property <int> sort-key: 0;
+    in property <bool> sort-asc: true;
+    /// 浮层是否展开。
+    ///
+    /// **in-out 而不是私有状态**：外壳 `MainWindow` 要把它并进 `modals-blocking`
+    /// 的派生式（浮层在场 → 背景控件退出 Tab 序列），所以展开态必须能读到组件外。
+    in-out property <bool> open: false;
+
+    /// 用户点了某一列。只传出列 key，**不带方向**（见文件头）。
+    callback sort-chosen(int);
+
+    // 浮层内部的节奏常量：与 `main.slint` 账号菜单逐项对齐
+    // （padding 6px / spacing 2px，行高 = `FluentMenuItem` 的 height: 32px）。
+    // 行用显式 y 摆放而不是 VerticalLayout：右端的方向箭头要**叠在同一行上**
+    // （`FluentMenuItem` 没有尾部插槽），布局里塞不进一个覆盖层。
+    private property <length> flyout-pad: 6px;
+    private property <length> flyout-gap: 2px;
+    private property <length> flyout-row: 32px;
+    private property <length> flyout-width: 176px;
+    private property <length> flyout-height: root.flyout-pad * 2 + root.flyout-row * 3 + root.flyout-gap * 2;
+
+    // 与 `FluentIconButton` 的默认 size（32px）一致：命令栏里与其它图标按钮同高
+    width: Theme.control-height;
+    height: Theme.control-height;
+
+    // ---- 触发按钮 ----
+    // `tooltip` 同时就是 `accessible-label`（见 components/icon-button.slint），
+    // 辅助技术与 ui_tests 都按「排序」这个可读名称找得到它。
+    // `checked` 让展开态有底色，与传输面板按钮的展开语义一致。
+    button := FluentIconButton {
+        icon: IconName.sort;
+        tooltip: @tr("排序");
+        checked: root.open;
+        clicked => {
+            root.open = !root.open;
+        }
+    }
+
+    // ---- 浮层 ----
+    // 样式对齐 `main.slint` 的账号菜单：flyout-bg / radius-flyout / stroke-strong /
+    // padding 6px / spacing 2px。入场用配方 A（见 theme/tokens.slint）：起点落在
+    // "下一帧"的 1ms 单次 Timer，init 里直接抬值不会产生动画。
+    if root.open: flyout := Rectangle {
+        property <float> enter-fade: 0.0;
+
+        Timer {
+            interval: 1ms;
+            running: flyout.enter-fade < 1.0;
+            triggered => {
+                flyout.enter-fade = 1.0;
+            }
+        }
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+
+        // 贴按钮下方、左对齐。用**按钮的绝对位置**反推它在本组件坐标系里的原点：
+        // 组件根元素与按钮同原点（当前相减恒为 0），写成相减的形式是为了让
+        // 「浮层永远跟着按钮走」这条不变量不依赖嵌套层级——将来按钮挪了位置，
+        // 这里自动跟过去。
+        x: button.absolute-position.x - root.absolute-position.x;
+        y: button.absolute-position.y - root.absolute-position.y + button.height + 4px;
+        width: root.flyout-width;
+        height: root.flyout-height;
+        border-radius: Theme.radius-flyout;
+        background: Theme.flyout-bg;
+        border-width: 1px;
+        border-color: Theme.stroke-strong;
+
+        // 三条排序项，顺序与表头列序一致。
+        // `modal: true`：浮层在场时背景控件已由 `ModalsApi.blocking` 挡在 Tab 序列外，
+        // 菜单项自己必须照常可聚焦、可回车触发（与右键菜单项同一个开关）。
+        name-item := FluentMenuItem {
+            x: root.flyout-pad;
+            y: root.flyout-pad;
+            width: parent.width - root.flyout-pad * 2;
+            modal: true;
+            label: @tr("名称");
+            triggered => {
+                root.choose(0);
+            }
+        }
+
+        size-item := FluentMenuItem {
+            x: root.flyout-pad;
+            y: root.flyout-pad + root.flyout-row + root.flyout-gap;
+            width: parent.width - root.flyout-pad * 2;
+            modal: true;
+            label: @tr("大小");
+            triggered => {
+                root.choose(1);
+            }
+        }
+
+        time-item := FluentMenuItem {
+            x: root.flyout-pad;
+            y: root.flyout-pad + (root.flyout-row + root.flyout-gap) * 2;
+            width: parent.width - root.flyout-pad * 2;
+            modal: true;
+            label: @tr("修改时间");
+            triggered => {
+                root.choose(2);
+            }
+        }
+
+        // 当前列与方向：只在被选中那一行的右端显示箭头（升序/降序两个官方图标）。
+        // 声明在三个菜单项之后，因此叠在行底色之上。
+        // x 的 8px 是 `FluentMenuItem` 的 padding-right，箭头与文字右端对齐。
+        if root.sort-key == 0: Icon {
+            x: parent.width - 8px - Theme.icon-sm;
+            y: root.flyout-pad + (root.flyout-row - Theme.icon-sm) / 2;
+            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+            size: Theme.icon-sm;
+            icon-color: Theme.accent;
+        }
+
+        if root.sort-key == 1: Icon {
+            x: parent.width - 8px - Theme.icon-sm;
+            y: root.flyout-pad + root.flyout-row + root.flyout-gap + (root.flyout-row - Theme.icon-sm) / 2;
+            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+            size: Theme.icon-sm;
+            icon-color: Theme.accent;
+        }
+
+        if root.sort-key == 2: Icon {
+            x: parent.width - 8px - Theme.icon-sm;
+            y: root.flyout-pad + (root.flyout-row + root.flyout-gap) * 2 + (root.flyout-row - Theme.icon-sm) / 2;
+            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+            size: Theme.icon-sm;
+            icon-color: Theme.accent;
+        }
+    }
+
+    /// 选中某一列：先收浮层，再把列 key 交给控制器（方向由控制器翻）
+    function choose(key: int) {
+        root.open = false;
+        root.sort-chosen(key);
+    }
+}

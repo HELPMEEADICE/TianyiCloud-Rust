@@ -484,23 +484,40 @@ fn check_empty_state_icon(failures: &mut Vec<String>) {
     }
 }
 
-/// 导航栏宽度（`ui/main.slint` 的 `nav-compact` 断点与 `Theme.nav-width*` 令牌）
-const NAV_WIDTH: f32 = 248.0;
-/// 导航栏折叠后的宽度（窗口窄于 960px 时折叠）
-const NAV_WIDTH_COMPACT: f32 = 56.0;
-/// `ui/main.slint` 的折叠断点
-const NAV_COMPACT_BREAKPOINT: f32 = 960.0;
 /// DE-07 用的宽档：内容区宽度 1352px，四列全开
 const EXTRA_WIDE: (f32, f32) = (1600.0, 760.0);
 
-/// 内容区可用宽度 = 整窗宽度 − 导航栏宽度
-fn content_width(window_width: f32) -> f32 {
-    let nav = if window_width < NAV_COMPACT_BREAKPOINT {
-        NAV_WIDTH_COMPACT
-    } else {
-        NAV_WIDTH
-    };
-    window_width - nav
+/// 导航栏的两档宽度 `(展开, 折叠)`，**从 UI 读真值**
+///
+/// D-13 修的就是这里：原来是 `NAV_WIDTH = 248.0` / `NAV_WIDTH_COMPACT = 56.0` /
+/// `NAV_COMPACT_BREAKPOINT = 960.0` 三个字面量，是 `ui/` 里真值的副本。UI 一改断点，
+/// 测试就静默地按旧数字算内容区，所有断言都跑在错误的坐标上还照样"通过"。
+/// 现在四个数（含 `min-capability-width`）全部来自 `Theme` / `LayoutMetrics`。
+fn nav_widths(ui: &crate::app::MainWindow) -> (f32, f32) {
+    let theme = ui.global::<crate::app::Theme>();
+    (theme.get_nav_width(), theme.get_nav_width_compact())
+}
+
+/// 导航栏展开/折叠的断点 = `Theme.nav-width + LayoutMetrics.min-capability-width`
+///
+/// 与 `ui/main.slint` 的 `nav-compact` 绑定表达式逐字对应（248 + 900 = 1148px）：
+/// 两个操作数都从 UI 侧读，测试里不出现第三个数字。
+fn nav_breakpoint(ui: &crate::app::MainWindow) -> f32 {
+    let (expanded, _) = nav_widths(ui);
+    expanded
+        + ui.global::<crate::app::LayoutMetrics>()
+            .get_min_capability_width()
+}
+
+/// 内容区可用宽度 = 整窗宽度 − 导航栏宽度（导航档按 `nav_breakpoint` 判）
+fn content_width(ui: &crate::app::MainWindow, window_width: f32) -> f32 {
+    let (expanded, compact) = nav_widths(ui);
+    window_width
+        - if window_width < nav_breakpoint(ui) {
+            compact
+        } else {
+            expanded
+        }
 }
 
 /// E. 次要列分级：断点必须量「内容区宽度」，不是整窗宽度。
@@ -523,7 +540,7 @@ fn check_detail_level_columns(failures: &mut Vec<String>) {
         let ui = boot((width, height));
         ui.set_logged_in(true);
         settle();
-        let content = content_width(width);
+        let content = content_width(&ui, width);
 
         // 前置条件：没有文件行时列表区仍在，列头也照常渲染（列表状态不影响档位）
         for (id, want) in [
@@ -1191,14 +1208,16 @@ fn instantiated_row_labels(ui: &crate::app::MainWindow) -> Vec<String> {
 /// `tooltip:`。D-01 之前那六个按钮一个 tooltip 都没有，屏幕阅读器在窄档下读到的是
 /// 五个一模一样的无名按钮，用户无法分清"删除"和"取消选择"。
 ///
-/// 为什么必须用 960–1007px 这个窗口区间：`CloudPage.narrow` 量的是**内容区**宽度
-/// （整窗 − 导航栏），而导航栏在整窗 < 960px 时折叠成 56px：
-///   · 900px  → 导航折叠 → 内容区 844px → 宽档（触发不了 narrow）
-///   · 960px  → 导航展开 248px → 内容区 712px → 窄档 ✅
-///   · 1007px → 内容区 759px → 仍是窄档
-///   · 1008px → 内容区 760px → 宽档
-/// 所以 960px 是**唯一**能触发窄档的窗口区间里最靠边的一档，用 900 / 1180 测这条
-/// 断言等于什么都没测。
+/// 为什么必须用 900–955px 这个窗口区间：`CloudPage.narrow` 量的是**内容区**宽度
+/// （整窗 − 导航栏），判据是 `LayoutMetrics.min-capability-width`（900px）：
+///   · 900px  → 导航折叠 56px → 内容区 844px → 图标档 ✅（本轮**唯一**的图标档区间）
+///   · 955px  → 内容区 899px → 仍是图标档
+///   · 956px  → 内容区 900px → 宽档（标签回来了）
+///   · 1180px → 内容区 932px → 宽档
+/// 所以 900px 是能触发图标档的窗口区间（900–955）里最靠边的一档，用 1180 测这条断言
+/// 等于什么都没测。此前这里用 960×760——那是旧断点（整窗 960 折叠 / 内容区 760 分档）
+/// 下唯一能触发窄档的窗口区间，两个断点不同源时才会出现那种"窗口越宽能力越窄"的
+/// 怪区间（D-11）。
 ///
 /// 回退什么会红：把 `pages/cloud.slint` 批量栏那六处 `tooltip:` 删掉 → 窄档下
 /// `FluentButton.accessible-label` 退化成兜底值 "按钮" → 按 "复制"/"删除" 等标签
@@ -1208,8 +1227,8 @@ fn instantiated_row_labels(ui: &crate::app::MainWindow) -> Vec<String> {
 fn check_batch_bar_a11y() {
     let mut failures: Vec<String> = Vec::new();
 
-    // ---- 窄档：960x760（导航展开，内容区 712px） ----
-    let ui = boot((960.0, 760.0));
+    // ---- 图标档：900x620（导航折叠 56px，内容区 844px < 900px） ----
+    let ui = boot(NARROW);
     ui.set_logged_in(true);
     ui.set_crumbs(ModelRc::new(VecModel::from(vec![
         crate::app::CrumbEntry {
@@ -1228,41 +1247,42 @@ fn check_batch_bar_a11y() {
     ui.set_selected_count(3);
     settle();
 
-    // 窄档是否真的生效：同一颗按钮在窄档换成 FluentIconButton、宽档是 FluentButton。
-    // 这条是"档位证据"，没有它，下面五条断言在宽档下也能过（宽档的名称来自 text）。
+    // 图标档是否真的生效：同一颗按钮在图标档换成 FluentIconButton、标签档是
+    // FluentButton。这条是"档位证据"，没有它，下面五条断言在标签档下也能过
+    //（标签档的名称来自 text）。
     let narrow_mkdir_icon = count_labelled(&ui, "FluentIconButton", "新建文件夹");
     let narrow_mkdir_text = count_labelled(&ui, "FluentButton", "新建文件夹");
     println!(
-        "T1 960x760: 新建文件夹 icon-btn={narrow_mkdir_icon} text-btn={narrow_mkdir_text} \
-         （窄档应为 icon=1 / text=0）"
+        "T1 900x620: 新建文件夹 icon-btn={narrow_mkdir_icon} text-btn={narrow_mkdir_text} \
+         （图标档应为 icon=1 / text=0）"
     );
     expect(
         &mut failures,
         narrow_mkdir_icon == 1 && narrow_mkdir_text == 0,
         || {
             format!(
-                "T1 960x760: 窄档没有生效 —— 「新建文件夹」实测 icon-btn={narrow_mkdir_icon} \
+                "T1 900x620: 图标档没有生效 —— 「新建文件夹」实测 icon-btn={narrow_mkdir_icon} \
                  text-btn={narrow_mkdir_text}（期望 1 / 0）。这条是下面五条断言的前提：\
-                 960px 窗口必须落进内容区 < 760px 的窄档"
+                 900px 窗口（导航折叠 56px → 内容区 844px）必须落进内容区 < 900px 的图标档"
             )
         },
     );
 
-    // 窄档下五个批量按钮的可读名称
+    // 图标档下五个批量按钮的可读名称
     for label in ["复制", "移动到上级", "提取直链", "删除", "取消选择"] {
         let hits = count_labelled(&ui, "FluentButton", label);
-        println!("T1 960x760: 按标签 {label:?} 命中 FluentButton {hits} 个");
+        println!("T1 900x620: 按标签 {label:?} 命中 FluentButton {hits} 个");
         expect(&mut failures, hits == 1, || {
             format!(
-                "T1 960x760: 按 accessible-label={label:?} 找到 {hits} 个 FluentButton（期望 1）\
-                 —— D-01 回退：窄档清空 text 之后没有 tooltip 兜底，可读名称退化成 \"按钮\""
+                "T1 900x620: 按 accessible-label={label:?} 找到 {hits} 个 FluentButton（期望 1）\
+                 —— D-01 回退：图标档清空 text 之后没有 tooltip 兜底，可读名称退化成 \"按钮\""
             )
         });
     }
 
-    // ---- 对照档：1180x760（内容区 932px，宽档） ----
-    // 宽档下名称来自 `text:`，所以同一批按钮靠 tooltip 与否都读得到；这条对照证明
-    // 960px 那条断言的判别力确实来自"窄档 + tooltip"，而不是别的东西。
+    // ---- 对照档：1180x760（导航展开 248px，内容区 932px ≥ 900px，标签档） ----
+    // 标签档下名称来自 `text:`，所以同一批按钮靠 tooltip 与否都读得到；这条对照证明
+    // 900px 那条断言的判别力确实来自"图标档 + tooltip"，而不是别的东西。
     let wide = boot(WIDE);
     wide.set_logged_in(true);
     wide.set_file_list(ModelRc::new(VecModel::from(vec![
@@ -1797,8 +1817,390 @@ fn check_arrow_key_moves_selection() {
     );
 }
 
-// ==================== H. 运行时切语（设置页"无需重启"的技术前提） ====================
-//
+/// 从元素树反推当前的 `detail-level`
+///
+/// `detail-level` 是 `ui/main.slint` 的本地属性，Rust 侧没有 getter；而它驱动的是
+/// 三个条件渲染的列头（`if root.detail-level >= n`），所以「列头在不在元素树里」
+/// 就是它的可观测等价物。这条反推在 T8 的扫掠里被复用。
+fn detail_level_of(ui: &crate::app::MainWindow) -> i32 {
+    let present = |id: &str| {
+        ElementQuery::from_root(ui)
+            .match_id(id)
+            .find_first()
+            .is_some()
+    };
+    if present("CloudPage::kind-header") {
+        3
+    } else if present("CloudPage::time-header") {
+        2
+    } else if present("CloudPage::size-header") {
+        1
+    } else {
+        0
+    }
+}
+
+/// T8（守 D-11）`(导航档, detail-level, 批量栏档)` 必须关于整窗宽度单调不减。
+///
+/// 缺陷（D-11）：两条断点不同源——导航栏按「整窗 < 960px」折叠，批量栏按「内容区
+/// < 760px」退化成图标档。整窗 959px 时导航折叠（内容区 903px，批量栏全标签）；
+/// 整窗 960px 时导航展开吃掉 248px（内容区 712px，批量栏退化成图标档、Ctrl+单击
+/// 提示与状态栏容量文字一起消失）。窗口变宽 1px，能力反而少一截。
+///
+/// 修法：两条断点都由 `LayoutMetrics.min-capability-width`（900px）推导，于是整窗
+/// 走到 1148px（= 248 + 900）导航才展开，展开的瞬间内容区正好还是 900px——跨过
+/// 断点时能力不降。
+///
+/// 采样策略：900..1000 步长 1（这一段的断点最密，956px 是批量栏回到标签档的那一档），
+/// 1000..1600 步长 10（这一段只有 1148 导航、1548 类型列两个断点，10px 的粒度足够
+/// 判定"跨过断点之后不再回退"），另外显式补进 1147 / 1148 / 1368 三档——前两个是
+/// 导航断点的两侧，必须逐像素比对；1368 是「修改时间」列打开的那一档。
+/// 全程复用**同一个**窗口实例（只改尺寸）：比每档重建窗口便宜，也更贴合"同一个用户
+/// 把窗口从最小拖到最大"这件事。
+///
+/// 回退什么会红：把 `pages/cloud.slint` 的 `narrow` 改回 `root.width < 760px`（旧断点）
+/// → 956–1007px 区间里 detail-level 与批量栏档随导航折叠一起塌下去，单调性立刻破。
+#[test]
+fn check_capability_monotonic_in_width() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot((900.0, 760.0));
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+    settle();
+
+    let mut widths: Vec<u32> = (900..=1000).collect();
+    widths.extend((1010..=1600).step_by(10));
+    widths.extend([1147, 1148, 1368]);
+    widths.sort_unstable();
+    widths.dedup();
+
+    // (整窗宽, 导航是否展开, detail-level, 是否图标档)
+    let mut samples: Vec<(u32, bool, i32, bool)> = Vec::new();
+
+    for width in widths {
+        ui.window()
+            .set_size(slint::LogicalSize::new(width as f32, 760.0));
+        // 导航栏的宽度有 180ms 过渡（`animate width`）：按 `check_drawer_reveal`
+        // 同一套纪律"小步推进 + 每步读一次几何"采样到收敛，只推时间不读是推不动的。
+        let nav = settle_until(|| by_id(&ui, "MainWindow::nav").size().width);
+        settle();
+
+        let (expanded, compact) = nav_widths(&ui);
+        let nav_expanded = if (nav - expanded).abs() <= 1.0 {
+            true
+        } else if (nav - compact).abs() <= 1.0 {
+            false
+        } else {
+            failures.push(format!(
+                "T8 {width}px: 导航栏宽度实测 {nav:.1}，既不是展开档 {expanded:.0} \
+                 也不是折叠档 {compact:.0}"
+            ));
+            false
+        };
+
+        let level = detail_level_of(&ui);
+        let icon_bar = count_labelled(&ui, "FluentIconButton", "新建文件夹") == 1;
+        samples.push((width, nav_expanded, level, icon_bar));
+
+        println!(
+            "T8 {width}px: 导航 {nav:.0}（{}）/ 内容区 {:.0} / detail-level={level} / 批量栏={}",
+            if nav_expanded { "展开" } else { "折叠" },
+            width as f32 - nav,
+            if icon_bar { "图标档" } else { "标签档" },
+        );
+    }
+
+    expect(&mut failures, !samples.is_empty(), || {
+        "T8: 扫掠没有采到任何样本".to_string()
+    });
+
+    // ---- 单调不减：窗口变宽，任何一项能力都不许倒退 ----
+    for pair in samples.windows(2) {
+        let (w0, nav0, level0, icon0) = pair[0];
+        let (w1, nav1, level1, icon1) = pair[1];
+        if nav0 && !nav1 {
+            failures.push(format!(
+                "T8: 导航档在 {w1}px 回退（{w0}px 是展开、{w1}px 变成折叠）—— \
+                 窗口变宽，导航反而收起"
+            ));
+        }
+        if level1 < level0 {
+            failures.push(format!(
+                "T8: detail-level 在 {w1}px 回退（{w0}px 是 {level0} 档、{w1}px 是 {level1} 档）\
+                 —— 窗口变宽，列反而变少"
+            ));
+        }
+        if !icon0 && icon1 {
+            failures.push(format!(
+                "T8: 批量栏档在 {w1}px 回退（{w0}px 是标签档、{w1}px 变成图标档）—— \
+                 窗口变宽，批量栏反而只剩图标"
+            ));
+        }
+    }
+
+    // ---- 导航断点两侧必须同档（D-11 的反面） ----
+    //
+    // 注意"同档"指的是**能力对** `(detail-level, 批量栏档)`：导航宽度本身在
+    // 1147/1148 之间必然不同，那正是断点本身；要钉住的是"跨过断点不丢能力"。
+    let at = |w: u32| samples.iter().find(|sample| sample.0 == w).copied();
+    match (at(1147), at(1148)) {
+        (Some(a), Some(b)) => {
+            expect(&mut failures, a.1 != b.1, || {
+                format!(
+                    "T8: 1147px 与 1148px 的导航档实测同为{}——导航断点没有落在 \
+                     Theme.nav-width + min-capability-width 上，下面那条同档断言是空转的",
+                    if a.1 { "展开" } else { "折叠" }
+                )
+            });
+            expect(&mut failures, a.2 == b.2 && a.3 == b.3, || {
+                format!(
+                    "T8: 1147px 与 1148px 跨导航断点后能力变了 —— 1147px 是 \
+                     (detail-level={}, 图标档={})，1148px 是 (detail-level={}, 图标档={})。\
+                     这正是 D-11 的形状：窗口变宽 1px，能力掉一截",
+                    a.2, a.3, b.2, b.3,
+                )
+            });
+        }
+        _ => failures.push(
+            "T8: 扫掠里没有同时采到 1147px 与 1148px，断点两侧的同档断言无从判定".to_string(),
+        ),
+    }
+
+    assert!(
+        failures.is_empty(),
+        "T8 断点单调性失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// T9（守 D-12）排序入口必须在**任何**窗口宽度下都可达，且浮层真的能派发排序。
+///
+/// 缺陷（D-12）：`sort-changed` 原来只有三个调用点，全在列头上；而「修改时间」列头在
+/// `if root.detail-level >= 2` 里（内容区 ≥ 1120px，整窗 ≥ 1368px 且导航展开）。
+/// 默认 1180px 窗口的内容区只有 932px → detail-level=1 → 用户**没有任何入口**按
+/// 修改时间排序。修法是在命令栏加一个与窗口宽度无关的排序入口（下拉浮层）。
+///
+/// 断言覆盖的链路完整：按可读名称找到「排序」按钮 → 触发（测试后端不能发鼠标事件，
+/// 用辅助技术的 `invoke_accessible_default_action()`，与 `check_a11y_semantics` 同一
+/// 手法）→ 浮层里按可读名称查到「修改时间」项 → 触发它 → 组件回调 `sort-changed`
+/// 收到 2。顺带钉住浮层与 `ModalsApi.blocking` 的联动（浮层开着时背景控件必须退出
+/// Tab 序列）。
+#[test]
+fn check_sort_menu_reachable_at_all_widths() {
+    let mut failures: Vec<String> = Vec::new();
+
+    // 900x620 = 最小窗口（图标档批量栏）；1600x760 = 四列全开（列头入口也在）
+    for (width, height) in [NARROW, EXTRA_WIDE] {
+        let ui = boot((width, height));
+        ui.set_logged_in(true);
+        ui.set_current_page(0);
+        settle();
+
+        // 前置条件：窄档下「修改时间」列头不在元素树里——那正是 D-12 的根因，
+        // 说明这条窗口宽度下命令栏入口是**唯一**的按时间排序通道。
+        let header = ElementQuery::from_root(&ui)
+            .match_id("CloudPage::time-header")
+            .find_first();
+        println!(
+            "T9 {width}x{height}: 「修改时间」列头在不在元素树里={}",
+            header.is_some()
+        );
+
+        let fired: Rc<RefCell<Vec<i32>>> = Rc::new(RefCell::new(Vec::new()));
+        let h = fired.clone();
+        ui.on_sort_changed(move |key| h.borrow_mut().push(key));
+
+        let modals = ui.global::<crate::app::ModalsApi>();
+        let blocking_before = modals.get_blocking();
+
+        let button = labelled(&ui, "FluentIconButton", "排序");
+        let Some(button) = button else {
+            failures.push(format!(
+                "T9 {width}x{height}: 命令栏里按 accessible-label=\"排序\" 找不到 \
+                 FluentIconButton —— 排序入口没有渲染出来"
+            ));
+            continue;
+        };
+
+        button.invoke_accessible_default_action();
+        settle();
+        let open = ui.get_sort_menu_open();
+        let blocking_open = modals.get_blocking();
+        println!(
+            "T9 {width}x{height}: 点「排序」后 open={open} blocking={blocking_open}\
+             （期望 true/true）"
+        );
+        expect(&mut failures, open, || {
+            format!(
+                "T9 {width}x{height}: 触发「排序」按钮后 sort-menu-open 仍是 false —— \
+                 浮层没打开"
+            )
+        });
+        expect(&mut failures, blocking_open, || {
+            format!(
+                "T9 {width}x{height}: 排序浮层打开时 ModalsApi.blocking 仍是 false —— \
+                 背景控件没有退出 Tab 序列（`main.slint` 的 modals-blocking 漏了 \
+                 sort-menu-open）"
+            )
+        });
+
+        // 浮层是否真的长出来了：按菜单项的可读名称查（FluentMenuItem 的
+        // accessible-label 就是 label）。
+        let item = labelled(&ui, "FluentMenuItem", "修改时间");
+        let Some(item) = item else {
+            failures.push(format!(
+                "T9 {width}x{height}: 浮层里按 accessible-label=\"修改时间\" 找不到 \
+                 FluentMenuItem —— 三条排序项没渲染出来"
+            ));
+            continue;
+        };
+        let item_size = item.size();
+        println!(
+            "T9 {width}x{height}: 「修改时间」项在 ({:.1},{:.1}) {:.1}x{:.1}",
+            item.absolute_position().x,
+            item.absolute_position().y,
+            item_size.width,
+            item_size.height,
+        );
+        expect(&mut failures, item_size.height > 1.0, || {
+            format!(
+                "T9 {width}x{height}: 「修改时间」项高度 {:.1}，浮层尺寸异常",
+                item_size.height
+            )
+        });
+
+        item.invoke_accessible_default_action();
+        settle();
+        let keys = fired.borrow().clone();
+        let blocking_closed = modals.get_blocking();
+        let open_after = ui.get_sort_menu_open();
+        println!(
+            "T9 {width}x{height}: 选「修改时间」后 sort-changed={keys:?} open={open_after} \
+             blocking={blocking_closed}（期望 [2]/false/false）"
+        );
+        expect(&mut failures, keys == vec![2], || {
+            format!(
+                "T9 {width}x{height}: D-12 回退 —— 选「修改时间」派发的 sort-changed 实测 \
+                 {keys:?}（期望 [2]）：命令栏入口没有接到既有的 `sort-changed` 回调"
+            )
+        });
+        expect(&mut failures, !open_after, || {
+            format!("T9 {width}x{height}: 选完之后排序浮层没有收起（sort-menu-open 仍为 true）")
+        });
+        expect(&mut failures, !blocking_closed, || {
+            format!(
+                "T9 {width}x{height}: 浮层收起后 ModalsApi.blocking 仍是 true —— \
+                 背景控件会永久退出 Tab 序列"
+            )
+        });
+        // 无浮层时本来就不该是 true，这条把 `blocking-before` 钉成基线
+        expect(&mut failures, !blocking_before, || {
+            format!("T9 {width}x{height}: 还没开浮层时 ModalsApi.blocking 就是 true 了")
+        });
+    }
+
+    assert!(
+        failures.is_empty(),
+        "T9 排序入口可达性失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// T10（守 D-13）测试侧推算的断点必须与**渲染出来的**导航栏一致。
+///
+/// D-13 的形状是"同一个断点存在两份常量"：`ui/` 里一份真值，`ui_tests.rs` 里一份副本
+/// （原来是 `NAV_WIDTH = 248.0` / `NAV_WIDTH_COMPACT = 56.0` /
+/// `NAV_COMPACT_BREAKPOINT = 960.0`）。副本最坏的后果不是报错，而是**静默失真**：
+/// UI 改了断点，测试仍按旧数字推算内容区，断言全跑在错误的坐标上却照样"通过"。
+///
+/// 这条断言把两侧钉在一起：`content_width()`（全部操作数取自 `Theme` 与
+/// `LayoutMetrics`）推算出的导航宽度，必须等于导航栏元素实测的宽度。任何一处重新长出
+/// 硬编码副本，跨过旧断点的那一段就会立刻对不上——960–1147px 正是 D-11 出事的那一段。
+#[test]
+fn check_breakpoint_tokens_match_rendered_nav() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot((900.0, 760.0));
+    ui.set_logged_in(true);
+    settle();
+
+    let (expanded, compact) = nav_widths(&ui);
+    let breakpoint = nav_breakpoint(&ui);
+    println!(
+        "T10: Theme.nav-width={expanded:.0} nav-width-compact={compact:.0} \
+         LayoutMetrics.min-capability-width={:.0} → 导航断点 {breakpoint:.0}",
+        breakpoint - expanded,
+    );
+
+    // 前置条件：断点必须落在采样区间（900..1600）里面，否则两侧比对是空转的
+    expect(
+        &mut failures,
+        breakpoint > 900.0 && breakpoint < 1600.0,
+        || {
+            format!(
+                "T10: 导航断点 {breakpoint:.0} 落在采样区间 900..1600 之外，\
+                 下面两侧的比对无从判定"
+            )
+        },
+    );
+
+    // 采样点：断点两侧各一档 + D-11 出事的那一段（960/1100）+ 三个历史档位
+    let mut widths = vec![
+        900.0_f32,
+        960.0,
+        1000.0,
+        1100.0,
+        breakpoint - 1.0,
+        breakpoint,
+        1180.0,
+        1368.0,
+        1600.0,
+    ];
+    widths.sort_by(f32::total_cmp);
+    widths.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+
+    for width in widths {
+        ui.window().set_size(slint::LogicalSize::new(width, 760.0));
+        let nav = settle_until(|| by_id(&ui, "MainWindow::nav").size().width);
+        let from_helper = width - content_width(&ui, width);
+        let expected = if width < breakpoint {
+            compact
+        } else {
+            expanded
+        };
+
+        println!(
+            "T10 {width:.0}px: 导航实测 {nav:.0}（按令牌应为 {expected:.0}）\
+             / content_width 推算 {from_helper:.0}"
+        );
+
+        expect(&mut failures, (nav - expected).abs() <= 1.0, || {
+            format!(
+                "T10 {width:.0}px: 导航栏实测宽度 {nav:.0} 与令牌算出的 {expected:.0} 不符 —— \
+                 `ui/main.slint` 的 `nav-compact` 已经不再等于 \
+                 `Theme.nav-width + LayoutMetrics.min-capability-width`"
+            )
+        });
+        expect(&mut failures, (from_helper - nav).abs() <= 1.0, || {
+            format!(
+                "T10 {width:.0}px: 测试侧 `content_width()` 推算的导航宽度 {from_helper:.0} \
+                 与导航栏实测 {nav:.0} 不一致 —— 断点常量又长出了第二份副本（D-13）"
+            )
+        });
+    }
+
+    assert!(
+        failures.is_empty(),
+        "T10 断点单一来源失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+// ==================== H. 运行时切语（设置页"无需重启"的技术前提） ====================//
 // 切语靠的是 `slint::select_bundled_translation`：它置脏之后，所有 `@tr` 绑定（含
 // `accessible-label` 上的）在下一帧重算。`crate::i18n::apply` 内部做的正是这一次调用。
 //

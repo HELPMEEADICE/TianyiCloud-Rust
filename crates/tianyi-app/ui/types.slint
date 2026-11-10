@@ -18,14 +18,39 @@ export global LayoutMetrics {
             : 3
     }
 
-    /// 导航栏是否折叠成图标栏（等价于整窗宽度 < 960px）。
+    /// 内容区的「能力下限」：内容区一旦窄于它，界面就该退化成图标档。
     ///
-    /// 断点以代码为唯一来源：README 与文档写过的 1040px 是历史值，实测校准后是 960px。
-    /// 数值本身不要凭手感改——`detail-level-of` 的三档断言与 ui_tests 的几何断言都
-    /// 建立在这个值上，牵一发动全身。判断量是**整窗宽度**（导航栏自己占多宽取决于
-    /// 是否折叠，用内容区宽度判会自相矛盾）。
-    public pure function nav-compact-of(window-width: length) -> bool {
-        window-width < 960px
+    /// 900px 不是拍的，是从「带文字的控制栏」实测反推出来的：
+    ///   · zh 下批量操作栏（「已选择 N 项」+ 下载 / 重命名 / 复制 / 移动到上级 /
+    ///     提取直链 / 删除 / 取消选择，再加右组的「全选」）连文字一起约占 748px；
+    ///   · en 下最长的一对文案是 "Move to parent" 与 "Clear selection"，整行约 810–860px；
+    ///   · 再叠加云盘页左右各 16px 的页面内边距（`Theme.space-4`）——
+    ///     **不低于** 900px 才有把握把所有文字完整排下，低于它才值得退化成
+    ///     「只剩图标 + tooltip」这一档。
+    ///
+    /// 这个值是**全仓唯一的断点常量**，两条断点都由它推导：
+    ///   · 导航栏展开/折叠（`main.slint` 的 `nav-compact`）
+    ///       判据 = `Theme.nav-width + min-capability-width`（248 + 900 = 1148px）：
+    ///       只有「展开的导航栏」挤完还剩下 900px 内容区，展开才不亏；
+    ///   · 批量栏图标档（`CloudPage.narrow`）
+    ///       判据 = `content-width < min-capability-width`（内容区 < 900px）。
+    /// 两条判据同源之后 `(导航档, detail-level, 批量栏档)` 关于整窗宽度单调不减——
+    /// 修之前 960px 窗口的批量栏比 959px 更窄，窗口变宽能力反而变少。
+    ///
+    /// 必须是 `out property` 而不是私有量：`ui_tests.rs` 要从 Rust 侧
+    /// `ui.global::<LayoutMetrics>().get_min_capability_width()` 读真值，
+    /// 否则测试只能再抄一份数字——D-13 那份「断点常量两份」就又要长回来。
+    /// 改它等于同时改所有断点，牵一发动全身。
+    out property <length> min-capability-width: 900px;
+
+    /// 批量操作栏是否退化成「只剩图标」档。
+    ///
+    /// 量的是**内容区**宽度（整窗 − 导航栏），与 `detail-level-of` 同一个基准。
+    /// 纯函数只吃参数：Slint 的 pure 函数里不允许调用任何非 pure 的函数或回调
+    /// （`i-slint-compiler-1.17.1/passes/purity_check.rs`），跨 global 读 `Theme`
+    /// 还会把"纯"这件事搅浑，所以导航栏宽度由调用方先算好再传进来。
+    public pure function compact-bar-of(content-width: length) -> bool {
+        content-width < min-capability-width
     }
 }
 

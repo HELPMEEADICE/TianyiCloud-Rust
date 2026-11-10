@@ -33,7 +33,7 @@ import { SettingsPage } from "pages/settings.slint";
 // 必须能从 Rust 侧直接读写这个全局的两个状态位（点亮 / 切页后熄灭），否则那条断言
 // 只能靠"气泡没渲染出来"这种多级推断。**导出不改变任何渲染**。
 export { Theme } from "theme/tokens.slint";
-export { DragOutApi, InputMode, ModalsApi, ModifiersApi, TooltipState } from "types.slint";
+export { DragOutApi, InputMode, LayoutMetrics, ModalsApi, ModifiersApi, TooltipState } from "types.slint";
 
 export component MainWindow inherits Window {
     title: @tr("天翼云盘");
@@ -43,10 +43,10 @@ export component MainWindow inherits Window {
     min-height: 620px;
     background: Theme.window-bg;
 
-    // 模态浮层的派生状态：对话框 / 账号菜单 / 右键菜单任意一个在场即为真。
-    // 三个分支写在一起而不是嵌进各自的 `changed`：任何一处漏掉复位，
+    // 模态浮层的派生状态：对话框 / 账号菜单 / 右键菜单 / 排序浮层任意一个在场即为真。
+    // 四个分支写在一起而不是嵌进各自的 `changed`：任何一处漏掉复位，
     // 背景控件就会永久退出 Tab 序列。
-    property <bool> modals-blocking: root.dialog-open || root.account-menu-open || root.context-open;
+    property <bool> modals-blocking: root.dialog-open || root.account-menu-open || root.context-open || root.sort-menu-open;
 
     // 写入 `ModalsApi.blocking` 的**唯一赋值点**（消费方只有 ActivateScope，
     // 见 components/activate-scope.slint）。
@@ -229,15 +229,30 @@ export component MainWindow inherits Window {
     callback drop_requested(DropEvent, string) -> DragAction;
 
     // ==================== 布局状态 ====================
-    // 折叠断点：导航栏折叠后内容区仍有足够宽度显示文件名
-    // 判定放进 LayoutMetrics（单一来源），README 与文档一律以它为准
-    property <bool> nav-compact: LayoutMetrics.nav-compact-of(root.width);
+    // 导航栏折叠断点：**展开的导航栏 + 内容区能力下限** 一起判。
+    //
+    // 阈值 = `Theme.nav-width + LayoutMetrics.min-capability-width`（248 + 900 = 1148px）。
+    // 直觉上「窄了才折叠」，但真正的判据是「展开还够不够用」：导航栏展开要吃掉 248px，
+    // 只有当整窗宽度减掉这 248px 仍能留下 900px 内容区（= 带文字的批量栏排得下）时，
+    // 展开才不亏；一旦不够，折叠反而是把能力换回来。
+    //
+    // 为什么不包成 `LayoutMetrics` 的 pure 函数：pure 函数里不许调用非 pure 的函数或回调，
+    // 也不该跨 global 读 `Theme`（`passes/purity_check.rs`）；而这两个操作数一个来自
+    // `Theme`、一个来自 `LayoutMetrics`，跨 global，写在纯函数里只会把限制绕成隐式的。
+    // 一行绑定足够表达，而且 `content-width` / `detail-level` 就在下面两行，同屏可读。
+    property <bool> nav-compact: root.width < Theme.nav-width + LayoutMetrics.min-capability-width;
     // 内容区可用宽度：整窗宽度减去左侧导航栏（折叠 56px / 展开 248px）
     property <length> content-width: root.width - (root.nav-compact ? Theme.nav-width-compact : Theme.nav-width);
     // 文件列表次要列分级：量的是内容区宽度，不是整窗宽度
     // （整窗宽度里有一段属于导航栏，按它算会把默认 1180px 窗口误判成四列）
     property <int> detail-level: LayoutMetrics.detail-level-of(root.content-width);
     property <bool> account-menu-open: false;
+    /// 命令栏「排序」浮层是否展开。
+    ///
+    /// 浮层本体在 `CloudPage` 里（`components/sort-menu.slint`），但**状态**必须住在窗口
+    /// 根部：`modals-blocking` 要把它算进模态判定（浮层在场时背景控件退出 Tab 序列），
+    /// 而那只派生属性写在窗口作用域。因此这里是一条 in-out 双向绑定，不是普通 property。
+    in-out property <bool> sort-menu-open: false;
     // 右键菜单状态（由控制器写入，菜单面板按此定位）
     in-out property <bool> context-open: false;
     in-out property <length> context-x: 0px;
@@ -906,6 +921,9 @@ export component MainWindow inherits Window {
                     drop-target-name: root.drop-target-name;
                     context-menu-open: root.context-open;
                     search-text <=> root.search-keyword;
+                    // 排序浮层状态双向绑定到窗口根部：`modals-blocking` 在窗口作用域里
+                    // 读它，浮层本身在 CloudPage 里渲染。写法与 `search-text` 一致。
+                    sort-menu-open <=> root.sort-menu-open;
 
                     select-item(id, ctrl, shift) => {
                         root.select_item(id, ctrl, shift);

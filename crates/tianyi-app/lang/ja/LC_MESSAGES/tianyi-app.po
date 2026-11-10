@@ -196,6 +196,9 @@ msgstr "パスワードログイン"
 msgid "名称"
 msgstr "名前"
 
+msgid "排序"
+msgstr "並べ替え"
+
 msgid "默认下载目录"
 msgstr "既定のダウンロードフォルダー"
 

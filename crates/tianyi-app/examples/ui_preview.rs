@@ -497,12 +497,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     shoot(&ui, &window, &out, "22-context-menu", 1180, 760)?;
     ui.set_context_open(false);
 
-    // ---------------- 23. 窄档批量操作栏（图标按钮 + Tooltip 兜底） ----------------
-    // 960px 是**唯一**能触发窄档的窗口区间（960–1007px）里的最小一档：导航栏在
-    // 整窗 < 960px 时折叠成 56px，内容区因此从 903px 掉到 712px，跨过了
-    // `CloudPage.narrow` 的 760px 断点。这一档下批量操作按钮把文字清空只留图标，
-    // 可读名称与悬停说明只剩 `tooltip:` 一条通道——D-01 的缺陷就死在这里，
-    // 而 22 张旧基线里一张窄档批量栏都没有。
+    // ---------------- 23. 最小窗口形态的批量操作栏（图标按钮 + Tooltip 兜底） ----------------
+    // 900px 是能触发图标档的窗口区间（900–955px）里最靠边的一档：导航折叠成 56px，
+    // 内容区 844px < `LayoutMetrics.min-capability-width`（900px），批量操作按钮把文字
+    // 清空只留图标，可读名称与悬停说明只剩 `tooltip:` 一条通道——D-01 的缺陷就死在这里。
+    // （旧基线的这一档是 960×760：那是"导航展开吃掉 248px、内容区剩 712px"的旧断点
+    // 才会出现的窗口区间，也正是 D-11 里"窗口变宽能力反而变窄"的那一段。）
     let mut narrow_rows = demo_files();
     narrow_rows.truncate(4);
     for row in narrow_rows.iter_mut().skip(1) {
@@ -513,7 +513,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_file_list(ModelRc::new(VecModel::from(narrow_rows)));
     ui.set_selected_count(3);
     ui.set_status_text(SharedString::from("已选择 3 项"));
-    shoot(&ui, &window, &out, "23-cloud-narrow-actions", 960, 760)?;
+    shoot(&ui, &window, &out, "23-cloud-narrow-actions", 900, 760)?;
 
     // ---------------- 24. 行内错误条（有数据时的加载失败） ----------------
     // `list-state = error` + **非空** file-list 才会走 `inline-error` 分支：列表照常
@@ -544,6 +544,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "账号或密码不正确，请检查后重试（剩余尝试次数 4）",
     ));
     shoot(&ui, &window, &out, "25-login-invalid", 900, 760)?;
+
+    // ---------------- 26. 紧凑导航 + 完整标签批量栏（D-11 的视觉证据） ----------------
+    // 1000px 是 D-11 修好之后才存在的形态：导航栏折叠成 56px 图标栏（1000 < 1148），
+    // 内容区却有 944px ≥ 900px，于是批量栏的**文字**全都还在。
+    // 修之前这一档是反过来的：整窗 960px 就让导航展开吃掉 248px，内容区只剩 712px，
+    // 批量栏退化成图标档——窗口比 959px 宽，能力却比 959px 少。
+    // 这张图就是"导航是图标栏 + 批量栏有文字"能同时成立的那一帧。
+    ui.set_logged_in(true);
+    ui.set_login_error(SharedString::default());
+    ui.set_current_page(0);
+    ui.set_list_state(SharedString::from("ready"));
+    let mut compact_rows = demo_files();
+    compact_rows.truncate(4);
+    for row in compact_rows.iter_mut().skip(1) {
+        row.selected = true;
+    }
+    ui.set_file_list(ModelRc::new(VecModel::from(compact_rows)));
+    ui.set_selected_count(3);
+    ui.set_status_text(SharedString::from("已选择 3 项"));
+    shoot(&ui, &window, &out, "26-cloud-compact-nav", 1000, 760)?;
+
+    // ---------------- 27. 排序浮层打开态（D-12 的入口） ----------------
+    // 默认 1180px 窗口的内容区只有 932px → detail-level=1 →「修改时间」**列头不存在**，
+    // 按时间排序的入口只有命令栏这个下拉。这张图把它采下来：按钮在搜索框右侧，
+    // 浮层贴按钮下方左对齐，三条（名称 / 大小 / 修改时间）右侧显示当前列的方向箭头。
+    ui.set_selected_count(0);
+    ui.set_status_text(SharedString::from("8 个项目"));
+    ui.set_file_list(ModelRc::new(VecModel::from(demo_files())));
+    ui.set_sort_menu_open(true);
+    shoot(&ui, &window, &out, "27-cloud-sort-menu", 1180, 760)?;
+    ui.set_sort_menu_open(false);
 
     Ok(())
 }

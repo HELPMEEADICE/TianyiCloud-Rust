@@ -1,7 +1,7 @@
 // 云盘工作区（个人云 / 家庭云共用）
 //
 // 结构（自上而下）：
-//   命令栏（返回 + 面包屑 + 搜索 + 刷新 + 新建 + 上传）
+//   命令栏（返回 + 面包屑 + 搜索 + 排序 + 刷新 + 新建 + 上传）
 //   → 操作栏（固定高度：无选中时显示统计/全选，有选中时切换为批量操作，避免布局跳动）
 //   → 提示条（错误 / 搜索态）
 //   → 文件明细列表（ListView 虚拟化）
@@ -16,11 +16,12 @@ import { FluentButton } from "../components/button.slint";
 import { FluentIconButton } from "../components/icon-button.slint";
 import { FluentProgressBar } from "../components/progress-bar.slint";
 import { FluentSearchBox } from "../components/search-box.slint";
+import { SortMenu } from "../components/sort-menu.slint";
 import { FileRow, FileColumns } from "../components/file-row.slint";
 import { FluentEmptyState, FluentLoadingState, FluentErrorState } from "../components/state-view.slint";
 import { DropOverlay } from "../components/drop-overlay.slint";
 import { ListView } from "std-widgets.slint";
-import { FileEntry, CrumbEntry, ModifiersApi, TooltipState } from "../types.slint";
+import { FileEntry, CrumbEntry, LayoutMetrics, ModifiersApi, TooltipState } from "../types.slint";
 
 export component CloudPage inherits Rectangle {
     in property <string> space-label: @tr("个人云");
@@ -83,9 +84,18 @@ export component CloudPage inherits Rectangle {
     callback drop-requested(DropEvent, string) -> DragAction;
 
     in-out property <string> search-text: "";
+    /// 排序浮层是否展开。状态住在窗口根部（`MainWindow.sort-menu-open`），
+    /// 因为它要参与 `ModalsApi.blocking` 的模态判定；本页只负责渲染与转发。
+    in-out property <bool> sort-menu-open: false;
 
     property <bool> has-selection: root.selected-count > 0;
-    property <bool> narrow: root.width < 760px;
+    /// 最小窗口形态（900–955px 窗口 / 内容区 844–899px）：批量栏只留图标。
+    ///
+    /// 判据来自 `LayoutMetrics.compact-bar-of`，与导航栏折叠同源（都由
+    /// `MIN_CONTENT = min-capability-width` 推出）。此前这里量的是内容区 < 760px，
+    /// 与导航断点（整窗 < 960px）不同源，于是 959px 窗口（内容区 903px，全标签）
+    /// 比 960px 窗口（内容区 712px，图标档）**能力更强**——窗口变宽反而更窄（D-11）。
+    property <bool> narrow: LayoutMetrics.compact-bar-of(root.width);
     property <bool> show-loading: root.list-state == "loading" && root.rows.length == 0;
     property <bool> show-error: root.list-state == "error" && root.rows.length == 0;
     property <bool> show-empty: root.rows.length == 0 && !root.show-loading && !root.show-error;
@@ -244,6 +254,22 @@ export component CloudPage inherits Rectangle {
                 }
             }
 
+            // 排序：命令栏常驻入口。列头里的「修改时间」要 detail-level >= 2
+            // 才渲染（整窗 ≥ 1368px 且导航展开），默认 1180px 窗口下没有它，
+            // 所以按时间排序的入口只能放在这里（D-12）。
+            //
+            // 这里只放一个**布局占位**：真身 `sort-menu` 声明在本页最后。
+            // 原因是 Slint 没有 z-index——绘制顺序就是元素树顺序，而排序浮层要盖住
+            // 下面的操作栏与文件列表卡片；声明在布局里就只能被它们盖住（实测浮层
+            // 被列表卡片整块吞掉）。占位保住了命令栏的顺序
+            // 搜索 → 排序 → 刷新 → 新建 → 上传，真身按占位的位置绝对定位。
+            sort-slot := Rectangle {
+                width: Theme.control-height;
+                height: Theme.control-height;
+                horizontal-stretch: 0;
+                background: transparent;
+            }
+
             FluentIconButton {
                 icon: IconName.refresh;
                 tooltip: @tr("刷新 (F5)");
@@ -299,9 +325,12 @@ export component CloudPage inherits Rectangle {
                 cross-axis-alignment: center;
 
                 // ---- 左组：选择状态与批量操作 ----
-                // 窄窗口（内容区 < 760px）下这些按钮只留图标：文字被清空后，
-                // 悬停说明与可读名称都只能由 tooltip 提供，因此每个按钮都固定传一份，
-                // 与 text 的窄窗口取值无关（tooltip 恒定，不是 root.narrow 的三元式）。
+                // 最小窗口形态（900–955px 窗口，内容区 844–899px）下这些按钮只留图标：
+                // 文字被清空后，悬停说明与可读名称都只能由 tooltip 提供，因此每个按钮
+                // 都固定传一份，与 text 的窄档取值无关（tooltip 恒定，不是 root.narrow 的
+                // 三元式）。档位本身由 LayoutMetrics.min-capability-width（900px）判定：
+                // zh 下带文字的整行约占 748px、en 下约 810–860px，加左右内边距后
+                // 需要 900px 才排得下，低于它才值得退化成图标档。
                 HorizontalLayout {
                     alignment: start;
                     spacing: Theme.space-2;
@@ -997,6 +1026,27 @@ export component CloudPage inherits Rectangle {
                 color: Theme.text-tertiary;
                 vertical-alignment: center;
             }
+        }
+    }
+
+    // ---------------- 排序入口（按钮 + 浮层） ----------------
+    //
+    // **必须声明在最后**：Slint 没有 z-index，绘制顺序 = 元素树顺序。排序浮层要盖住
+    // 下面的操作栏与文件列表卡片，就只能排在它们后面——放进命令栏布局里会被列表卡片
+    // 整块盖掉（实测：三条菜单项只剩最上面一条露在操作栏的透明区域里）。
+    // 位置由命令栏里的 `sort-slot` 占位反推：占位负责让出 32×32 的空间、决定按钮在
+    // 命令栏里的次序，本元素负责渲染。
+    sort-menu := SortMenu {
+        x: sort-slot.absolute-position.x - root.absolute-position.x;
+        y: sort-slot.absolute-position.y - root.absolute-position.y;
+        sort-key: root.sort-key;
+        sort-asc: root.sort-asc;
+        // 状态住在窗口根部（`MainWindow.sort-menu-open`）：它要参与
+        // `ModalsApi.blocking` 的模态判定，所以这里必须是双向绑定而不是单向赋值。
+        open <=> root.sort-menu-open;
+        // 三条排序项与列头共用同一个 `sort-changed(key)` 回调，方向由控制器翻。
+        sort-chosen(key) => {
+            root.sort-changed(key);
         }
     }
 }
