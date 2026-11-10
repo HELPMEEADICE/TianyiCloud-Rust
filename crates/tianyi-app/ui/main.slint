@@ -73,6 +73,9 @@ export component MainWindow inherits Window {
     /// 排序：0=名称 1=大小 2=修改时间
     in property <int> sort-key: 0;
     in property <bool> sort-asc: true;
+    /// 当前选中行在 file-list 里的下标（-1 = 无选中）。唯一写入点是控制器
+    /// `controller/files.rs::set_selection`；窗口只把它透给云盘页做视口跟随。
+    in property <int> selection-index: -1;
 
     // ==================== 容量 ====================
     in property <string> total-space: "";
@@ -138,6 +141,8 @@ export component MainWindow inherits Window {
     callback select_item(string, bool, bool);
     callback select_all();
     callback clear_selection();
+    /// 方向键 / Home / End / PageUp / PageDown 移动当前行（extend = Shift 扩选）
+    callback move_selection(int, bool);
     callback context_requested(string, string, bool, length, length);
     callback refresh_files();
     /// 取消云盘页在途加载（加载态上的"取消"）
@@ -720,6 +725,7 @@ export component MainWindow inherits Window {
                     selected-count: root.selected-count;
                     sort-key: root.sort-key;
                     sort-asc: root.sort-asc;
+                    selection-index: root.selection-index;
                     status-text: root.status-text;
                     capacity-text: root.capacity-text;
                     active-transfers: root.active-transfers;
@@ -734,6 +740,9 @@ export component MainWindow inherits Window {
                     }
                     select-all => {
                         root.select_all();
+                    }
+                    move-selection(delta, extend) => {
+                        root.move_selection(delta, extend);
                     }
                     clear-selection => {
                         root.clear_selection();

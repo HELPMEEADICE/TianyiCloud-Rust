@@ -93,9 +93,14 @@ impl Controller {
         let entries = cache.clone();
         drop(cache);
         let count = ids.len() as i32;
+        // 视口跟随的输入。**这是 `selection-index` 的唯一写入点**：键盘选行与鼠标
+        // 选行走的是同一个入口，UI 侧因此不需要各自算一遍"该滚到哪一行"。
+        let anchor = lock_or_recover(&self.selection_anchor).clone();
+        let index = selection_index(&lock_or_recover(&self.visible_rows), &anchor, &set);
         // 只改 selected 标记：走就地更新，行实例（和它的双击判定）不受影响
         self.set_ui_state(move |ui| {
             apply_entries(ui, entries, count);
+            ui.set_selection_index(index);
         });
     }
 
@@ -500,6 +505,45 @@ impl Controller {
 
         *lock_or_recover(&self.selection_anchor) = id.to_string();
         self.set_selection(vec![id.to_string()]);
+        self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
+    }
+
+    /// 方向键 / Home / End / PageUp / PageDown 移动当前行
+    ///
+    /// 只决定"目标行是谁"：选择集的事实来源仍是 `selected_ids`，
+    /// 扩选交给既有的 `range_selection`（与 Shift+单击同一条区间算法），
+    /// 因此键盘与鼠标得到的选择语义天然一致，不会出现"键盘选出来的范围
+    /// 和 Shift+单击选出来的不一样"。
+    pub(super) fn handle_move_selection(self: &Arc<Self>, delta: i32, extend: bool) {
+        let rows = lock_or_recover(&self.visible_rows).clone();
+        let anchor = lock_or_recover(&self.selection_anchor).clone();
+        // 锚点不在列表里（被刷新掉 / 还没建立）时传 None，由 moved_index 决定起点：
+        // 向下从 -1 起、向上从 len 起，于是第一次按键就落在第一行 / 最后一行。
+        let base = if anchor.is_empty() {
+            None
+        } else {
+            rows.iter().position(|f| f.id == anchor)
+        };
+        let Some(target) = moved_index(rows.len(), base, delta) else {
+            return;
+        };
+        let target_id = rows[target].id.clone();
+
+        if extend {
+            // 锚点为空时 range_selection 返回 None：退化为单选目标行，并把锚点补上，
+            // 于是后续的 Shift+方向键能正常扩选（而不是每次都退化）。
+            match range_selection(&rows, &anchor, &target_id) {
+                Some(range) => self.set_selection(range),
+                None => {
+                    *lock_or_recover(&self.selection_anchor) = target_id.clone();
+                    self.set_selection(vec![target_id]);
+                }
+            }
+        } else {
+            *lock_or_recover(&self.selection_anchor) = target_id.clone();
+            self.set_selection(vec![target_id]);
+        }
+        // 与 handle_select_item 一致：任何改变选择集的路径都要收起行内重命名输入
         self.set_ui_state(|ui| ui.set_renaming_id(SharedString::default()));
     }
 
@@ -1119,6 +1163,53 @@ pub fn range_selection(rows: &[FileObject], anchor: &str, target: &str) -> Optio
     Some(rows[lo..=hi].iter().map(|f| f.id.clone()).collect())
 }
 
+/// 「从基准下标移动 delta 步」→ 目标下标（钳制在 `0..len`）
+///
+/// 抽成纯函数是为了让钳制规则能被表驱动测试钉住：六个键里有四个
+/// （Home / End / PageUp / PageDown）本质都是"一个大 delta"，
+/// 边界行为全集中在这一处，不必让每个按键各自判一次越界。
+///
+/// * `len == 0` 或 `delta == 0` → `None`：没有可移动的目标，调用方直接返回
+/// * `base == None`（还没建立锚点，或锚点已被刷新掉）：
+///   - `delta > 0` 视作"从第 0 行之前出发"，于是 +1 落到第 0 行；
+///   - `delta < 0` 视作"从最后一行之后出发"，于是 -1 落到最后一行。
+///
+///   少了这一条，第一次按方向键会跳过首行（或尾行）——纯键盘用户第一步就丢一行。
+/// * 其余情况把 `base + delta` 钳进 `[0, len-1]`
+pub(super) fn moved_index(len: usize, base: Option<usize>, delta: i32) -> Option<usize> {
+    if len == 0 || delta == 0 {
+        return None;
+    }
+    let base = match base {
+        Some(i) => i.min(len - 1) as i64,
+        None if delta > 0 => -1,
+        None => len as i64,
+    };
+    Some((base + delta as i64).clamp(0, len as i64 - 1) as usize)
+}
+
+/// 选中行在 `rows` 里的下标（-1 = 没有可跟随的行）
+///
+/// 优先取**锚点**：Shift 扩选之后选中集是一整段区间，用户的视觉参照是锚点那一端，
+/// 每次刷新都跳到区间另一端会让视口来回弹。锚点不在选中集里（例如 Ctrl 点掉了
+/// 锚点自己）或锚点为空时，退化为"选中集里显示顺序最靠前的一项"。
+fn selection_index(rows: &[FileObject], anchor: &str, selected: &HashSet<String>) -> i32 {
+    if selected.is_empty() {
+        return -1;
+    }
+    let target = if !anchor.is_empty() && selected.contains(anchor) {
+        Some(anchor)
+    } else {
+        rows.iter()
+            .map(|f| f.id.as_str())
+            .find(|id| selected.contains(*id))
+    };
+    match target.and_then(|id| rows.iter().position(|f| f.id == id)) {
+        Some(idx) => idx as i32,
+        None => -1,
+    }
+}
+
 /// 排序键的中文名称（状态栏提示用）
 fn sort_label(key: i32) -> &'static str {
     match key {
@@ -1363,6 +1454,97 @@ mod cancel_tests {
         assert_eq!(cancelled_list_state(0), "empty");
         assert_eq!(cancelled_list_state(1), "ready");
         assert_eq!(cancelled_list_state(8), "ready");
+    }
+}
+
+#[cfg(test)]
+mod move_selection_tests {
+    use super::*;
+
+    /// 钳制规则的表驱动用例：`(len, 基准下标, delta, 期望目标)`
+    ///
+    /// 六个按键全部折算成 delta 走这一个函数，所以这张表就是
+    /// 「方向键 / Home / End / PageUp / PageDown 在边界上到底停在哪」的完整说明。
+    #[test]
+    fn moved_index_clamps_every_edge() {
+        let cases: &[(usize, Option<usize>, i32, Option<usize>)] = &[
+            // ---- 空表：任何方向都没有目标 ----
+            (0, None, 1, None),
+            (0, Some(0), -1, None),
+            (0, None, 10, None),
+            // ---- 单元素：停不出来 ----
+            (1, Some(0), 1, Some(0)),
+            (1, Some(0), -1, Some(0)),
+            (1, None, 1, Some(0)),
+            (1, None, -1, Some(0)),
+            (1, Some(0), 5, Some(0)),
+            // ---- 无选中时向下：+1 必须落在第 0 行（不是第 1 行） ----
+            (5, None, 1, Some(0)),
+            (5, None, 2, Some(1)),
+            (5, None, 5, Some(4)),
+            // ---- 无选中时向上：-1 必须落在最后一行 ----
+            (5, None, -1, Some(4)),
+            (5, None, -2, Some(3)),
+            (5, None, -5, Some(0)),
+            // ---- 有基准：普通上下移动 ----
+            (5, Some(2), 1, Some(3)),
+            (5, Some(2), -1, Some(1)),
+            // ---- 越界上下：钳到两端，不 panic、不绕回 ----
+            (5, Some(0), -1, Some(0)),
+            (5, Some(4), 1, Some(4)),
+            (5, Some(0), -10, Some(0)),
+            (5, Some(4), 10, Some(4)),
+            // ---- Home / End 是"大 delta"：从任意位置一步到两端 ----
+            (10, Some(3), -10, Some(0)),
+            (10, Some(3), 10, Some(9)),
+            (10, None, -10, Some(0)),
+            (10, None, 10, Some(9)),
+            // ---- PageUp / PageDown 超界：钳到两端 ----
+            (3, Some(0), 5, Some(2)),
+            (3, Some(2), -5, Some(0)),
+            // ---- delta == 0：不动，也不返回"当前行"（调用方据此早退） ----
+            (5, Some(2), 0, None),
+            (5, None, 0, None),
+        ];
+        for (len, base, delta, want) in cases {
+            assert_eq!(
+                moved_index(*len, *base, *delta),
+                *want,
+                "len={len} base={base:?} delta={delta}"
+            );
+        }
+    }
+
+    fn row(id: &str) -> FileObject {
+        FileObject {
+            id: id.to_string(),
+            name: id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn rows(ids: &[&str]) -> Vec<FileObject> {
+        ids.iter().map(|id| row(id)).collect()
+    }
+
+    fn set(ids: &[&str]) -> HashSet<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    /// 视口跟随取哪一行：锚点优先，锚点不可用时取显示顺序最靠前的选中项
+    #[test]
+    fn selection_index_prefers_the_anchor_then_the_first_selected_row() {
+        let all = rows(&["a", "b", "c", "d", "e"]);
+        // 空选择：-1（UI 侧据此完全不滚动）
+        assert_eq!(selection_index(&all, "c", &set(&[])), -1);
+        // 锚点在选中集里：取锚点（Shift 扩选后视口跟着锚点那一端走，不来回弹）
+        assert_eq!(selection_index(&all, "d", &set(&["b", "c", "d"])), 3);
+        // 锚点为空：取显示顺序最靠前的选中项
+        assert_eq!(selection_index(&all, "", &set(&["c", "a"])), 0);
+        // 锚点已被刷新掉（不在 rows 里 / 不在选中集里）：同样退化为最靠前的选中项
+        assert_eq!(selection_index(&all, "zzz", &set(&["b", "e"])), 1);
+        // 选中项一个都不在 rows 里：没有可跟随的行
+        assert_eq!(selection_index(&all, "zzz", &set(&["x", "y"])), -1);
     }
 }
 

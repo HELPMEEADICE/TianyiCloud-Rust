@@ -334,6 +334,14 @@ impl Controller {
 
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
+            ui.on_move_selection(move |delta, extend| {
+                let c = c.clone();
+                c.handle_move_selection(delta, extend);
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
             ui.on_clear_selection(move || {
                 let c = c.clone();
                 c.set_selection(Vec::new());

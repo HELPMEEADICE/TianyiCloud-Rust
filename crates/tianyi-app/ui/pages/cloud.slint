@@ -20,7 +20,7 @@ import { FileRow, FileColumns } from "../components/file-row.slint";
 import { FluentEmptyState, FluentLoadingState, FluentErrorState } from "../components/state-view.slint";
 import { DropOverlay } from "../components/drop-overlay.slint";
 import { ListView } from "std-widgets.slint";
-import { FileEntry, CrumbEntry, TooltipState } from "../types.slint";
+import { FileEntry, CrumbEntry, ModifiersApi, TooltipState } from "../types.slint";
 
 export component CloudPage inherits Rectangle {
     in property <string> space-label: "个人云";
@@ -44,8 +44,14 @@ export component CloudPage inherits Rectangle {
     /// 排序：0=名称 1=大小 2=修改时间
     in property <int> sort-key: 0;
     in property <bool> sort-asc: true;
+    /// 当前选中行在 `rows` 里的下标（-1 = 没有选中）。**唯一写入点**是控制器
+    /// `controller/files.rs::set_selection`：选择集的事实来源在 Rust 侧，UI 只负责
+    /// 把这一行滚进视口，不自己维护"看起来选中了哪一行"。
+    in property <int> selection-index: -1;
 
     callback select-item(string, bool, bool);
+    /// 方向键 / Home / End / PageUp / PageDown 移动当前行；extend = Shift 按下（扩选）
+    callback move-selection(int, bool);
     callback select-all();
     callback clear-selection();
     callback open-item(string, string, bool);
@@ -86,6 +92,21 @@ export component CloudPage inherits Rectangle {
     property <bool> refreshing: root.list-state == "refreshing";
     /// 有行数据时的错误提示（占一行 InfoBar，不接管整页）
     property <bool> inline-error: root.list-state == "error" && root.rows.length > 0;
+    /// 一屏能完整放下的行数：PageUp/PageDown 的步长。
+    ///
+    /// 量的是列表视口自己的高度（= ListView 的高度），不是页面高度——表头、提示条、
+    /// 状态栏都不属于可滚动区域。减一留一行重叠：翻页后仍能看到上一页的最后一行，
+    /// 和 WinUI 文件列表的翻页手感一致。`Math.max(1, …)` 保证极矮窗口下也是"至少一行"。
+    property <int> page-rows: Math.max(1, Math.round(list-body.height / Theme.row-height) - 1);
+
+    /// 列表视口的滚动偏移（`ListView.viewport-y` 的桥）。
+    ///
+    /// 为什么要绕一层：ListView 只在本页有行时才存在（`if rows.length > 0`），而
+    /// `if` 内部的元素 id 在组件外层不可见（编译器直接报 `Cannot access id`）。
+    /// 视口跟随又必须挂在 CloudPage 的 `selection-index` 上，所以用一条双向绑定
+    /// 把 `viewport-y` 引到本页属性：ListView 不存在时它保留旧值，此时
+    /// `selection-index` 必为 -1，不会被读到。
+    private property <length> list-viewport-y: 0px;
 
     background: Theme.window-bg;
 
@@ -95,6 +116,31 @@ export component CloudPage inherits Rectangle {
     changed context-menu-open => {
         if (!root.context-menu-open) {
             list-area.focus();
+        }
+    }
+
+    // ---------------- 视口跟随 ----------------
+    //
+    // 键盘选行时必须让那一行看得见，否则"选中了但屏幕上没变化"和没选中一样。
+    //
+    // 换算依据：ListView 继承 ScrollView，`viewport-y` 是它的 **in-out** 属性
+    // （i-slint-compiler-1.17.1 widgets/fluent/scrollview.slint:157
+    // `in-out property <length> viewport-y <=> flickable.viewport-y;`），内容向上滚
+    // （看后面的行）时为负值，内容偏移 = -viewport-y。std-widgets 内部用
+    // `-viewport_y / item-height` 反算首个可见行，本处沿用同一个约定：只读写这一个
+    // 属性，不另包滚动容器（自建容器会绕过 ListView 的行回收，虚拟化就废了）。
+    // 越界值由 ScrollView 自己钳制，这里不需要也不应该再算一次最大偏移。
+    private property <length> sel-top: root.selection-index * Theme.row-height;
+
+    changed selection-index => {
+        if (root.selection-index >= 0) {
+            if (root.sel-top < -root.list-viewport-y) {
+                // 目标行在视口上方：直接把它顶到视口第一行
+                root.list-viewport-y = -root.sel-top;
+            } else if (root.sel-top + Theme.row-height > -root.list-viewport-y + list-body.height) {
+                // 目标行在视口下方：只补足不够的那一段，滚动手感与"逐行跟随"一致
+                root.list-viewport-y = -(root.sel-top + Theme.row-height - list-body.height);
+            }
         }
     }
 
@@ -524,6 +570,59 @@ export component CloudPage inherits Rectangle {
                 }
             }
 
+            // —— 键盘选行 ——
+            // 这张表原本只有"对已选中项做动作"的键（Enter / F2 / Delete…），没有任何
+            // "移动选择"的键：纯键盘用户根本没法定出第一行，只能用鼠标点。
+            // 六个键把当前行沿 rows 前后移动，Shift = 扩选（与单击时 Ctrl/Shift 的
+            // 语义对齐，由 Rust 侧 range_selection 完成区间计算）。
+            //
+            // 条件一律放在 enabled 上（同上面的总表）：重命名输入中按键必须下传给
+            // TextInput（否则方向键会被这里吃掉、光标动不了）；没有行时也不该有动作。
+            KeyBinding {
+                keys: @keys(DownArrow);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(1, ModifiersApi.shift);
+                }
+            }
+            KeyBinding {
+                keys: @keys(UpArrow);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(-1, ModifiersApi.shift);
+                }
+            }
+            // Home / End 用 ±rows.length 表达"跳到两端"：钳制在 Rust 侧统一做，
+            // 这里不需要为"第一行/最后一行"单独开一条回调。
+            KeyBinding {
+                keys: @keys(Home);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(-root.rows.length, ModifiersApi.shift);
+                }
+            }
+            KeyBinding {
+                keys: @keys(End);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(root.rows.length, ModifiersApi.shift);
+                }
+            }
+            KeyBinding {
+                keys: @keys(PageDown);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(root.page-rows, ModifiersApi.shift);
+                }
+            }
+            KeyBinding {
+                keys: @keys(PageUp);
+                enabled: root.renaming-id == "" && root.rows.length > 0;
+                activated => {
+                    root.move-selection(-root.page-rows, ModifiersApi.shift);
+                }
+            }
+
             Rectangle {
                 x: 0;
                 y: 0;
@@ -695,7 +794,7 @@ export component CloudPage inherits Rectangle {
                     }
 
                     // 列表主体
-                    Rectangle {
+                    list-body := Rectangle {
                         vertical-stretch: 1;
                         background: transparent;
 
@@ -704,6 +803,10 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
+
+                            // 视口偏移引到本页属性，供 selection-index 的跟随逻辑使用
+                            // （`if` 内部的 id 在外层不可见，见 list-viewport-y 的说明）
+                            viewport-y <=> root.list-viewport-y;
 
                             // 滚动即收起 Tooltip：行被 ListView 回收时行内按钮不会收到
                             // has-hover=false，气泡会挂在旧位置指着已回收的行。
