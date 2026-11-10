@@ -187,12 +187,37 @@ fn shoot(
     height: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     window.set_size(PhysicalSize::new(width, height));
-    // 让 90~180ms 的过渡动画跑完，避免截到动画中间态
-    std::thread::sleep(Duration::from_millis(260));
-    slint::platform::update_timers_and_animations();
 
     let mut buffer = slint::SharedPixelBuffer::<Rgb8Pixel>::new(width, height);
     let stride = width as usize;
+
+    // 把入场动效推到静止再采图。
+    //
+    // 顺序有两个硬要求，写反了就会采到"动画没开始"的空白帧：
+    //  1. **先真绘一帧**：新建元素（对话框/Toast/菜单/抽屉…）的动画属性是惰性求值的，
+    //     只有在绘制时才读到，这一帧把起点（透明度 0 / 高度 0）落到实际像素上；
+    //  2. 再"等一帧 → 推进定时器 → 绘制一帧 → 判静止"。配方 A 的 1ms 单次 Timer 只有在
+    //     时间真的往前走之后才触发，而 opacity 这类非布局属性也要靠绘制才会被求值、
+    //     动画才会注册。只推进时间不绘制，动画永远不会注册。
+    // 退出条件用"没有活跃动画"，另加一个墙钟上限兜底：spinner / 不确定进度条这类
+    // animation-tick() 驱动的循环动画永远不会"静止"，不设上限就会一直转。
+    window.request_redraw();
+    window.draw_if_needed(|renderer| {
+        renderer.render(buffer.make_mut_slice(), stride);
+    });
+
+    let deadline = Instant::now() + Duration::from_millis(1000);
+    loop {
+        std::thread::sleep(Duration::from_millis(8));
+        slint::platform::update_timers_and_animations();
+        window.request_redraw();
+        window.draw_if_needed(|renderer| {
+            renderer.render(buffer.make_mut_slice(), stride);
+        });
+        if !ui.window().has_active_animations() || Instant::now() > deadline {
+            break;
+        }
+    }
     let drawn = window.draw_if_needed(|renderer| {
         renderer.render(buffer.make_mut_slice(), stride);
     });
@@ -205,7 +230,6 @@ fn shoot(
             renderer.render(buffer.make_mut_slice(), stride);
         });
     }
-    let _ = ui;
 
     let mut img = image::RgbaImage::new(width, height);
     for (i, px) in buffer.as_slice().iter().enumerate() {

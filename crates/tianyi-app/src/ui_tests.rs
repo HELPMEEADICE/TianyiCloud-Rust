@@ -51,6 +51,7 @@ fn ui_geometry_regression() {
     check_login_card(&mut failures);
     check_task_chip(&mut failures);
     check_context_menu(&mut failures);
+    check_drawer_reveal(&mut failures);
     check_empty_state_icon(&mut failures);
     check_detail_level_columns(&mut failures);
     check_a11y_semantics(&mut failures);
@@ -77,6 +78,14 @@ fn boot(size: (f32, f32)) -> crate::app::MainWindow {
 }
 
 /// 推进虚拟时间，让布局与过渡动画落定（不 sleep、不读墙钟）
+///
+/// 300ms 覆盖最长的一档 `Theme.motion-slow`（240ms）。但注意两个前提：
+///  1. 它只对**已经注册**的动画有效。Slint 的绑定是惰性的，动画属性只有在被读到时
+///     才注册；而配方 A 的起点是"下一帧"（1ms 单次 Timer），定时器恰好会在下面这次
+///     推进的末尾触发。所以对"入场动效 + 几何"这类组合，光调 settle() 不够——
+///     参见 `check_drawer_reveal` 里"小步推进 + 每步读一次几何"的采样写法。
+///  2. 状态类过渡（hover / 选中 / 折叠）本来就是先有值再变化，settle() 一次就够，
+///     现有几何断言全部属于这一类。
 fn settle() {
     slint::platform::update_timers_and_animations();
     i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(300));
@@ -301,6 +310,90 @@ fn check_context_menu(failures: &mut Vec<String>) {
                 )
             });
         }
+    }
+}
+
+/// M. 传输抽屉展开动效必须真的"在跑"，并且必须落在 260px。
+///
+/// 守两件事：
+///  1. **动效存在**：抽屉高度是 `260px * reveal`，`reveal` 由 1ms 单次 Timer 在"下一帧"
+///     抬到 1（配方 A，见 `ui/theme/tokens.slint`）。若有人改回"在 init 里直接抬值"，
+///     Slint 的属性首次求值发生在 init 之后，值一上来就是终值，没有"变化"可言，
+///     animate 根本不启动——表现是高度一步跳到 260、看不出过渡。所以这里要求采样里
+///     出现过 `0 < h < 260` 的中间值。
+///  2. **动效收敛**：最终必须正好 260px，且把页面容器整体顶下去同样距离。
+///
+/// 采样方式是"小步推进 mock 时间 + 每一步都读一次几何"：Slint 的绑定是惰性的，
+/// 动画属性只有在被读到时才会注册/推进，只推进时间而不读是推不动的。
+fn check_drawer_reveal(failures: &mut Vec<String>) {
+    const DRAWER_HEIGHT: f32 = 260.0;
+    const STEP_MS: u64 = 40;
+    const MAX_STEPS: usize = 12;
+
+    for (width, height) in SIZES {
+        let ui = boot((width, height));
+        ui.set_logged_in(true);
+        settle();
+
+        // 关闭态：抽屉不存在，页面容器应该顶在内容区最上方
+        let page_top_closed = by_id(&ui, "MainWindow::page-host").absolute_position().y;
+
+        ui.set_transfer_panel_open(true);
+
+        // 起点：创建后先读一次，把动画属性定在起始值（0）
+        let mut samples = vec![by_id(&ui, "MainWindow::drawer").size().height];
+        for _ in 0..MAX_STEPS {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(STEP_MS));
+            slint::platform::update_timers_and_animations();
+            let h = by_id(&ui, "MainWindow::drawer").size().height;
+            samples.push(h);
+            if (h - DRAWER_HEIGHT).abs() <= 1.0 {
+                break;
+            }
+        }
+
+        let drawer = by_id(&ui, "MainWindow::drawer");
+        let drawer_size = drawer.size();
+        let drawer_pos = drawer.absolute_position();
+        let page_top_open = by_id(&ui, "MainWindow::page-host").absolute_position().y;
+        let has_intermediate = samples.iter().any(|h| *h > 1.0 && *h < DRAWER_HEIGHT - 1.0);
+
+        println!(
+            "M {width}x{height}: drawer=({:.1},{:.1}) {:.1}x{:.1} \
+             page_top closed={page_top_closed:.1} open={page_top_open:.1} samples={samples:?}",
+            drawer_pos.x, drawer_pos.y, drawer_size.width, drawer_size.height,
+        );
+
+        expect(failures, page_top_closed.abs() <= 1.0, || {
+            format!("M {width}x{height}: 关闭态页面容器顶端 {page_top_closed:.1} 不在内容区顶部")
+        });
+        expect(failures, has_intermediate, || {
+            format!(
+                "M {width}x{height}: 抽屉展开过程中没有中间高度（采样 {samples:?}）\
+                 —— 入场动效可能被写成了硬切"
+            )
+        });
+        expect(
+            failures,
+            (drawer_size.height - DRAWER_HEIGHT).abs() <= 1.0,
+            || {
+                format!(
+                    "M {width}x{height}: 展开后抽屉高度 {:.1} 不等于 {DRAWER_HEIGHT:.1}\
+                     （展开动效没有落定？）",
+                    drawer_size.height,
+                )
+            },
+        );
+        expect(
+            failures,
+            (page_top_open - DRAWER_HEIGHT).abs() <= 1.0,
+            || {
+                format!(
+                    "M {width}x{height}: 展开后页面容器顶端 {page_top_open:.1} 未被抽屉推到 \
+                     {DRAWER_HEIGHT:.1}"
+                )
+            },
+        );
     }
 }
 
