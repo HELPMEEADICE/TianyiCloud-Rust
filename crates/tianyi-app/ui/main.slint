@@ -28,8 +28,12 @@ import { LinksPage, DirectLink } from "pages/links.slint";
 import { SettingsPage } from "pages/settings.slint";
 
 // 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
+//
+// `TooltipState` 也在导出列表里：ui_tests.rs 的 `check_tooltip_clears_on_page_switch`
+// 必须能从 Rust 侧直接读写这个全局的两个状态位（点亮 / 切页后熄灭），否则那条断言
+// 只能靠"气泡没渲染出来"这种多级推断。**导出不改变任何渲染**。
 export { Theme } from "theme/tokens.slint";
-export { DragOutApi, InputMode, ModalsApi, ModifiersApi } from "types.slint";
+export { DragOutApi, InputMode, ModalsApi, ModifiersApi, TooltipState } from "types.slint";
 
 export component MainWindow inherits Window {
     title: "天翼云盘";
