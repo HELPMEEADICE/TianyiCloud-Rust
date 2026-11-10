@@ -315,6 +315,26 @@ impl Controller {
         }
     }
 
+    /// 「再点一次同一个云空间」是否真的需要执行切换。
+    ///
+    /// `true` = 必须走完整切换（清路径栈 / 行缓存 / 选择集，并发起目录请求）；
+    /// `false` = 这次点击是空操作，调用方原样返回即可。
+    ///
+    /// 抽成纯函数是为了让这条判定能被单测直接覆盖：真跑一遍 `switch_space` 需要一个
+    /// UI 窗口加一个后端客户端，而要守住的恰恰是「不发请求、不清状态」这个**负向**
+    /// 行为——用副作用去察觉"什么都没发生"本来就不可靠。
+    ///
+    /// `current_space` 与 `target` 都应是归一化后的空间名（personal / family）；
+    /// `at_root` = 当前 folder_id 是根目录且路径栈为空；`searching` = 当前处于搜索态。
+    pub(super) fn should_switch_space(
+        current_space: &str,
+        at_root: bool,
+        searching: bool,
+        target: &str,
+    ) -> bool {
+        current_space != target || !at_root || searching
+    }
+
     pub(super) fn switch_space(self: &Arc<Self>, space: &str) {
         let space = if space == "family" {
             "family"
@@ -322,6 +342,29 @@ impl Controller {
             "personal"
         }
         .to_string();
+
+        // —— 空操作早退 ——
+        // 导航栏的「个人云 / 家庭云」每点一次都走这里。原实现无条件清空
+        // path_stack / dir_rows / visible_rows / 选择集与搜索代际，于是在
+        // 「个人云」根目录再点一次「个人云」= 选择被清空 + 一次多余的网络往返，
+        // 而用户根本没有改变任何东西。页面切换由 UI 的 current-page 负责，不依赖这里。
+        //
+        // 只挡「同一空间 + 已在根目录 + 非搜索态」这一种：子目录里点回根目录
+        // 仍然要切换（那是真实的目录变更），必须保留。
+        let current_space = lock_or_recover(&self.space).clone();
+        let at_root = lock_or_recover(&self.folder_id).as_str() == ROOT_FOLDER_ID
+            && lock_or_recover(&self.path_stack).is_empty();
+        // 搜索态是 UI 侧属性：只有站在 UI 线程上才读得到。读不到（跨线程调用这条
+        // 路径本来也存在）时按"正在搜索"处理——宁可多刷一次，也不要把搜索结果
+        // 静默留在屏幕上，那看起来像"点了没反应"。
+        let searching = match self.upgrade_on_ui_thread() {
+            Some(ui) => ui.get_searching(),
+            None => true,
+        };
+        if !Self::should_switch_space(&current_space, at_root, searching, &space) {
+            return;
+        }
+
         *lock_or_recover(&self.space) = space.clone();
         let gen = self.space_gen.fetch_add(1, Ordering::SeqCst) + 1;
         self.dir_gen.fetch_add(1, Ordering::SeqCst);
@@ -1275,5 +1318,37 @@ mod link_tests {
     fn open_link_rejects_non_http_url_without_touching_the_system() {
         // 非法 scheme 必须在启动任何进程之前就被拦下（这里能返回 Err 即为证明）
         assert!(open_url_in_browser("javascript:alert(1)").is_err());
+    }
+}
+
+#[cfg(test)]
+mod space_tests {
+    use super::*;
+
+    /// 空操作只发生在「同一空间 + 已在根目录 + 非搜索态」这一种组合上。
+    ///
+    /// 反过来说：另外三条分支里任何一条成立，都必须真切换——尤其是
+    /// 「同一空间但在子目录」，那是用户点导航项回根目录的正常路径，
+    /// 被一起挡掉就会变成"点了没反应，还停在子目录里"。
+    #[test]
+    fn switch_space_is_a_noop_only_at_the_same_space_root() {
+        // (当前空间, 已在根目录, 搜索态, 目标空间, 期望"必须切换")
+        let cases = [
+            ("personal", true, false, "personal", false), // 根目录再点一次 = 空操作
+            ("family", true, false, "family", false),
+            ("personal", true, true, "personal", true), // 搜索态要恢复成目录列表
+            ("personal", false, false, "personal", true), // 子目录里点回根目录
+            ("family", false, false, "family", true),
+            ("personal", true, false, "family", true), // 换空间永远要切换
+            ("family", true, false, "personal", true),
+            ("personal", false, true, "family", true),
+        ];
+        for (cur, at_root, searching, target, want) in cases {
+            assert_eq!(
+                Controller::should_switch_space(cur, at_root, searching, target),
+                want,
+                "current={cur} at_root={at_root} searching={searching} target={target}"
+            );
+        }
     }
 }
