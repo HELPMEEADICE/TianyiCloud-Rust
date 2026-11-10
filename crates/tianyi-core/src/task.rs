@@ -2,7 +2,8 @@
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -443,22 +444,73 @@ impl TaskManager {
         if let Some(path) = &self.persist_path {
             let tasks = self.list();
             if let Ok(data) = serde_json::to_string(&tasks) {
-                let _ = std::fs::write(path, data);
+                // 直写会在进程被杀/掉电时留下半截 JSON，下次启动整份历史都会被当成
+                // 损坏丢弃；先写临时文件再 rename，"要么全旧要么全新"，没有中间态。
+                let _ = write_atomic(path, data.as_bytes());
             }
         }
     }
 
     fn load(&mut self) {
-        if let Some(path) = &self.persist_path {
-            if let Ok(data) = std::fs::read_to_string(path) {
-                if let Ok(tasks) = serde_json::from_str::<Vec<Task>>(&data) {
-                    let max_id = tasks.iter().map(|t| t.id).max().unwrap_or(0);
-                    self.next_id.store(max_id + 1, Ordering::SeqCst);
-                    *self.lock() = tasks;
-                }
+        let Some(path) = &self.persist_path else {
+            return;
+        };
+        let Ok(data) = std::fs::read_to_string(path) else {
+            return; // 首次运行 / 文件读不出来：按空表启动，不 panic
+        };
+        match serde_json::from_str::<Vec<Task>>(&data) {
+            Ok(tasks) => {
+                let max_id = tasks.iter().map(|t| t.id).max().unwrap_or(0);
+                self.next_id.store(max_id + 1, Ordering::SeqCst);
+                *self.lock() = tasks;
+            }
+            Err(e) => {
+                // 解析失败不再静默丢历史：改名留档，用户和我们事后都还能把内容捞回来。
+                // 之后照旧按空表启动——一个坏文件不该让客户端起不来。
+                let archived = corrupt_path(path);
+                log::warn!(
+                    "任务文件解析失败（{e}），已留档为 {}，本次按空任务表启动",
+                    archived.display()
+                );
+                let _ = std::fs::rename(path, &archived);
             }
         }
     }
+}
+
+/// 原子覆盖写入：同目录临时文件 → `fsync` → rename
+///
+/// 临时文件必须与目标**同目录**：`%TEMP%` 与配置目录经常不在同一个卷上，跨卷 rename
+/// 会直接失败（EXDEV）。先 `sync_all` 再 rename，rename 成功时内容已经在盘上，
+/// 不会出现"文件名换了、内容却还在页缓存里丢了"。
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let tmp = sibling_path(path, "tmp");
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// 与目标同目录、同名前缀的兄弟路径：`tasks.json` + `tmp` → `tasks.json.tmp`
+fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!("{name}.{suffix}"))
+}
+
+/// 损坏文件的留档名：`tasks.json.corrupt-<unix 秒>`
+///
+/// 带时间戳是为了能连续留档——同一份坏文件被反复启动时不会互相覆盖。
+fn corrupt_path(path: &Path) -> PathBuf {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    sibling_path(path, &format!("corrupt-{secs}"))
 }
 
 /// 传输会话（供 UI 绑定进度）
@@ -856,5 +908,47 @@ mod tests {
         for h in handles {
             assert!(h.await.expect("join ok"), "所有等待者都应在恢复后继续");
         }
+    }
+
+    // ---------------- 持久化：原子写 + 损坏留档 ----------------
+
+    /// 落盘后重新加载：内容一致，且不留下临时文件
+    #[test]
+    fn persist_is_atomic_and_survives_reload() {
+        let path = tmp_json("atomic-roundtrip");
+        {
+            let tm = TaskManager::new(Some(path.clone()));
+            tm.add(sample_task(1, TaskStatus::Pending));
+            tm.add(sample_task(2, TaskStatus::Paused));
+        }
+        let reloaded = TaskManager::new(Some(path.clone()));
+        let names: Vec<String> = reloaded
+            .list()
+            .iter()
+            .map(|t| t.file_name.clone())
+            .collect();
+        assert_eq!(names, vec!["t.bin", "t.bin"], "两条任务都应读回来");
+        assert_eq!(reloaded.list().len(), 2);
+        assert!(
+            !path.with_file_name("tasks.json.tmp").exists(),
+            "rename 之后临时文件不应残留"
+        );
+    }
+
+    /// 损坏的 tasks.json 不 panic、不留死档：改名留档后按空表启动
+    #[test]
+    fn corrupt_tasks_json_is_archived_instead_of_dropped() {
+        let path = tmp_json("corrupt-archive");
+        std::fs::write(&path, b"{ not json at all").expect("写入损坏文件");
+        let tm = TaskManager::new(Some(path.clone()));
+        assert!(tm.list().is_empty(), "损坏后按空任务表启动");
+        assert!(!path.exists(), "坏文件必须被改名，不能留在原位反复触发");
+        let archived: Vec<String> = std::fs::read_dir(path.parent().expect("父目录"))
+            .expect("读取临时目录")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("tasks.json.corrupt-"))
+            .collect();
+        assert_eq!(archived.len(), 1, "应留下恰好一份留档，实际：{archived:?}");
     }
 }
