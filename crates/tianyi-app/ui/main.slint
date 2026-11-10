@@ -123,6 +123,10 @@ export component MainWindow inherits Window {
     /// 并发分片数的数值形态：设置页 −/+ 用它判断 1..=8 的可用边界，由控制器回填
     in property <int> upload-thread-count: 3;
     in property <int> download-thread-count: 4;
+    /// 速度限制的分段索引：0..=4 是预设档，**-1 = 配置里是非预设值（五段都不高亮）**
+    in-out property <int> speed-limit-index: 0;
+    /// 非预设档时的行内小字（含真实速率），预设档为空串；文案由控制器拼好
+    in property <string> speed-limit-text: "";
     in property <string> config-dir: "";
     /// 日志目录（= 配置目录下的 logs/）：设置页「关于」分组里的只读路径行
     in property <string> log-dir: "";
@@ -212,6 +216,8 @@ export component MainWindow inherits Window {
     callback reduce_motion_changed(bool);
     /// (下载分片数, 上传分片数)：越界值由控制器钳制到 1..=8
     callback thread_count_changed(int, int);
+    /// 速度限制的分段索引：越界值、非预设值的 -1、落盘与回填都由控制器负责
+    callback speed_limit_changed(int);
     callback choose_download_dir();
     callback open_config_dir();
     callback open_log_dir();
@@ -1235,6 +1241,8 @@ export component MainWindow inherits Window {
                     download-thread: root.download-thread;
                     upload-thread-count: root.upload-thread-count;
                     download-thread-count: root.download-thread-count;
+                    speed-limit-index: root.speed-limit-index;
+                    speed-limit-text: root.speed-limit-text;
                     version-text: root.version-text;
                     config-dir: root.config-dir;
                     log-dir: root.log-dir;
@@ -1250,6 +1258,9 @@ export component MainWindow inherits Window {
                     }
                     thread-count-changed(download, upload) => {
                         root.thread_count_changed(download, upload);
+                    }
+                    speed-limit-changed(idx) => {
+                        root.speed_limit_changed(idx);
                     }
                     choose-download-dir => {
                         root.choose_download_dir();

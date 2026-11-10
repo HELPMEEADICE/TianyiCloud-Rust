@@ -1,4 +1,5 @@
 //! 登录与账号、主题与设置页、配置存储（含配置目录降级）。
+use super::ratelimit::{limit_of_index, speed_limit_ui};
 use super::*;
 use crate::app::{MainWindow, Theme};
 use crate::backend::invoke_ui;
@@ -229,6 +230,59 @@ impl Controller {
                 self.notice("warning", t("toast.threads_saved_memory"));
             }
         }
+    }
+
+    /// 设置页「速度限制」：分段索引 → 字节/秒后写回配置
+    ///
+    /// 只对**之后新启动**的任务生效：正在跑的任务在 `run_transfer` 里已经把当时的桶
+    /// `Arc` 拷进了 opts，这里换掉的只是缓存里的那一份，旧桶要等最后一个持有者 drop
+    /// 才失效。这是刻意的——中途改速率会让已建立的分片会话失去对应关系，
+    /// 与「并发分片数只对新任务生效」同一条口径。
+    pub(super) fn set_speed_limit(self: &Arc<Self>, idx: i32) {
+        // 钳制在 `limit_of_index` 里：越界索引落到 0 / 最后一档，绝不越界读数组
+        let limit = limit_of_index(idx);
+        let mut cfg = self
+            .store
+            .load_config()
+            .unwrap_or_else(|_| AppConfig::default_config());
+        cfg.speed_limit = limit;
+        if let Err(e) = self.store.save_config(&cfg) {
+            // 落盘失败不回滚内存里的选择：本进程内新任务照样按新值限速，
+            // 只是重启后会退回旧值（内存态启动时本来就写不进去）
+            log::warn!("save speed_limit: {e}");
+        }
+        // 立刻把新值对应的桶建好并挂进缓存：下一次 `rate_limiter()` 直接命中，
+        // 同时把旧值那一份从缓存里挤掉（在跑的任务仍握着它们自己的 `Arc`）
+        self.rate_limiter(limit);
+        self.push_speed_limit(limit);
+        let label = if limit == 0 {
+            t("state.speed_limit_off").to_string()
+        } else {
+            file::format_speed(limit)
+        };
+        self.notice("info", tf("toast.speed_limit_saved", &[("value", &label)]));
+    }
+
+    /// 把配置里的 `speed_limit` 映射成「分段索引 + 行内小字」推给设置页
+    ///
+    /// `initial_sync`（含切语）走这里：行内小字是 Rust 侧拼出来的，`@tr` 绑不住它，
+    /// 不重推就会一直停在旧语种的文案上。
+    pub(super) fn sync_speed_limit_to_ui(self: &Arc<Self>) {
+        let limit = self
+            .store
+            .load_config()
+            .unwrap_or_else(|_| AppConfig::default_config())
+            .speed_limit;
+        self.push_speed_limit(limit);
+    }
+
+    /// 实际写 UI 的那一步：索引与文案由同一个纯函数算出来，两处调用点不会分叉
+    fn push_speed_limit(&self, limit: u64) {
+        let (index, text) = speed_limit_ui(limit);
+        self.set_ui_state(move |ui| {
+            ui.set_speed_limit_index(index);
+            ui.set_speed_limit_text(SharedString::from(text));
+        });
     }
 
     pub(super) fn choose_download_dir(self: &Arc<Self>) {

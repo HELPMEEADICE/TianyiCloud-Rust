@@ -432,3 +432,12 @@ msgstr "Auto"
 
 msgid "Ctrl+单击多选 · Shift+单击范围选择"
 msgstr "Ctrl+click to multi-select · Shift+click to select a range"
+
+msgid "不限速"
+msgstr "Unlimited"
+
+msgid "速度限制"
+msgstr "Speed limit"
+
+msgid "限制上传与下载的总速率；更细的数值可直接编辑 config.json 的 speed_limit（字节/秒）"
+msgstr "Caps the combined upload and download rate; for finer values edit speed_limit (bytes per second) in config.json"

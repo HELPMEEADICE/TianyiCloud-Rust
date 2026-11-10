@@ -184,6 +184,11 @@ export component SettingsPage inherits Rectangle {
     /// 显示仍然取上面的字符串，避免同一数字被格式化两次
     in property <int> upload-thread-count: 3;
     in property <int> download-thread-count: 4;
+    /// 速度限制的分段索引：0..=4 是预设档，**-1 = 配置里是非预设值**（五段都不高亮）
+    in-out property <int> speed-limit-index: 0;
+    /// 非预设档时的行内小字（含真实速率，如「当前 3.00 MB/s（自定义）」）；
+    /// 预设档为空串。文案由控制器按当前语种拼好推来，`@tr` 绑不住它。
+    in property <string> speed-limit-text: "";
     in property <string> version-text: "";
     in property <string> config-dir: "";
     /// 日志目录（配置目录下的 logs/），由控制器在初始化时回填
@@ -196,6 +201,8 @@ export component SettingsPage inherits Rectangle {
     callback choose-download-dir();
     /// (下载分片数, 上传分片数)：值可能越界，钳制由控制器负责
     callback thread-count-changed(int, int);
+    /// 速度限制的分段索引；映射成字节/秒、落盘、回填都由控制器负责
+    callback speed-limit-changed(int);
     callback open-config-dir();
     callback open-log-dir();
     callback copy-text(string);
@@ -350,6 +357,53 @@ export component SettingsPage inherits Rectangle {
                                     count: root.upload-thread-count;
                                     step(delta) => {
                                         root.thread-count-changed(root.download-thread-count, root.upload-thread-count + delta);
+                                    }
+                                }
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        // 速度限制：分段控件的索引由控制器按 config.json 的 speed_limit 反算。
+                        //
+                        // 「不许显示与实际不符的选中项」的做法：配置里是非预设值（用户手改过
+                        // config.json）时索引给 **-1**，`FluentSegmented` 只在
+                        // `current == idx` 时点亮某一段，于是五段一个都不亮，行内再用一段
+                        // 小字写出真正生效的数值（`speed-limit-text`）。绝不退到「最接近的
+                        // 预设」——那会让人以为高亮那一段就是真实设定，而真正生效的是
+                        // config.json 里的值。
+                        //
+                        // 只对**新启动**的任务生效：在跑的任务持有的是启动时那个限速桶，
+                        // 换档不会让在途传输突然变快或变慢（理由见控制器注释）。
+                        SettingsRow {
+                            label: @tr("速度限制");
+                            description: @tr("限制上传与下载的总速率；更细的数值可直接编辑 config.json 的 speed_limit（字节/秒）");
+
+                            HorizontalLayout {
+                                spacing: Theme.space-3;
+                                cross-axis-alignment: center;
+
+                                // 只在非预设档出现：预设档下高亮的那一段自己就说明了当前设定
+                                if root.speed-limit-text != "": Text {
+                                    text: root.speed-limit-text;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-small;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+
+                                FluentSegmented {
+                                    // 320px：五段文字总宽约 265px（含 2px 内边距与段间距），
+                                    // 留出余量后仍能让左侧说明保持 500px 以上不折行
+                                    width: 320px;
+                                    // "1 MB/s" 这类「数字 + 单位」四语一致，不包 @tr
+                                    // （与语言行里的「简体中文 / English」同一个取舍）
+                                    items: [@tr("不限速"), "1 MB/s", "5 MB/s", "10 MB/s", "20 MB/s"];
+                                    current: root.speed-limit-index;
+                                    changed(idx) => {
+                                        root.speed-limit-index = idx;
+                                        root.speed-limit-changed(idx);
                                     }
                                 }
                             }

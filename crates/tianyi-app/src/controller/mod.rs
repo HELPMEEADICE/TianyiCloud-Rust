@@ -10,6 +10,7 @@
 
 mod dnd;
 mod files;
+mod ratelimit;
 mod session;
 mod transfers;
 use self::dnd::MovedFile;
@@ -32,6 +33,7 @@ use std::time::Duration;
 use tianyi_core::client::TianyiClient;
 use tianyi_core::config::{AppConfig, AppStore, LanguageMode, ThemeMode};
 use tianyi_core::models::FileObject;
+use tianyi_core::ratelimit::RateLimiter;
 use tianyi_core::task::{TaskManager, TransferControl};
 
 /// 根目录 id
@@ -187,6 +189,12 @@ pub struct Controller {
     transfer_permits: Arc<tokio::sync::Semaphore>,
     /// 上次推给 UI 的传输快照（增量刷新的判据）
     last_snapshot: Mutex<Vec<TransferSnapshot>>,
+    /// 限速桶的缓存：同一个限速值在整个进程里只有一个桶
+    ///
+    /// 唯一写入点是 `run_transfer` 启动任务时的 `rate_limiter()`。**绝不能**让每个任务
+    /// 自己 `bucket_for(cfg.speed_limit)`：那样两个并发任务各持一个桶，设 1 MB/s 实际
+    /// 能跑到 2 MB/s。详见 `controller/ratelimit.rs` 的文件头。
+    speed_limit: Mutex<ratelimit::SpeedLimitCache>,
     /// 强制推送一次：筛选器切换这类"快照里看不出来"的变化走这里
     force_publish: AtomicBool,
     /// 关窗收尾是否已开始
@@ -257,6 +265,7 @@ impl Controller {
             rate_samples: Arc::new(Mutex::new(HashMap::new())),
             transfer_permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TRANSFERS)),
             last_snapshot: Mutex::new(Vec::new()),
+            speed_limit: Mutex::new(ratelimit::SpeedLimitCache::new()),
             // 首帧必须推一次：此时 last_snapshot 还是空的，但显式置 true 更稳
             force_publish: AtomicBool::new(true),
             shutting_down: AtomicBool::new(false),
@@ -316,6 +325,9 @@ impl Controller {
             theme.set_font_family(SharedString::from(font.as_str()));
             theme.set_mono_font_family(SharedString::from(mono.as_str()));
         });
+        // 速度限制那一行的小字是 Rust 侧拼的（含真实速率），切语时 `@tr` 管不到它，
+        // 必须由这里重推；分段索引也一并在里面回填。
+        self.sync_speed_limit_to_ui();
         self.refresh_transfers();
     }
 
@@ -738,6 +750,16 @@ impl Controller {
             });
         });
 
+        // 速度限制：与并发分片数同一条约定——Slint 只上报"点了第几段"，
+        // 钳制/落盘/回填（含非预设值的 -1）全部在控制器里完成。
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_speed_limit_changed(move |idx| {
+                let c = c.clone();
+                c.set_speed_limit(idx);
+            });
+        });
+
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
             ui.on_choose_download_dir(move || {
@@ -903,6 +925,14 @@ impl Controller {
 
     fn client(&self) -> Option<Arc<TianyiClient>> {
         lock_or_recover(&self.client).clone()
+    }
+
+    /// 取当前限速值对应的桶（同一个值永远返回同一个 `Arc`）
+    ///
+    /// 传输任务启动时只调这一个入口，不自己造桶。`limit == 0` 时返回 `None`，
+    /// 调用方据此完全不进租借路径（不限速时连一次锁租借都没有）。
+    fn rate_limiter(&self, limit: u64) -> Option<Arc<RateLimiter>> {
+        lock_or_recover(&self.speed_limit).for_limit(limit)
     }
 
     /// 统一的提示条（Toast）
@@ -1882,5 +1912,82 @@ mod tests {
             close_safe_status(true, TaskStatus::Paused),
             Some(TaskStatus::Paused)
         );
+    }
+
+    // ---------------- 关窗：必须显式落盘 ----------------
+
+    /// 磁盘上这条任务已经写了多少字节
+    fn disk_bytes_done(path: &std::path::Path, id: u64) -> u64 {
+        let data = fs::read_to_string(path).expect("tasks.json 应已写出");
+        let tasks: Vec<Task> = serde_json::from_str(&data).expect("tasks.json 应是合法任务表");
+        tasks
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.bytes_done)
+            .expect("任务应还在表里")
+    }
+
+    /// 关窗收尾必须把「去抖窗口里的最后一段进度」写下去
+    ///
+    /// `begin_close` 末尾那两行（`mark_interrupted_as_paused` + `flush_progress`）是任务表
+    /// **唯一不依赖状态转换**的落盘点：进度落盘是去抖的（每秒最多一次），而关窗时很可能
+    /// 一次转换都不会发生（任务早已全是 Paused / 终态，`mark_interrupted_as_paused` 也改不
+    /// 动任何东西），那最后不到一秒的进度就只有这一步能救。
+    ///
+    /// 断言分两截，守的是两件不同的事：
+    ///  1. **行为**：造出「内存 900 字节 / 磁盘 0 字节」的真实状态（`add` 刚落过盘，紧接着
+    ///     的进度回调落在去抖窗口内），按 `begin_close` 的顺序调那两步之后磁盘必须是 900
+    ///     —— 这一步证明 flush 不是装饰；
+    ///  2. **结构**：`begin_close` 的源码里这两行必须**按顺序**出现。`Controller` 要真实
+    ///     窗口 + tokio + 用户配置目录才造得出来（造出来还会污染真实配置），所以"删掉那
+    ///     一行"只能从源码层守——与 `ui_tests` 的 J3 读 `main.slint` 是同一手法。
+    #[test]
+    fn close_path_flushes_debounced_progress() {
+        let dir = unique_tmp("close-flush");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("创建测试目录");
+        let path = dir.join("tasks.json");
+
+        let tasks = TaskManager::new(Some(path.clone()));
+        // 表里只留「还没开始跑」的任务：关窗时 `close_transitions` 与
+        // `mark_interrupted_as_paused` 都不会因它写盘，落盘全靠显式 flush
+        tasks.add(task(1, TaskDirection::Download, TaskStatus::Pending));
+        assert_eq!(disk_bytes_done(&path, 1), 0, "入队时磁盘上是 0 字节");
+
+        // 去抖窗口内的一次进度回调：内存变、磁盘不变（`add` 刚写过一次）
+        tasks.set_progress(1, 900, 1000, now_millis());
+        assert_eq!(
+            disk_bytes_done(&path, 1),
+            0,
+            "去抖窗口内的进度不该写盘（否则这条用例就测不到 flush 了）"
+        );
+
+        // ---- begin_close 末尾的两步，顺序不能反 ----
+        tasks.mark_interrupted_as_paused();
+        assert!(tasks.flush_progress(), "有持久化路径时 flush 必须真的写");
+        assert_eq!(
+            disk_bytes_done(&path, 1),
+            900,
+            "关窗必须把去抖窗口里的进度落盘：少了 `flush_progress` 那一行，\
+             用户关窗后重开就会看到进度倒退（最多倒退一个去抖间隔）"
+        );
+
+        // ---- 结构截：源码里这两行必须按顺序出现 ----
+        const TRANSFERS_RS: &str = include_str!("transfers.rs");
+        let mark = TRANSFERS_RS.find("self.tasks.mark_interrupted_as_paused();");
+        let flush = TRANSFERS_RS.find("self.tasks.flush_progress();");
+        match (mark, flush) {
+            (Some(mark), Some(flush)) => assert!(
+                mark < flush,
+                "begin_close 里必须先归一化状态、再整表落盘：反过来 flush 写的是旧状态"
+            ),
+            (None, _) => panic!("begin_close 里找不到 `self.tasks.mark_interrupted_as_paused();`"),
+            (_, None) => panic!(
+                "关窗路径里找不到 `self.tasks.flush_progress();` —— 去掉它，去抖窗口里的\
+                 最后一秒进度没人写盘，而这一步是唯一不依赖状态转换的落盘点"
+            ),
+        }
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

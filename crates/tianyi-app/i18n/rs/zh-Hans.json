@@ -35,6 +35,7 @@
   "toast.drag_out_unsupported": "当前系统暂不支持拖出下载",
   "toast.threads_saved": "并发分片数已保存：下载 {download} · 上传 {upload}",
   "toast.threads_saved_memory": "并发分片数已在本次运行内生效；配置目录不可写，重启后会恢复默认值",
+  "toast.speed_limit_saved": "速度限制已设为 {value}",
   "toast.download_dir_updated": "默认下载目录已更新",
   "toast.logged_out": "已退出登录",
 
@@ -137,5 +138,7 @@
   "state.config_label_memory": "（配置目录不可写，本次运行不保存设置）",
   "state.config_fallback": "配置目录不可写，已改用临时目录 {dir}：设置会写在那里，可能被系统清理",
   "state.config_memory": "配置目录不可写，本次运行不会保存设置",
+  "state.speed_limit_off": "不限速",
+  "state.speed_limit_custom": "当前 {value}（自定义）",
   "state.default_folder_name": "新建文件夹"
 }

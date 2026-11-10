@@ -241,6 +241,14 @@ impl Controller {
             .load_config()
             .unwrap_or_else(|_| AppConfig::default_config());
 
+        // 限速桶只在这里取一次，下载与上传两条分支共用同一个 `Arc`。
+        //
+        // 绝不能各自写 `bucket_for(cfg.speed_limit)`：桶的额度是「每秒 N 字节」而不是
+        // 「总共 N 字节」，每个任务各造一个桶就等于把额度复制了一份——两个任务并行时
+        // 用户设的 1 MB/s 实际能跑到 2 MB/s。取桶走 `Controller::rate_limiter`，
+        // 同一个限速值在整个进程里只对应一个桶（见 `controller/ratelimit.rs`）。
+        let rate = self.rate_limiter(cfg.speed_limit);
+
         let outcome: Outcome = match task.direction {
             TaskDirection::Download => {
                 let file = FileObject {
@@ -253,7 +261,7 @@ impl Controller {
                     thread_count: cfg.download_thread.max(1),
                     resume: true,
                     chunk_size: 4 * 1024 * 1024,
-                    rate: tianyi_core::ratelimit::bucket_for(cfg.speed_limit),
+                    rate: rate.clone(),
                 };
                 match transfer::download(
                     &client,
@@ -277,7 +285,9 @@ impl Controller {
                     rapid_upload: cfg.rapid_upload,
                     thread_count: cfg.upload_thread.max(1),
                     generate_torrent: cfg.generate_torrent,
-                    rate: tianyi_core::ratelimit::bucket_for(cfg.speed_limit),
+                    // 与下载分支共用同一个桶（上传/下载不会同时发生，但"同一个任务表里的
+                    // 两个任务"会——那才是这条共享缓存的真正理由）
+                    rate,
                     ..Default::default()
                 };
                 if task.local_path.is_dir() {
@@ -666,10 +676,16 @@ impl Controller {
                 });
             }
         }
-        // 最后一次"等价于重启恢复"的归并 + 立即落盘：兜住上面那一瞬间才转成 Running 的
-        // 任务。`TaskManager::transition` / `update` / 这里都会走内部 `persist()`，
-        // 这就是任务表的保存入口（没有额外的 flush 接口）。
+        // 最后一次"等价于重启恢复"的归并：兜住上面那一瞬间才转成 Running 的任务。
         self.tasks.mark_interrupted_as_paused();
+        // 关窗路径**必须**显式 flush，因为它是唯一一个"不保证由状态转换顺带落盘"的出口：
+        // * `TaskManager` 的进度落盘是**去抖**的（每秒最多一次），最后一秒的进度只在内存里；
+        // * 关窗时很可能一次转换都不会发生（任务早已全是 Paused / 终态，
+        //   `mark_interrupted_as_paused` 也改不动任何东西），那这份进度就没人写下去了；
+        // * 生产路径上进度还是丢给 `spawn_blocking` 写的，runtime 关停会直接把它丢掉。
+        // `flush_progress` 故意不按 `pending` 门控（理由见 core 侧同名注释）：关窗只发生
+        // 一次，多付一次 fsync 远小于丢进度。
+        self.tasks.flush_progress();
         log::info!("关窗：{} 个任务已归一化为已暂停", transitions.len());
     }
 }

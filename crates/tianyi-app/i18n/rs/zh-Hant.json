@@ -35,6 +35,7 @@
   "toast.drag_out_unsupported": "目前系統暫不支援拖出下載",
   "toast.threads_saved": "並行分片數已儲存：下載 {download} · 上傳 {upload}",
   "toast.threads_saved_memory": "並行分片數已在本次執行內生效；設定目錄不可寫，重新啟動後會恢復預設值",
+  "toast.speed_limit_saved": "速度限制已設為 {value}",
   "toast.download_dir_updated": "預設下載目錄已更新",
   "toast.logged_out": "已登出",
 
@@ -137,5 +138,7 @@
   "state.config_label_memory": "（設定目錄不可寫，本次執行不儲存設定）",
   "state.config_fallback": "設定目錄不可寫，已改用暫存目錄 {dir}：設定會寫在那裡，可能被系統清理",
   "state.config_memory": "設定目錄不可寫，本次執行不會儲存設定",
+  "state.speed_limit_off": "不限速",
+  "state.speed_limit_custom": "目前 {value}（自訂）",
   "state.default_folder_name": "新增資料夾"
 }

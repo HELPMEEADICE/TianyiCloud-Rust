@@ -35,6 +35,7 @@
   "toast.drag_out_unsupported": "現在のシステムではドラッグによるダウンロードに対応していません",
   "toast.threads_saved": "同時接続数を保存しました：ダウンロード {download} · アップロード {upload}",
   "toast.threads_saved_memory": "同時接続数は今回の実行中のみ有効です。設定フォルダーに書き込めないため、再起動すると既定値に戻ります",
+  "toast.speed_limit_saved": "速度制限を {value} に設定しました",
   "toast.download_dir_updated": "既定のダウンロードフォルダーを更新しました",
   "toast.logged_out": "ログアウトしました",
 
@@ -137,5 +138,7 @@
   "state.config_label_memory": "（設定フォルダーに書き込めないため、今回の実行では設定を保存しません）",
   "state.config_fallback": "設定フォルダーに書き込めないため、一時フォルダー {dir} に切り替えました。設定はそこに保存されますが、システムによって削除される場合があります",
   "state.config_memory": "設定フォルダーに書き込めないため、今回の実行では設定を保存しません",
+  "state.speed_limit_off": "無制限",
+  "state.speed_limit_custom": "現在 {value}（カスタム）",
   "state.default_folder_name": "新しいフォルダー"
 }

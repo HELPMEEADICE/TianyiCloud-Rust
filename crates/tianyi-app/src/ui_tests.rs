@@ -2959,3 +2959,196 @@ fn check_flyout_has_elevation() {
         failures.join("\n")
     );
 }
+
+// ==================== K. 第四轮 W4b：设置页「速度限制」行 ====================
+
+/// 速度限制分段的五段文案（单位四语一致，源码里刻意不包 `@tr`）
+const SPEED_SEGMENTS: [&str; 5] = ["不限速", "1 MB/s", "5 MB/s", "10 MB/s", "20 MB/s"];
+
+/// 在元素中心派发一次左键（按下 → 推进 50ms → 抬起）
+///
+/// 与 `mock_single_click` 等价，只是这里必须自己发事件：要点的元素是**分段控件里的
+/// 一段**，它没有独立的可访问名称可以按类型查（`TouchArea` 覆盖整段，位置由布局算出），
+/// 唯一稳定的锚点是那一段的文字，而 `mock_single_click` 打在文字上时走的是同一处坐标。
+fn click_center(ui: &crate::app::MainWindow, element: &ElementHandle) {
+    let pos = element.absolute_position();
+    let size = element.size();
+    let center = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    ui.window()
+        .dispatch_event(WindowEvent::PointerMoved { position: center });
+    ui.window().dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    // 50ms 是官方 `mock_single_click` 用的间隔：短到不算长按，长到能过双击判定
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+    slint::platform::update_timers_and_animations();
+    ui.window().dispatch_event(WindowEvent::PointerReleased {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    settle();
+}
+
+/// 设置页里某一段的可读文字元素
+fn speed_segment(ui: &crate::app::MainWindow, label: &str) -> Option<ElementHandle> {
+    labelled(ui, "Text", label)
+}
+
+/// 把 `speed_limit_changed` 的入参记进 `hits`
+fn record_speed_limit(ui: &crate::app::MainWindow, hits: &Hits) {
+    let hits = hits.clone();
+    ui.on_speed_limit_changed(move |idx| hits.borrow_mut().push(format!("speed-limit:{idx}")));
+}
+
+/// T15（W4b）设置页「速度限制」行：可读名称 + 五段 + 点第 2 段上报索引 1。
+///
+/// 四截，各守一个缺陷：
+///  1. **行与五段都在元素树里**，且可见（默认 1180×760 档）：`SettingsRow` 的 label 与
+///     分段的文字都必须能被辅助技术按可读名查到——分段自己没有可读名，行标题就是它的
+///     名称，所以两者的可访问语义一起断言；
+///  2. **点第 2 段 → `speed_limit_changed(1)`**：分段控件与控制器之间的接线（少了
+///     `settings.slint` 里的 `speed-limit-changed(idx)` 透传，这一截立刻红）；
+///  3. **回填守卫**：`current` 已经等于某一段时再点它**不该**上报（`FluentSegmented` 的
+///     判据是 `if (root.current != idx)`）。把回填改成恒 0 时这一截立刻红——那正是
+///     「界面高亮与实际设定不符」这个缺陷的形状；
+///  4. **非预设值**：索引 -1 表示「五段全不亮」，行内小字给出真实速率。分段控件只能靠
+///     `current == idx` 判断高亮，`-1` 就是它表达「无选中」的唯一方式。
+#[test]
+fn check_speed_limit_row_reports_segment_click() {
+    let mut failures: Vec<String> = Vec::new();
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(4);
+    settle();
+
+    // ---------- ① 行与五段 ----------
+    let rows = a11y_hits(&ui, "速度限制");
+    println!("T15 行标题「速度限制」命中 {} 个元素", rows.len());
+    expect(&mut failures, !rows.is_empty(), || {
+        "T15: 设置页找不到可读名为「速度限制」的元素 —— SettingsRow 的 label 没渲染出来".to_string()
+    });
+
+    for label in SPEED_SEGMENTS {
+        match speed_segment(&ui, label) {
+            Some(segment) => {
+                let pos = segment.absolute_position();
+                let size = segment.size();
+                println!(
+                    "T15 分段「{label}」: x={:.1} y={:.1} w={:.1} h={:.1}",
+                    pos.x, pos.y, size.width, size.height
+                );
+                // 可见性前置：分段被滚动出视口时下面的点击会落在窗口外，
+                // 第 3 截会**假绿**（什么都没点到 = 什么都没上报）
+                expect(
+                    &mut failures,
+                    pos.y > 0.0 && pos.y + size.height < WIDE.1 && size.width > 1.0,
+                    || {
+                        format!(
+                            "T15: 分段「{label}」不在视口内（y={:.1} 高={:.1}，窗口高 {:.0}）—— \
+                             速度限制行被挤出了设置页的可视区",
+                            pos.y, size.height, WIDE.1
+                        )
+                    },
+                );
+            }
+            None => failures.push(format!("T15: 分段「{label}」不在元素树里")),
+        }
+    }
+
+    // ---------- ② 点第 2 段 → speed_limit_changed(1) ----------
+    let hits: Hits = Rc::new(RefCell::new(Vec::new()));
+    record_speed_limit(&ui, &hits);
+    ui.set_speed_limit_index(0);
+    settle();
+    if let Some(second) = speed_segment(&ui, "1 MB/s") {
+        click_center(&ui, &second);
+    }
+    let fired = hit_list(&hits);
+    println!("T15 点第 2 段: 回调={fired:?}（期望 [\"speed-limit:1\"]）");
+    expect(
+        &mut failures,
+        fired == vec!["speed-limit:1".to_string()],
+        || {
+            format!(
+                "T15: 点第 2 段（1 MB/s）上报的回调实测 {fired:?}（期望 [\"speed-limit:1\"]）—— \
+             设置页没把 `speed-limit-changed` 透传给窗口，或分段控件的点击没落到 TouchArea 上"
+            )
+        },
+    );
+
+    // ---------- ③ 回填守卫：current 已经等于该段时点它不再上报 ----------
+    hits.borrow_mut().clear();
+    if let Some(second) = speed_segment(&ui, "1 MB/s") {
+        click_center(&ui, &second);
+    }
+    let again = hit_list(&hits);
+    println!("T15 再点同一段: 回调={again:?}（期望 []）");
+    expect(&mut failures, again.is_empty(), || {
+        format!(
+            "T15: 点已经高亮的那一段仍然上报了 {again:?} —— 分段的 `current` 没有跟着\
+             `speed-limit-index` 走（回填恒 0 时，界面上亮的和实际生效的那一档就对不上了）"
+        )
+    });
+
+    // Rust → UI 的那一半回填：新窗口、没点过任何段，直接把索引设成 3，点第 4 段应当无动作
+    let fresh = boot(WIDE);
+    fresh.set_logged_in(true);
+    fresh.set_current_page(4);
+    let fresh_hits: Hits = Rc::new(RefCell::new(Vec::new()));
+    record_speed_limit(&fresh, &fresh_hits);
+    fresh.set_speed_limit_index(3);
+    settle();
+    if let Some(fourth) = speed_segment(&fresh, "10 MB/s") {
+        click_center(&fresh, &fourth);
+    }
+    let rebound = hit_list(&fresh_hits);
+    println!("T15 索引回填 3 后点第 4 段: 回调={rebound:?}（期望 []）");
+    expect(&mut failures, rebound.is_empty(), || {
+        format!(
+            "T15: `speed-limit-index = 3` 之后点第 4 段仍上报 {rebound:?} —— \
+             控制器回填的索引没有进到分段控件"
+        )
+    });
+
+    // ---------- ④ 非预设值：-1 = 五段全不亮 + 行内小字给真实值 ----------
+    let custom = "当前 3.00 MB/s（自定义）";
+    fresh.set_speed_limit_index(-1);
+    fresh.set_speed_limit_text(SharedString::from(custom));
+    settle();
+    let custom_hits = a11y_hits(&fresh, custom);
+    println!("T15 非预设值小字命中 {} 个元素", custom_hits.len());
+    expect(&mut failures, !custom_hits.is_empty(), || {
+        format!(
+            "T15: 索引 -1 时行内没有出现真实值文案「{custom}」—— 配置里是非预设值时，\
+             分段控件既不该高亮任何一段，也不能让人以为某个预设档就是真实设定"
+        )
+    });
+
+    // 「五段全不亮」是可观测的：`-1` 之下点第一段（不限速）必须真的上报 0。
+    // 若回填把索引落成 0（= 高亮第一段），这段点击会被 `current == idx` 吃掉，一次都不上报。
+    fresh_hits.borrow_mut().clear();
+    if let Some(first) = speed_segment(&fresh, "不限速") {
+        click_center(&fresh, &first);
+    }
+    let from_unselected = hit_list(&fresh_hits);
+    println!("T15 索引 -1 时点第一段: 回调={from_unselected:?}（期望 [\"speed-limit:0\"]）");
+    expect(
+        &mut failures,
+        from_unselected == vec!["speed-limit:0".to_string()],
+        || {
+            format!(
+                "T15: 索引 -1（配置里是非预设值）时点第一段上报的回调实测 {from_unselected:?}\
+                 （期望 [\"speed-limit:0\"]）—— 分段控件此刻应当「一段都没选中」，\
+                 回填要是把它落成 0，界面就会假装高亮「不限速」"
+            )
+        },
+    );
+
+    assert!(
+        failures.is_empty(),
+        "T15 速度限制行失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

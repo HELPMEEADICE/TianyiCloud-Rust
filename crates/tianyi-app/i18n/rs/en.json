@@ -35,6 +35,7 @@
   "toast.drag_out_unsupported": "Drag-out download is not supported on this system",
   "toast.threads_saved": "Concurrent chunks saved: download {download} · upload {upload}",
   "toast.threads_saved_memory": "Concurrent chunks applied for this session; the config folder is not writable, so the defaults return after a restart",
+  "toast.speed_limit_saved": "Speed limit set to {value}",
   "toast.download_dir_updated": "Default download folder updated",
   "toast.logged_out": "Signed out",
 
@@ -137,5 +138,7 @@
   "state.config_label_memory": "(Config folder is not writable; settings are not saved this session)",
   "state.config_fallback": "Config folder is not writable; using temporary folder {dir} instead: settings are written there and may be cleaned up by the system",
   "state.config_memory": "Config folder is not writable; settings will not be saved this session",
+  "state.speed_limit_off": "Unlimited",
+  "state.speed_limit_custom": "Currently {value} (custom)",
   "state.default_folder_name": "New folder"
 }
