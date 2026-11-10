@@ -35,6 +35,25 @@ component StateScaffold inherits Rectangle {
 
     background: transparent;
 
+    // 入场淡入（配方 A）：加载/空/错误三态由页面的 `if` 创建，
+    // 状态互切时元素重建、随之带一个新的定时器 → 每次切换都有一次淡入，不会硬闪。
+    property <float> enter-fade: 0.0;
+
+    // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+    Timer {
+        interval: 1ms;
+        running: root.enter-fade < 1.0;
+        triggered => {
+            root.enter-fade = 1.0;
+        }
+    }
+    opacity: Theme.reduce-motion ? 1.0 : root.enter-fade;
+
+    animate opacity {
+        duration: Theme.motion-normal;
+        easing: ease-out;
+    }
+
     // 文字组的实际宽度：随窗口收缩，但不超过可读上限
     property <length> text-width:
         Math.max(120px, Math.min(root.width - 48px, Theme.state-text-max-width));

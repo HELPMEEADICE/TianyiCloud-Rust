@@ -163,10 +163,46 @@ export global Theme {
     out property <length> icon-xl: 48px;
 
     // ---------------------------------------------------------------- 动效
-    /// 快速（悬停、按下）
+    //
+    // 令牌 → 场景（只有三档，不允许在组件里另写裸时长）：
+    //   motion-fast    90ms  悬停 / 按下 / 勾选 / 文字与边框换色
+    //   motion-normal 180ms  状态切换 / 页面转场 / 浮层淡入
+    //   motion-slow   240ms  大位移：对话框、Toast、传输抽屉的展开
+    //
+    // 缓动约定：一律 ease-out；只有"布局尺寸变化"（导航栏展开/收起）用 ease-in-out。
+    //
+    // —— 入场动效的两条配方（全仓统一，改动前先读这段）——
+    //
+    // Slint 的 animate 只在属性值**发生变化**时启动，而且起点取当前时刻。麻烦在于：
+    // 属性的首次求值是惰性的、发生在 init 回调之后，所以**在 init 里抬值不会产生任何
+    // 过渡**——第一次被读到时就已是终值，等于没有变化（实测就是硬切）。元素又只有由
+    // `if` 创建时才能"重新播一次"，因此起点必须跨到下一帧。
+    //
+    //   配方 A（`if` 创建的元素：对话框 / Toast / 菜单 / Tooltip / 抽屉 / 状态视图 / 徽章）：
+    //       property <float> enter-fade: 0.0;
+    //       Timer {
+    //           interval: 1ms;
+    //           running: self.enter-fade < 1.0;   // 抬到 1 之后自己停
+    //           triggered => { self.enter-fade = 1.0; }
+    //       }
+    //       opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+    //       animate opacity { duration: Theme.motion-slow; easing: ease-out; }
+    //     元素每次由 `if` 创建都会有一个新 Timer，所以每次打开都会重播。
+    //
+    //   配方 B（常驻容器，目前只有页面容器）：同一套思路，但触发源是"业务状态变化"
+    //     （current-page）而不是元素创建：变化时先把目标值落到 0，再由 1ms 单次 Timer
+    //     在下一帧抬回 1。**只能驱动 opacity 这类与几何无关的视觉属性**——Timer 的起点
+    //     是定时器触发时刻，几何断言会读到动画起点。
+    //
+    // reduce-motion 三条硬规则：
+    //   1. 时长归零由本文件的令牌统一保证，组件里不要另写 if；
+    //   2. 淡入的初值在减少动画时要**直接取终值**（上面的 `Theme.reduce-motion ? 1.0 : ...`），
+    //      否则会闪一帧全透明；
+    //   3. 由 animation-tick() 驱动的循环动画（spinner / 不确定进度条 / 刷新条）必须停转。
+    /// 快速（悬停、按下、换色）
     out property <duration> motion-fast: reduce-motion ? 0ms : 90ms;
-    /// 常规（展开、切换）
+    /// 常规（展开、切换、页面转场、浮层淡入）
     out property <duration> motion-normal: reduce-motion ? 0ms : 180ms;
-    /// 大位移（页面转场、抽屉）
+    /// 大位移（对话框 / Toast / 传输抽屉展开）
     out property <duration> motion-slow: reduce-motion ? 0ms : 240ms;
 }

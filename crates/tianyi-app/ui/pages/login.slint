@@ -60,11 +60,29 @@ export component LoginPage inherits Rectangle {
             padding-bottom: Theme.space-5;
 
             card := Rectangle {
+                // 入场淡入（配方 A）：登录页由 `if root.logged-in` 创建，卡片随之重生 → 重播。
+                property <float> enter-fade: 0.0;
+
+                // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+                Timer {
+                    interval: 1ms;
+                    running: card.enter-fade < 1.0;
+                    triggered => {
+                        card.enter-fade = 1.0;
+                    }
+                }
+
                 width: Math.min(432px, root.width - 48px);
                 border-radius: Theme.radius-card;
                 background: Theme.card-bg;
                 border-width: 1px;
                 border-color: Theme.stroke;
+                opacity: Theme.reduce-motion ? 1.0 : card.enter-fade;
+
+                animate opacity {
+                    duration: Theme.motion-slow;
+                    easing: ease-out;
+                }
 
                 VerticalLayout {
                     padding-left: Theme.space-6;

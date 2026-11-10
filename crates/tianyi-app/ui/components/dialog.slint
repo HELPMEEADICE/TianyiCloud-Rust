@@ -18,6 +18,28 @@ export component FluentContentDialog inherits Rectangle {
     callback confirm();
     callback cancel();
 
+    // 入场淡入（配方 A，见 theme/tokens.slint 的动效说明）：遮罩与卡片一起从 0 淡到 1。
+    // 起点必须落在"下一帧"：属性的首次求值发生在 init 之后，若 init 里直接把值抬到终值，
+    // 就没有"变化"可言，animate 不会启动（实测是硬切）。所以用 1ms 单次 Timer 跨帧抬值。
+    // 不做 WinUI 那种"卡片放大"——Slint 没有 transform，缩放只能动宽高，而宽高是布局输入。
+    property <float> enter-fade: 0.0;
+
+    enter-timer := Timer {
+        interval: 1ms;
+        running: root.enter-fade < 1.0;
+        triggered => {
+            root.enter-fade = 1.0;
+        }
+    }
+
+    // 减少动画时直接取终值，不留"闪一帧全透明"
+    opacity: Theme.reduce-motion ? 1.0 : root.enter-fade;
+
+    animate opacity {
+        duration: Theme.motion-slow;
+        easing: ease-out;
+    }
+
     background: Theme.overlay-scrim;
 
     // 点击遮罩等同取消

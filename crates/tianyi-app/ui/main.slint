@@ -244,6 +244,26 @@ export component MainWindow inherits Window {
         }
     }
 
+    // ==================== 页面转场（配方 B，见 theme/tokens.slint） ====================
+    // 页面容器里的所有页面都是常驻元素（切换只改 visible，不重建），因此重播入场动画
+    // 只能由 current-page 的变化驱动：先把不透明度目标落到 0，再由 1ms 单次 Timer 在
+    // 下一帧抬回 1 —— 同一帧里改两次属性不会产生动画，必须跨帧。
+    // 这条配方只驱动 opacity，不碰任何几何，所以几何回归与采图都不受影响；
+    // 状态与定时器放在窗口根部（而不是页面容器里），保证未登录时也不存在访问空元素的问题。
+    private property <bool> page-shown: true;
+
+    page-fade := Timer {
+        interval: 1ms;
+        running: !root.page-shown;
+        triggered => {
+            root.page-shown = true;
+        }
+    }
+
+    changed current-page => {
+        root.page-shown = false;
+    }
+
     // ==================== 已登录 ====================
     if root.logged-in: HorizontalLayout {
         // ---------------- 导航栏 ----------------
@@ -528,11 +548,32 @@ export component MainWindow inherits Window {
             spacing: 0px;
 
             // 传输抽屉
-            if root.transfer-panel-open: Rectangle {
-                height: 260px;
+            // 展开动效（配方 A）：高度从 0 拉到 260px，视觉上是"拉帘"把内容区往下推。
+            // 起点落在"下一帧"（1ms 单次 Timer）：属性的首次求值在 init 之后，init 里直接
+            // 抬值等于没有变化，animate 不会启动（实测硬切）。
+            // clip 必须开——动画途中内容比容器高，不裁会盖到下面的页面上。
+            // 收起仍立即消失：元素由 `if` 销毁，退场动画需要 Rust 侧延迟销毁，本轮不做。
+            if root.transfer-panel-open: drawer := Rectangle {
+                property <float> reveal: 0.0;
+
+                drawer-timer := Timer {
+                    interval: 1ms;
+                    running: drawer.reveal < 1.0;
+                    triggered => {
+                        drawer.reveal = 1.0;
+                    }
+                }
+
+                height: 260px * (Theme.reduce-motion ? 1.0 : self.reveal);
+                clip: true;
                 background: Theme.layer-bg;
                 border-width: 1px;
                 border-color: Theme.divider;
+
+                animate height {
+                    duration: Theme.motion-slow;
+                    easing: ease-out;
+                }
 
                 VerticalLayout {
                     padding-left: Theme.space-4;
@@ -633,9 +674,19 @@ export component MainWindow inherits Window {
             }
 
             // 页面容器：所有页面常驻，按 current-page 显示，避免切换时丢失滚动位置与输入状态
-            Rectangle {
+            //
+            // 切页转场（配方 B，见 theme/tokens.slint）：只动 opacity，不动几何——
+            // 页面是常驻元素，无法靠 `if` 重建来重播入场动画，只能由 current-page 的变化驱动。
+            // 同一帧里把 opacity 目标改两次不会产生动画，所以用 1ms 单次 Timer 跨到下一帧。
+            page-host := Rectangle {
                 vertical-stretch: 1;
                 background: Theme.window-bg;
+                opacity: (Theme.reduce-motion || root.page-shown) ? 1.0 : 0.0;
+
+                animate opacity {
+                    duration: Theme.motion-normal;
+                    easing: ease-out;
+                }
 
                 CloudPage {
                     x: 0;
@@ -861,10 +912,24 @@ export component MainWindow inherits Window {
 
     // ==================== Toast（不参与布局，避免页面跳动） ====================
     if root.notice-text != "": toast := Rectangle {
+        // 入场动效（配方 A）：淡入 + 8px 上滑。Toast 不参与布局，也没有几何断言，
+        // 因此这里可以动 y；其它浮层（右键菜单）只淡入，不动位置。
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: toast.enter-fade < 1.0;
+            triggered => {
+                toast.enter-fade = 1.0;
+            }
+        }
+
         width: Math.min(420px, root.width - 32px);
         height: toast-layout.preferred-height;
         x: root.width - self.width - 16px;
-        y: root.height - self.height - 16px;
+        y: root.height - self.height - 16px + (1 - self.enter-fade) * 8px;
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
         border-radius: Theme.radius-card;
         background: Theme.flyout-bg;
         border-width: 1px;
@@ -872,6 +937,16 @@ export component MainWindow inherits Window {
             : root.notice-kind == "success" ? Theme.success
             : root.notice-kind == "warning" ? Theme.warning
             : Theme.stroke-strong;
+
+        animate opacity {
+            duration: Theme.motion-slow;
+            easing: ease-out;
+        }
+
+        animate y {
+            duration: Theme.motion-slow;
+            easing: ease-out;
+        }
 
         toast-layout := HorizontalLayout {
             padding-left: Theme.space-3;
@@ -949,6 +1024,25 @@ export component MainWindow inherits Window {
     }
 
     if root.account-menu-open: menu := Rectangle {
+        // 入场淡入（配方 A）。只动 opacity：菜单的位置由导航栏几何反推，
+        // 位移会改变"点开就在鼠标位置"的预期。
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: menu.enter-fade < 1.0;
+            triggered => {
+                menu.enter-fade = 1.0;
+            }
+        }
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+
         x: root.nav-compact ? Theme.nav-width-compact + 4px : 12px;
         y: root.height - menu.height - 12px;
         width: 232px;
@@ -1036,6 +1130,26 @@ export component MainWindow inherits Window {
     }
 
     if root.context-open: ctx := Rectangle {
+        // 入场淡入（配方 A）。**不要**给它加位移/尺寸动画：
+        // ui_tests.rs 的 check_context_menu 断言的是本元素的绝对位置与四角是否越界，
+        // 位置类动画会让断言读到动画中间态（8px 的余量挡不住）。
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: ctx.enter-fade < 1.0;
+            triggered => {
+                ctx.enter-fade = 1.0;
+            }
+        }
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-normal;
+            easing: ease-out;
+        }
+
         x: Math.max(8px, Math.min(root.context-x, root.width - self.width - 8px));
         y: Math.max(8px, Math.min(root.context-y, root.height - self.height - 8px));
         width: 236px;
@@ -1206,6 +1320,25 @@ export component MainWindow inherits Window {
     }
 
     if TooltipState.visible && root.tip-shown && TooltipState.text != "": tooltip := Rectangle {
+        // 出场柔化（配方 A，最短档）：显示延迟（450ms）已经由上面的 Timer 负责，
+        // 这段只负责"出现那一瞬"不要硬闪。
+        property <float> enter-fade: 0.0;
+
+        // 起点落在"下一帧"：属性首次求值在 init 之后，init 里直接抬值不会产生动画（实测硬切）
+        Timer {
+            interval: 1ms;
+            running: tooltip.enter-fade < 1.0;
+            triggered => {
+                tooltip.enter-fade = 1.0;
+            }
+        }
+        opacity: Theme.reduce-motion ? 1.0 : self.enter-fade;
+
+        animate opacity {
+            duration: Theme.motion-fast;
+            easing: ease-out;
+        }
+
         width: Math.min(tip-layout.preferred-width, 420px);
         height: tip-layout.preferred-height;
         x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
