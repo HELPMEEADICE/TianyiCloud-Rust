@@ -17,6 +17,16 @@ export global LayoutMetrics {
             : content-width < 1300px ? 2
             : 3
     }
+
+    /// 导航栏是否折叠成图标栏（等价于整窗宽度 < 960px）。
+    ///
+    /// 断点以代码为唯一来源：README 与文档写过的 1040px 是历史值，实测校准后是 960px。
+    /// 数值本身不要凭手感改——`detail-level-of` 的三档断言与 ui_tests 的几何断言都
+    /// 建立在这个值上，牵一发动全身。判断量是**整窗宽度**（导航栏自己占多宽取决于
+    /// 是否折叠，用内容区宽度判会自相矛盾）。
+    public pure function nav-compact-of(window-width: length) -> bool {
+        window-width < 960px
+    }
 }
 
 /// 文件列表项（个人云 / 家庭云 / 搜索结果共用）

@@ -37,7 +37,7 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 ### 界面
 - WinUI 3 / Fluent Design 2 视觉：中性色分层表面、单一强调色、4px 圆角体系、4px 间距栅格
 - 浅色 / 深色 / 跟随系统三态主题，跟随系统时轮询系统偏好并实时切换
-- 可折叠 NavigationView（窗口 < 1040px 自动收窄为图标栏，折叠态有 Tooltip）
+- 可折叠 NavigationView（窗口 < 960px 自动收窄为图标栏，折叠态有 Tooltip；断点由 `ui/types.slint` 的 `LayoutMetrics.nav-compact-of` 单点定义）
 - 可展开的传输抽屉（默认收起，状态栏有实时任务计数）、统一 InfoBar 状态反馈、轻量 Tooltip 浮层
 - 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
