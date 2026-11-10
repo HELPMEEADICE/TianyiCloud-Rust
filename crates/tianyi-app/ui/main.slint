@@ -262,6 +262,11 @@ export component MainWindow inherits Window {
 
     changed current-page => {
         root.page-shown = false;
+        // 切页时收起 Tooltip：气泡由文件末尾的窗口级浮层渲染，而行内按钮（传输行、
+        // 直链行里的图标按钮）随页面一起隐藏时**不会**产生 has-hover=false，
+        // 气泡会原地常驻、指向一个已经不存在的控件。清零点放在这里与页面转场并列，
+        // 互不影响：一个驱动 opacity，一个只关气泡。
+        TooltipState.visible = false;
     }
 
     // ==================== 已登录 ====================
@@ -635,6 +640,14 @@ export component MainWindow inherits Window {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
+
+                            // 滚动即收起 Tooltip：行被 ListView 回收时行内按钮不会收到
+                            // has-hover=false，气泡会挂在旧位置指着已回收的行。
+                            // 滚轮/拖动滚动条/触摸板滑动都会改 viewport-y，因此不必另加
+                            // 全窗命中层去截 MouseWheel（那会吞掉点击）。
+                            changed viewport-y => {
+                                TooltipState.visible = false;
+                            }
 
                             for task in root.active-transfer-list : TransferRow {
                                 entry: task;

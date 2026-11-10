@@ -10,7 +10,7 @@ import { FluentButton } from "../components/button.slint";
 import { FluentSegmented } from "../components/segmented.slint";
 import { TransferRow } from "../components/transfer-row.slint";
 import { FluentEmptyState } from "../components/state-view.slint";
-import { TransferEntry } from "../types.slint";
+import { TransferEntry, TooltipState } from "../types.slint";
 
 export component TransfersPage inherits Rectangle {
     in property <[TransferEntry]> rows: [];
@@ -108,6 +108,13 @@ export component TransfersPage inherits Rectangle {
                     y: 0;
                     width: parent.width;
                     height: parent.height;
+
+                    // 滚动即收起 Tooltip：行被回收时行内按钮不会收到 has-hover=false，
+                    // 气泡会挂在旧位置指着已回收的行。滚轮/拖动滚动条/触摸板滑动都会
+                    // 改 viewport-y，不必另加覆盖全窗的 TouchArea 去截 MouseWheel。
+                    changed viewport-y => {
+                        TooltipState.visible = false;
+                    }
 
                     for task in root.rows : TransferRow {
                         entry: task;

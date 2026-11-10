@@ -20,7 +20,7 @@ import { FileRow, FileColumns } from "../components/file-row.slint";
 import { FluentEmptyState, FluentLoadingState, FluentErrorState } from "../components/state-view.slint";
 import { DropOverlay } from "../components/drop-overlay.slint";
 import { ListView } from "std-widgets.slint";
-import { FileEntry, CrumbEntry } from "../types.slint";
+import { FileEntry, CrumbEntry, TooltipState } from "../types.slint";
 
 export component CloudPage inherits Rectangle {
     in property <string> space-label: "个人云";
@@ -702,6 +702,14 @@ export component CloudPage inherits Rectangle {
                             y: 0;
                             width: parent.width;
                             height: parent.height;
+
+                            // 滚动即收起 Tooltip：行被 ListView 回收时行内按钮不会收到
+                            // has-hover=false，气泡会挂在旧位置指着已回收的行。
+                            // 滚轮 / 拖动滚动条 / 触摸板滑动都会改 viewport-y，因此不必
+                            // 另加一层覆盖全窗的 TouchArea 去截 MouseWheel（那会吞点击）。
+                            changed viewport-y => {
+                                TooltipState.visible = false;
+                            }
 
                             for row in root.rows : FileRow {
                                 entry: row;
