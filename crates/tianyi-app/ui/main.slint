@@ -243,9 +243,24 @@ export component MainWindow inherits Window {
     property <bool> nav-compact: root.width < Theme.nav-width + LayoutMetrics.min-capability-width;
     // 内容区可用宽度：整窗宽度减去左侧导航栏（折叠 56px / 展开 248px）
     property <length> content-width: root.width - (root.nav-compact ? Theme.nav-width-compact : Theme.nav-width);
+    /// 云盘页那条工作区列（命令栏 / 操作栏 / 提示条 / 列表 / 状态栏）的**实际渲染宽度**。
+    ///
+    /// 云盘页在超宽窗口下必须限宽——1920px 窗口的内容区是 1672px，文件行会被拉成一条线
+    /// （传输 / 下载直链页早就用 `content-max-width` 限到 1040 并居中，云盘页是唯一漏网的）。
+    /// 上限用 `workspace-max-width` 而不是 `content-max-width`：1040 撑不起四列表格，
+    /// 详见 `theme/tokens.slint` 里那条令牌的注释（含「必须 ≥ 1300px」的硬约束）。
+    ///
+    /// 单一来源：`ui/pages/cloud.slint` 的限宽列用的是**同一条**表达式
+    /// （`Math.min(parent.width, Theme.workspace-max-width)`，parent.width 就是本值未钳制
+    /// 前的 `content-width`）。两处必须同时改，否则列宽判定与真实渲染宽度会分叉。
+    property <length> workspace-width: Math.min(root.content-width, Theme.workspace-max-width);
     // 文件列表次要列分级：量的是内容区宽度，不是整窗宽度
-    // （整窗宽度里有一段属于导航栏，按它算会把默认 1180px 窗口误判成四列）
-    property <int> detail-level: LayoutMetrics.detail-level-of(root.content-width);
+    // （整窗宽度里有一段属于导航栏，按它算会把默认 1180px 窗口误判成四列）。
+    //
+    // **必须量限宽之后的 `workspace-width`，不能量 `content-width`**：列宽判定要与真实
+    // 渲染宽度同源。1920px 窗口的内容区是 1672px、实渲染只有 1360px，若按 1672px 排四列，
+    // 四列就会被挤进一条 1360px 的窄列里（名称列被压扁）。
+    property <int> detail-level: LayoutMetrics.detail-level-of(root.workspace-width);
     /// 账号菜单是否展开。
     ///
     /// `in-out` 而不是私有 `property`，理由与 `context-open` 相同：它的开合有三条
@@ -1288,6 +1303,11 @@ export component MainWindow inherits Window {
             : root.notice-kind == "success" ? Theme.success
             : root.notice-kind == "warning" ? Theme.warning
             : Theme.stroke-strong;
+        // 浮层投影（D-18）：Toast 是压在最上层的临时浮层，没有 elevation 就只是
+        // 一块贴着页面画的白板。几何引令牌，不写数值字面量。
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         animate opacity {
             duration: Theme.motion-slow;
@@ -1402,6 +1422,11 @@ export component MainWindow inherits Window {
         background: Theme.flyout-bg;
         border-width: 1px;
         border-color: Theme.stroke-strong;
+        // 浮层投影（D-18）：账号菜单飘在导航栏之上，没有投影时它的边界只靠 1px 描边，
+        // 在浅色主题下与 `flyout-bg` 的白几乎融成一片。几何引令牌，不写数值字面量。
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         // 账号菜单的键盘层（Esc / ↑↓ / 回车），与右键菜单的 `ctx-focus` 同构。
         //
@@ -1563,6 +1588,11 @@ export component MainWindow inherits Window {
         background: Theme.flyout-bg;
         border-width: 1px;
         border-color: Theme.stroke-strong;
+        // 浮层投影（D-18）：右键菜单盖在文件列表上，投影是它"浮起来"的唯一线索。
+        // 几何引令牌，不写数值字面量。
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         // Esc / ↑↓ / 回车的键盘层。
         //
@@ -1811,6 +1841,11 @@ export component MainWindow inherits Window {
         background: Theme.tooltip-bg;
         border-width: 1px;
         border-color: Theme.tooltip-stroke;
+        // 浮层投影（D-18）：气泡贴着控件出现，没有投影时它会被读成控件的一部分
+        // （尤其深色主题下 tooltip-bg 与 card-bg 只差几阶亮度）。几何引令牌。
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         tip-layout := HorizontalLayout {
             padding-left: 8px;

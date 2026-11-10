@@ -154,6 +154,12 @@ export component FluentContentDialog inherits Rectangle {
                     background: Theme.flyout-bg;
                     border-width: 1px;
                     border-color: Theme.stroke-strong;
+                    // 投影只加在**卡片**上，不加在 `root`（铺满窗口的遮罩 Rectangle）：
+                    // 给遮罩投影等于沿窗口四边描一圈阴影，而遮罩本身就是一层半透明填充，
+                    // 描边在它上面完全看不见，只会白白多画一遍 alpha 混合。
+                    drop-shadow-color: Theme.shadow;
+                    drop-shadow-blur: Theme.shadow-blur;
+                    drop-shadow-offset-y: Theme.shadow-offset-y;
 
                     // 卡片自身吞掉点击，避免穿透到遮罩
                     TouchArea {

@@ -154,877 +154,898 @@ export component CloudPage inherits Rectangle {
         }
     }
 
-    VerticalLayout {
-        padding-left: Theme.space-4;
-        padding-right: Theme.space-4;
-        padding-top: Theme.space-3;
-        padding-bottom: Theme.space-2;
-        spacing: Theme.space-2;
+    // ---------------- 限宽列（D-19） ----------------
+    //
+    // 云盘页是唯一不限宽的页面：1920px 窗口的内容区有 1672px，文件行被拉成一条线。
+    // 这里与 `transfers.slint` / `links.slint` 的既有写法保持一致——外层
+    // `HorizontalLayout { alignment: center; }`，内层宽度 `Math.min(parent.width, 上限)`，
+    // 于是超宽窗口下这一列居中、左右留白对称（不会出现"内容贴左、右边一大片空白"）。
+    //
+    // 上限用 `Theme.workspace-max-width`（1360px）而不是那两个页面用的
+    // `content-max-width`（1040px）：云盘页是四列文件表格，1040 会永久卡在两列档，
+    // 且 `workspace-max-width` 必须 ≥ `LayoutMetrics.detail-level-of` 的最高档门槛 1300px
+    // ——这条硬约束写在 `theme/tokens.slint` 的令牌注释里，改上限前先读它。
+    //
+    // **命令栏 / 操作栏 / 提示条 / 列表卡片 / 状态栏全部挂在这一列里**，宽度因此天然一致；
+    // 分开各写一份 `Math.min(...)` 迟早会错开右边缘（"右边缘错位"就是这么来的）。
+    // 上限宽度与 `main.slint` 的 `workspace-width` 是同一条表达式、同一个令牌：
+    // 列宽判定与真实渲染宽度必须同源。
+    HorizontalLayout {
+        alignment: center;
 
-        // ---------------- 主命令栏 ----------------
-        HorizontalLayout {
-            height: Theme.header-height;
+        workspace-column := VerticalLayout {
+            width: Math.min(parent.width, Theme.workspace-max-width);
+            padding-left: Theme.space-4;
+            padding-right: Theme.space-4;
+            padding-top: Theme.space-3;
+            padding-bottom: Theme.space-2;
             spacing: Theme.space-2;
-            // 明确用 Stretch：由面包屑吸收剩余宽度，其余控件保持自身首选宽度
-            alignment: stretch;
-            cross-axis-alignment: center;
 
-            FluentIconButton {
-                icon: IconName.back;
-                tooltip: @tr("返回上级目录 (Alt+←)");
-                enabled: root.crumbs.length > 1 && !root.searching;
-                clicked => {
-                    root.navigate-up();
+            // ---------------- 主命令栏 ----------------
+            HorizontalLayout {
+                height: Theme.header-height;
+                spacing: Theme.space-2;
+                // 明确用 Stretch：由面包屑吸收剩余宽度，其余控件保持自身首选宽度
+                alignment: stretch;
+                cross-axis-alignment: center;
+
+                FluentIconButton {
+                    icon: IconName.back;
+                    tooltip: @tr("返回上级目录 (Alt+←)");
+                    enabled: root.crumbs.length > 1 && !root.searching;
+                    clicked => {
+                        root.navigate-up();
+                    }
                 }
-            }
 
-            // 面包屑：占据剩余宽度并在超长时裁剪，保证右侧搜索框永不被挤出窗口
-            Rectangle {
-                horizontal-stretch: 1;
-                height: Theme.control-height;
-                clip: true;
-                background: transparent;
+                // 面包屑：占据剩余宽度并在超长时裁剪，保证右侧搜索框永不被挤出窗口
+                Rectangle {
+                    horizontal-stretch: 1;
+                    height: Theme.control-height;
+                    clip: true;
+                    background: transparent;
 
-                HorizontalLayout {
-                    spacing: 2px;
-                    cross-axis-alignment: center;
-
-                    for crumb[idx] in root.crumbs : HorizontalLayout {
+                    HorizontalLayout {
                         spacing: 2px;
                         cross-axis-alignment: center;
 
-                        crumb-btn := Rectangle {
-                            height: 26px;
-                            max-width: 200px;
-                            border-radius: Theme.radius-control;
-                            background: crumb-ta.has-hover ? Theme.control-bg-hover : transparent;
+                        for crumb[idx] in root.crumbs : HorizontalLayout {
+                            spacing: 2px;
+                            cross-axis-alignment: center;
 
-                            HorizontalLayout {
-                                padding-left: 6px;
-                                padding-right: 6px;
+                            crumb-btn := Rectangle {
+                                height: 26px;
+                                max-width: 200px;
+                                border-radius: Theme.radius-control;
+                                background: crumb-ta.has-hover ? Theme.control-bg-hover : transparent;
 
-                                Text {
-                                    text: crumb.name;
-                                    font-family: Theme.font-family;
-                                    font-size: Theme.font-body;
-                                    color: idx == root.crumbs.length - 1 ? Theme.text-primary : Theme.text-secondary;
-                                    font-weight: idx == root.crumbs.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
-                                    vertical-alignment: center;
-                                    overflow: elide;
+                                HorizontalLayout {
+                                    padding-left: 6px;
+                                    padding-right: 6px;
+
+                                    Text {
+                                        text: crumb.name;
+                                        font-family: Theme.font-family;
+                                        font-size: Theme.font-body;
+                                        color: idx == root.crumbs.length - 1 ? Theme.text-primary : Theme.text-secondary;
+                                        font-weight: idx == root.crumbs.length - 1 ? Theme.weight-semibold : Theme.weight-regular;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                crumb-ta := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.navigate-crumb(idx);
+                                    }
                                 }
                             }
 
-                            crumb-ta := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.navigate-crumb(idx);
-                                }
+                            if idx < root.crumbs.length - 1: Icon {
+                                name: IconName.chevron-right;
+                                size: Theme.icon-xs;
+                                icon-color: Theme.text-tertiary;
                             }
                         }
 
-                        if idx < root.crumbs.length - 1: Icon {
-                            name: IconName.chevron-right;
-                            size: Theme.icon-xs;
-                            icon-color: Theme.text-tertiary;
-                        }
-                    }
-
-                    if root.crumbs.length == 0: Text {
-                        text: @tr("根目录");
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-body;
-                        color: Theme.text-secondary;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-
-            search := FluentSearchBox {
-                width: root.narrow ? 172px : 232px;
-                text <=> root.search-text;
-                placeholder: @tr("搜索云盘文件");
-                search(t) => {
-                    root.search-changed(t);
-                }
-                submitted(t) => {
-                    root.search-submitted(t);
-                }
-                cleared => {
-                    root.search-cleared();
-                }
-            }
-
-            // 排序：命令栏常驻入口。列头里的「修改时间」要 detail-level >= 2
-            // 才渲染（整窗 ≥ 1368px 且导航展开），默认 1180px 窗口下没有它，
-            // 所以按时间排序的入口只能放在这里（D-12）。
-            //
-            // 这里只放一个**布局占位**：真身 `sort-menu` 声明在本页最后。
-            // 原因是 Slint 没有 z-index——绘制顺序就是元素树顺序，而排序浮层要盖住
-            // 下面的操作栏与文件列表卡片；声明在布局里就只能被它们盖住（实测浮层
-            // 被列表卡片整块吞掉）。占位保住了命令栏的顺序
-            // 搜索 → 排序 → 刷新 → 新建 → 上传，真身按占位的位置绝对定位。
-            sort-slot := Rectangle {
-                width: Theme.control-height;
-                height: Theme.control-height;
-                horizontal-stretch: 0;
-                background: transparent;
-            }
-
-            FluentIconButton {
-                icon: IconName.refresh;
-                tooltip: @tr("刷新 (F5)");
-                enabled: root.list-state != "loading" && !root.refreshing;
-                clicked => {
-                    root.refresh();
-                }
-            }
-
-            // 窄窗口：次要操作折叠为图标按钮，核心操作（上传）始终可见
-            if root.narrow: FluentIconButton {
-                icon: IconName.folder;
-                tooltip: @tr("新建文件夹");
-                enabled: root.list-state != "loading";
-                clicked => {
-                    root.create-folder();
-                }
-            }
-
-            if !root.narrow: FluentButton {
-                text: @tr("新建文件夹");
-                icon: IconName.add;
-                enabled: root.list-state != "loading";
-                clicked => {
-                    root.create-folder();
-                }
-            }
-
-            FluentButton {
-                text: @tr("上传");
-                icon: IconName.upload;
-                accent: true;
-                enabled: root.list-state != "loading";
-                clicked => {
-                    root.upload();
-                }
-            }
-        }
-
-        // ---------------- 操作栏（高度固定，内容随选中态切换） ----------------
-        // 高度固定 + space-between 两端对齐：切换选中态时不会引起整页布局跳动，
-        // 也不会出现"按钮被拉伸到整行"的异常宽度。
-        Rectangle {
-            height: 36px;
-            border-radius: Theme.radius-control;
-            background: root.has-selection ? Theme.accent-soft : transparent;
-
-            HorizontalLayout {
-                padding-left: root.has-selection ? Theme.space-3 : 0px;
-                padding-right: Theme.space-1;
-                spacing: Theme.space-2;
-                alignment: space-between;
-                cross-axis-alignment: center;
-
-                // ---- 左组：选择状态与批量操作 ----
-                // 最小窗口形态（900–955px 窗口，内容区 844–899px）下这些按钮只留图标：
-                // 文字被清空后，悬停说明与可读名称都只能由 tooltip 提供，因此每个按钮
-                // 都固定传一份，与 text 的窄档取值无关（tooltip 恒定，不是 root.narrow 的
-                // 三元式）。档位本身由 LayoutMetrics.min-capability-width（900px）判定：
-                // zh 下带文字的整行约占 748px、en 下约 810–860px，加左右内边距后
-                // 需要 900px 才排得下，低于它才值得退化成图标档。
-                HorizontalLayout {
-                    alignment: start;
-                    spacing: Theme.space-2;
-                    cross-axis-alignment: center;
-
-                    if root.has-selection: Text {
-                        text: @tr("已选择 {0} 项", root.selected-count);
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-small;
-                        font-weight: Theme.weight-semibold;
-                        color: Theme.accent;
-                        vertical-alignment: center;
-                    }
-
-                    if !root.has-selection: Text {
-                        text: root.rows.length > 0 ? @tr("共 {0} 个项目", root.rows.length) : "";
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-small;
-                        color: Theme.text-tertiary;
-                        vertical-alignment: center;
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: @tr("下载");
-                        tooltip: @tr("下载");
-                        icon: IconName.download;
-                        subtle: true;
-                        clicked => {
-                            root.download-selected();
-                        }
-                    }
-
-                    if root.has-selection && root.selected-count == 1: FluentButton {
-                        text: @tr("重命名");
-                        tooltip: @tr("重命名");
-                        icon: IconName.rename;
-                        subtle: true;
-                        clicked => {
-                            root.rename-selected();
-                        }
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : @tr("复制");
-                        tooltip: @tr("复制");
-                        icon: IconName.copy;
-                        subtle: true;
-                        clicked => {
-                            root.copy-selected();
-                        }
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : @tr("移动到上级");
-                        tooltip: @tr("移动到上级");
-                        icon: IconName.folder;
-                        subtle: true;
-                        enabled: root.crumbs.length > 1;
-                        clicked => {
-                            root.move-selected-up();
-                        }
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : @tr("提取直链");
-                        tooltip: @tr("提取直链");
-                        icon: IconName.link;
-                        subtle: true;
-                        clicked => {
-                            root.link-selected();
-                        }
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : @tr("删除");
-                        tooltip: @tr("删除");
-                        icon: IconName.delete;
-                        danger: true;
-                        subtle: true;
-                        clicked => {
-                            root.delete-selected();
-                        }
-                    }
-
-                    if root.has-selection: FluentButton {
-                        text: root.narrow ? "" : @tr("取消选择");
-                        tooltip: @tr("取消选择");
-                        subtle: true;
-                        clicked => {
-                            root.clear-selection();
+                        if root.crumbs.length == 0: Text {
+                            text: @tr("根目录");
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-body;
+                            color: Theme.text-secondary;
+                            vertical-alignment: center;
                         }
                     }
                 }
 
-                // ---- 右组：提示与全选 ----
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: Theme.space-2;
-                    cross-axis-alignment: center;
-
-                    if !root.has-selection: Text {
-                        text: root.narrow ? "" : @tr("Ctrl+单击多选 · Shift+单击范围选择");
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-caption;
-                        color: Theme.text-tertiary;
-                        vertical-alignment: center;
+                search := FluentSearchBox {
+                    width: root.narrow ? 172px : 232px;
+                    text <=> root.search-text;
+                    placeholder: @tr("搜索云盘文件");
+                    search(t) => {
+                        root.search-changed(t);
                     }
-
-                    if !root.has-selection: FluentButton {
-                        text: @tr("全选");
-                        subtle: true;
-                        enabled: root.rows.length > 0;
-                        clicked => {
-                            root.select-all();
-                        }
+                    submitted(t) => {
+                        root.search-submitted(t);
                     }
-                }
-            }
-        }
-
-        // ---------------- 搜索提示条 ----------------
-        if root.searching: Rectangle {
-            height: 32px;
-            border-radius: Theme.radius-card;
-            background: Theme.accent-soft;
-
-            HorizontalLayout {
-                padding-left: Theme.space-3;
-                padding-right: Theme.space-1;
-                spacing: Theme.space-2;
-                cross-axis-alignment: center;
-
-                Icon {
-                    name: IconName.search;
-                    size: Theme.icon-sm;
-                    icon-color: Theme.accent;
-                }
-
-                Text {
-                    text: root.status-text;
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-small;
-                    color: Theme.text-primary;
-                    horizontal-stretch: 1;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                FluentButton {
-                    text: @tr("退出搜索");
-                    subtle: true;
-                    clicked => {
+                    cleared => {
                         root.search-cleared();
                     }
                 }
-            }
-        }
 
-        // ---------------- 行内错误提示（有数据时不清空列表） ----------------
-        if root.inline-error: Rectangle {
-            height: 40px;
-            border-radius: Theme.radius-card;
-            background: Theme.danger-soft;
-            border-width: 1px;
-            border-color: Theme.danger;
-
-            HorizontalLayout {
-                padding-left: Theme.space-3;
-                padding-right: Theme.space-2;
-                spacing: Theme.space-2;
-                cross-axis-alignment: center;
-
-                Icon {
-                    name: IconName.warning;
-                    size: Theme.icon-sm;
-                    icon-color: Theme.danger;
+                // 排序：命令栏常驻入口。列头里的「修改时间」要 detail-level >= 2
+                // 才渲染（整窗 ≥ 1368px 且导航展开），默认 1180px 窗口下没有它，
+                // 所以按时间排序的入口只能放在这里（D-12）。
+                //
+                // 这里只放一个**布局占位**：真身 `sort-menu` 声明在本页最后。
+                // 原因是 Slint 没有 z-index——绘制顺序就是元素树顺序，而排序浮层要盖住
+                // 下面的操作栏与文件列表卡片；声明在布局里就只能被它们盖住（实测浮层
+                // 被列表卡片整块吞掉）。占位保住了命令栏的顺序
+                // 搜索 → 排序 → 刷新 → 新建 → 上传，真身按占位的位置绝对定位。
+                sort-slot := Rectangle {
+                    width: Theme.control-height;
+                    height: Theme.control-height;
+                    horizontal-stretch: 0;
+                    background: transparent;
                 }
 
-                Text {
-                    text: root.error-text;
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-small;
-                    color: Theme.text-primary;
-                    horizontal-stretch: 1;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                FluentButton {
-                    text: @tr("重试");
-                    subtle: true;
+                FluentIconButton {
+                    icon: IconName.refresh;
+                    tooltip: @tr("刷新 (F5)");
+                    enabled: root.list-state != "loading" && !root.refreshing;
                     clicked => {
                         root.refresh();
                     }
                 }
-            }
-        }
 
-        // ---------------- 文件列表 ----------------
-        list-area := FocusScope {
-            vertical-stretch: 1;
-            horizontal-stretch: 1;
+                // 窄窗口：次要操作折叠为图标按钮，核心操作（上传）始终可见
+                if root.narrow: FluentIconButton {
+                    icon: IconName.folder;
+                    tooltip: @tr("新建文件夹");
+                    enabled: root.list-state != "loading";
+                    clicked => {
+                        root.create-folder();
+                    }
+                }
 
-            init => {
-                self.focus();
-            }
+                if !root.narrow: FluentButton {
+                    text: @tr("新建文件夹");
+                    icon: IconName.add;
+                    enabled: root.list-state != "loading";
+                    clicked => {
+                        root.create-folder();
+                    }
+                }
 
-            // 快捷键总表
-            //
-            // 一律用 `enabled:` 而不是在 activated 里 if：KeyBinding 在**捕获阶段**判定，
-            // 匹配上就吃掉这次按键，焦点所在的行内输入框（重命名框）再也收不到。
-            // 把开关放到 enabled 上，不适用时按键会正常往下传——
-            // 重命名时 Enter 才能提交、Delete 才能删字、Esc 才能取消。
-            KeyBinding {
-                keys: @keys(Return);
-                enabled: root.renaming-id == "" && root.selected-count == 1;
-                activated => {
-                    root.open-selected();
-                }
-            }
-
-            KeyBinding {
-                keys: @keys(F2);
-                enabled: root.renaming-id == "" && root.selected-count == 1;
-                activated => {
-                    root.rename-selected();
-                }
-            }
-            KeyBinding {
-                keys: @keys(Delete);
-                enabled: root.renaming-id == "" && root.has-selection;
-                activated => {
-                    root.delete-selected();
-                }
-            }
-            KeyBinding {
-                keys: @keys(F5);
-                activated => {
-                    root.refresh();
-                }
-            }
-            KeyBinding {
-                keys: @keys(Alt+LeftArrow);
-                activated => {
-                    root.navigate-up();
-                }
-            }
-            KeyBinding {
-                keys: @keys(Control+A);
-                enabled: root.renaming-id == "";
-                activated => {
-                    root.select-all();
-                }
-            }
-            // Esc 的**单一**出口：搜索中退出搜索，否则清空选择。
-            //
-            // 为什么合并成一条而不是再加一条同样的 @keys(Escape)：同一个 FocusScope 里
-            // 出现两条 keys 相同的 KeyBinding 会被编译器直接判成错误
-            // （i-slint-compiler-1.17.1 passes/key_bindings.rs:47-56 `push_error`
-            // "This KeyBinding element has the same keys as an existing KeyBinding"），
-            // 所以"互斥条件"在这里只能表现为**一个** binding 内部的分派。
-            // 搜索优先：搜索时选择集本来就是空的（search_changed 会清空），
-            // 反过来的顺序会让 Esc 变成"清了个空选择"而退不出搜索。
-            KeyBinding {
-                keys: @keys(Escape);
-                enabled: root.renaming-id == "" && (root.searching || root.has-selection);
-                activated => {
-                    if (root.searching) {
-                        root.search-cleared();
-                    } else {
-                        root.clear-selection();
+                FluentButton {
+                    text: @tr("上传");
+                    icon: IconName.upload;
+                    accent: true;
+                    enabled: root.list-state != "loading";
+                    clicked => {
+                        root.upload();
                     }
                 }
             }
-            KeyBinding {
-                keys: @keys(Control+F);
-                activated => {
-                    search.focus-input();
-                }
-            }
 
-            // —— 键盘选行 ——
-            // 这张表原本只有"对已选中项做动作"的键（Enter / F2 / Delete…），没有任何
-            // "移动选择"的键：纯键盘用户根本没法定出第一行，只能用鼠标点。
-            // 六个键把当前行沿 rows 前后移动，Shift = 扩选（与单击时 Ctrl/Shift 的
-            // 语义对齐，由 Rust 侧 range_selection 完成区间计算）。
-            //
-            // 条件一律放在 enabled 上（同上面的总表）：重命名输入中按键必须下传给
-            // TextInput（否则方向键会被这里吃掉、光标动不了）；没有行时也不该有动作。
-            KeyBinding {
-                keys: @keys(DownArrow);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(1, ModifiersApi.shift);
-                }
-            }
-            KeyBinding {
-                keys: @keys(UpArrow);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(-1, ModifiersApi.shift);
-                }
-            }
-            // Home / End 用 ±rows.length 表达"跳到两端"：钳制在 Rust 侧统一做，
-            // 这里不需要为"第一行/最后一行"单独开一条回调。
-            KeyBinding {
-                keys: @keys(Home);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(-root.rows.length, ModifiersApi.shift);
-                }
-            }
-            KeyBinding {
-                keys: @keys(End);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(root.rows.length, ModifiersApi.shift);
-                }
-            }
-            KeyBinding {
-                keys: @keys(PageDown);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(root.page-rows, ModifiersApi.shift);
-                }
-            }
-            KeyBinding {
-                keys: @keys(PageUp);
-                enabled: root.renaming-id == "" && root.rows.length > 0;
-                activated => {
-                    root.move-selection(-root.page-rows, ModifiersApi.shift);
-                }
-            }
-
+            // ---------------- 操作栏（高度固定，内容随选中态切换） ----------------
+            // 高度固定 + space-between 两端对齐：切换选中态时不会引起整页布局跳动，
+            // 也不会出现"按钮被拉伸到整行"的异常宽度。
             Rectangle {
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: parent.height;
-                border-radius: Theme.radius-card;
-                background: Theme.card-bg;
-                border-width: 1px;
-                border-color: Theme.stroke;
-                clip: true;
-
-                VerticalLayout {
-                    spacing: 0px;
-
-                    // 刷新指示：只占 2px，不清空列表（非侵入式加载反馈）
-                    // 用不确定态进度条而不是"宽度线性增长后归零"的矩形：后者是锯齿式拉扯，
-                    // 读不出"正在加载"，而 FluentProgressBar 自带滑块循环且尊重 reduce-motion
-                    if root.refreshing: FluentProgressBar {
-                        indeterminate: true;
-                        bar-height: 2px;
-                        // 这条只是"正在刷新"的细指示，不需要轨道底色：轨道会在这里
-                        // 画出一条与卡片等宽的浅灰线，看起来像一条多余的分隔线。
-                        track-color: transparent;
-                    }
-
-                    // 表头
-                    Rectangle {
-                        height: FileColumns.header-height;
-                        background: Theme.layer-bg;
-
-                        HorizontalLayout {
-                            padding-left: FileColumns.pad-left;
-                            padding-right: FileColumns.pad-right;
-                            spacing: FileColumns.gap;
-                            // 名称列吸收剩余宽度，其余列保持固定宽度并逐个对齐
-                            alignment: stretch;
-                            cross-axis-alignment: center;
-
-                            Rectangle {
-                                width: FileColumns.icon;
-                                horizontal-stretch: 0;
-                                background: transparent;
-                            }
-
-                            // 名称（可排序）
-                            name-header := Rectangle {
-                                horizontal-stretch: 1;
-                                height: parent.height;
-                                background: name-ta.has-hover ? Theme.hover-bg : transparent;
-                                border-radius: Theme.radius-control;
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    alignment: start;
-                                    cross-axis-alignment: center;
-
-                                    // 指示器放在标签前面：不受横向布局剩余空间分配的影响
-                                    if root.sort-key == 0: Icon {
-                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
-                                        size: Theme.icon-sm;
-                                        icon-color: Theme.accent;
-                                    }
-
-                                    Text {
-                                        text: @tr("名称");
-                                        font-family: Theme.font-family;
-                                        font-size: Theme.font-caption;
-                                        font-weight: root.sort-key == 0 ? Theme.weight-semibold : Theme.weight-regular;
-                                        color: root.sort-key == 0 ? Theme.text-secondary : Theme.text-tertiary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                name-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.sort-changed(0);
-                                    }
-                                }
-                            }
-
-                            // 大小（可排序）
-                            if root.detail-level >= 1: size-header := Rectangle {
-                                width: FileColumns.size;
-                                horizontal-stretch: 0;
-                                height: parent.height;
-                                background: size-ta.has-hover ? Theme.hover-bg : transparent;
-                                border-radius: Theme.radius-control;
-
-                                HorizontalLayout {
-                                    alignment: end;
-                                    cross-axis-alignment: center;
-                                    spacing: 4px;
-
-                                    if root.sort-key == 1: Icon {
-                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
-                                        size: Theme.icon-sm;
-                                        icon-color: Theme.accent;
-                                    }
-
-                                    Text {
-                                        text: @tr("大小");
-                                        font-family: Theme.font-family;
-                                        font-size: Theme.font-caption;
-                                        font-weight: root.sort-key == 1 ? Theme.weight-semibold : Theme.weight-regular;
-                                        color: root.sort-key == 1 ? Theme.text-secondary : Theme.text-tertiary;
-                                        vertical-alignment: center;
-                                    }
-                                }
-
-                                size-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.sort-changed(1);
-                                    }
-                                }
-                            }
-
-                            // 修改时间（可排序）
-                            if root.detail-level >= 2: time-header := Rectangle {
-                                width: FileColumns.time;
-                                horizontal-stretch: 0;
-                                height: parent.height;
-                                background: time-ta.has-hover ? Theme.hover-bg : transparent;
-                                border-radius: Theme.radius-control;
-
-                                HorizontalLayout {
-                                    spacing: 4px;
-                                    cross-axis-alignment: center;
-
-                                    Text {
-                                        text: @tr("修改时间");
-                                        font-family: Theme.font-family;
-                                        font-size: Theme.font-caption;
-                                        font-weight: root.sort-key == 2 ? Theme.weight-semibold : Theme.weight-regular;
-                                        color: root.sort-key == 2 ? Theme.text-secondary : Theme.text-tertiary;
-                                        vertical-alignment: center;
-                                    }
-
-                                    if root.sort-key == 2: Icon {
-                                        name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
-                                        size: Theme.icon-sm;
-                                        icon-color: Theme.accent;
-                                    }
-                                }
-
-                                time-ta := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.sort-changed(2);
-                                    }
-                                }
-                            }
-
-                            if root.detail-level >= 3: kind-header := Text {
-                                width: FileColumns.kind;
-                                text: @tr("类型");
-                                font-family: Theme.font-family;
-                                font-size: Theme.font-caption;
-                                color: Theme.text-tertiary;
-                                vertical-alignment: center;
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        height: 1px;
-                        background: Theme.divider;
-                    }
-
-                    // 列表主体
-                    list-body := Rectangle {
-                        vertical-stretch: 1;
-                        background: transparent;
-
-                        if root.rows.length > 0: ListView {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-
-                            // 视口偏移引到本页属性，供 selection-index 的跟随逻辑使用
-                            // （`if` 内部的 id 在外层不可见，见 list-viewport-y 的说明）
-                            viewport-y <=> root.list-viewport-y;
-
-                            // 滚动即收起 Tooltip：行被 ListView 回收时行内按钮不会收到
-                            // has-hover=false，气泡会挂在旧位置指着已回收的行。
-                            // 滚轮 / 拖动滚动条 / 触摸板滑动都会改 viewport-y，因此不必
-                            // 另加一层覆盖全窗的 TouchArea 去截 MouseWheel（那会吞点击）。
-                            changed viewport-y => {
-                                TooltipState.visible = false;
-                            }
-
-                            for row in root.rows : FileRow {
-                                entry: row;
-                                renaming: row.id == root.renaming-id;
-                                detail-level: root.detail-level;
-                                is-drop-target: row.is_dir && !root.searching;
-                                drag-data: root.make-drag-data(row.id, row.name, row.is_dir);
-
-                                item-clicked(ctrl, shift) => {
-                                    list-area.focus();
-                                    root.select-item(row.id, ctrl, shift);
-                                }
-                                item-double-clicked => {
-                                    root.open-item(row.id, row.name, row.is_dir);
-                                }
-                                context-requested(id, name, is-dir, x, y) => {
-                                    list-area.focus();
-                                    root.context-requested(id, name, is-dir, x, y);
-                                }
-                                rename-submitted(name) => {
-                                    root.rename-submitted(row.id, name);
-                                }
-                                rename-cancelled => {
-                                    root.rename-cancelled(row.id);
-                                }
-                                drop-can-accept(event, folder-id) => {
-                                    root.drop-can-accept(event, folder-id);
-                                }
-                                drop-requested(event, folder-id) => {
-                                    root.drop-requested(event, folder-id);
-                                }
-                            }
-                        }
-
-                        // ---- 状态：首次加载 / 加载失败 / 空 ----
-                        if root.show-loading: FluentLoadingState {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            title: root.searching ? @tr("正在搜索…") : @tr("正在加载目录…");
-                            description: root.searching ? @tr("正在云端检索匹配的文件") : @tr("正在从云端读取目录内容");
-                            // 加载态原来没有出口：目录读不出来时用户只能干等（或关窗口）。
-                            // 取消只递增代数让在途结果被丢弃，列表状态就地归一。
-                            cancel-text: @tr("取消");
-                            cancel => {
-                                root.cancel-loading();
-                            }
-                        }
-
-                        if root.show-error: FluentErrorState {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            title: @tr("加载失败");
-                            description: root.error-text;
-                            retry-text: @tr("重试");
-                            retry => {
-                                root.refresh();
-                            }
-                        }
-
-                        if root.show-empty && !root.searching: FluentEmptyState {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            icon: IconName.folder;
-                            title: @tr("这里还没有文件");
-                            description: @tr("把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”");
-                            action-text: @tr("上传文件");
-                            secondary-text: @tr("新建文件夹");
-                            action => {
-                                root.upload();
-                            }
-                            secondary => {
-                                root.create-folder();
-                            }
-                        }
-
-                        if root.show-empty && root.searching: FluentEmptyState {
-                            x: 0;
-                            y: 0;
-                            width: parent.width;
-                            height: parent.height;
-                            icon: IconName.search;
-                            title: @tr("没有找到匹配的文件");
-                            description: @tr("换个关键词试试，或退出搜索回到当前目录");
-                            action-text: @tr("退出搜索");
-                            action => {
-                                root.search-cleared();
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 拖入上传遮罩
-            DropOverlay {
-                x: 0;
-                y: 0;
-                width: parent.width;
-                height: parent.height;
-                active: root.drop-active;
-                target-name: root.drop-target-name;
-            }
-        }
-
-        // ---------------- 状态栏 ----------------
-        HorizontalLayout {
-            height: Theme.statusbar-height;
-            spacing: Theme.space-3;
-            cross-axis-alignment: center;
-
-            Text {
-                text: root.status-text;
-                font-family: Theme.font-family;
-                font-size: Theme.font-caption;
-                color: Theme.text-tertiary;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
-
-            task-chip := Rectangle {
-                height: 24px;
-                horizontal-stretch: 0;
-                border-radius: 12px;
-                background: chip-ta.has-hover ? Theme.control-bg-hover : Theme.control-bg;
-                border-width: 1px;
-                border-color: chip-ta.has-hover ? Theme.stroke-strong : Theme.stroke;
+                height: 36px;
+                border-radius: Theme.radius-control;
+                background: root.has-selection ? Theme.accent-soft : transparent;
 
                 HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 10px;
-                    spacing: 6px;
+                    padding-left: root.has-selection ? Theme.space-3 : 0px;
+                    padding-right: Theme.space-1;
+                    spacing: Theme.space-2;
+                    alignment: space-between;
+                    cross-axis-alignment: center;
+
+                    // ---- 左组：选择状态与批量操作 ----
+                    // 最小窗口形态（900–955px 窗口，内容区 844–899px）下这些按钮只留图标：
+                    // 文字被清空后，悬停说明与可读名称都只能由 tooltip 提供，因此每个按钮
+                    // 都固定传一份，与 text 的窄档取值无关（tooltip 恒定，不是 root.narrow 的
+                    // 三元式）。档位本身由 LayoutMetrics.min-capability-width（900px）判定：
+                    // zh 下带文字的整行约占 748px、en 下约 810–860px，加左右内边距后
+                    // 需要 900px 才排得下，低于它才值得退化成图标档。
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: Theme.space-2;
+                        cross-axis-alignment: center;
+
+                        if root.has-selection: Text {
+                            text: @tr("已选择 {0} 项", root.selected-count);
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-small;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.accent;
+                            vertical-alignment: center;
+                        }
+
+                        if !root.has-selection: Text {
+                            text: root.rows.length > 0 ? @tr("共 {0} 个项目", root.rows.length) : "";
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-small;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: @tr("下载");
+                            tooltip: @tr("下载");
+                            icon: IconName.download;
+                            subtle: true;
+                            clicked => {
+                                root.download-selected();
+                            }
+                        }
+
+                        if root.has-selection && root.selected-count == 1: FluentButton {
+                            text: @tr("重命名");
+                            tooltip: @tr("重命名");
+                            icon: IconName.rename;
+                            subtle: true;
+                            clicked => {
+                                root.rename-selected();
+                            }
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: root.narrow ? "" : @tr("复制");
+                            tooltip: @tr("复制");
+                            icon: IconName.copy;
+                            subtle: true;
+                            clicked => {
+                                root.copy-selected();
+                            }
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: root.narrow ? "" : @tr("移动到上级");
+                            tooltip: @tr("移动到上级");
+                            icon: IconName.folder;
+                            subtle: true;
+                            enabled: root.crumbs.length > 1;
+                            clicked => {
+                                root.move-selected-up();
+                            }
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: root.narrow ? "" : @tr("提取直链");
+                            tooltip: @tr("提取直链");
+                            icon: IconName.link;
+                            subtle: true;
+                            clicked => {
+                                root.link-selected();
+                            }
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: root.narrow ? "" : @tr("删除");
+                            tooltip: @tr("删除");
+                            icon: IconName.delete;
+                            danger: true;
+                            subtle: true;
+                            clicked => {
+                                root.delete-selected();
+                            }
+                        }
+
+                        if root.has-selection: FluentButton {
+                            text: root.narrow ? "" : @tr("取消选择");
+                            tooltip: @tr("取消选择");
+                            subtle: true;
+                            clicked => {
+                                root.clear-selection();
+                            }
+                        }
+                    }
+
+                    // ---- 右组：提示与全选 ----
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: Theme.space-2;
+                        cross-axis-alignment: center;
+
+                        if !root.has-selection: Text {
+                            text: root.narrow ? "" : @tr("Ctrl+单击多选 · Shift+单击范围选择");
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            color: Theme.text-tertiary;
+                            vertical-alignment: center;
+                        }
+
+                        if !root.has-selection: FluentButton {
+                            text: @tr("全选");
+                            subtle: true;
+                            enabled: root.rows.length > 0;
+                            clicked => {
+                                root.select-all();
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ---------------- 搜索提示条 ----------------
+            if root.searching: Rectangle {
+                height: 32px;
+                border-radius: Theme.radius-card;
+                background: Theme.accent-soft;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-3;
+                    padding-right: Theme.space-1;
+                    spacing: Theme.space-2;
                     cross-axis-alignment: center;
 
                     Icon {
-                        name: IconName.transfer;
+                        name: IconName.search;
                         size: Theme.icon-sm;
-                        icon-color: root.active-transfers > 0 ? Theme.accent : Theme.text-tertiary;
+                        icon-color: Theme.accent;
                     }
 
                     Text {
-                        text: root.active-transfers > 0 ? @tr("传输中 {0}", root.active-transfers) : @tr("传输任务");
+                        text: root.status-text;
                         font-family: Theme.font-family;
-                        font-size: Theme.font-caption;
-                        color: root.active-transfers > 0 ? Theme.accent : Theme.text-secondary;
+                        font-size: Theme.font-small;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
                         vertical-alignment: center;
+                        overflow: elide;
                     }
-                }
 
-                chip-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.toggle-transfers();
+                    FluentButton {
+                        text: @tr("退出搜索");
+                        subtle: true;
+                        clicked => {
+                            root.search-cleared();
+                        }
                     }
                 }
             }
 
-            if root.capacity-text != "" && !root.narrow: Text {
-                text: root.capacity-text;
-                font-family: Theme.font-family;
-                font-size: Theme.font-caption;
-                color: Theme.text-tertiary;
-                vertical-alignment: center;
+            // ---------------- 行内错误提示（有数据时不清空列表） ----------------
+            if root.inline-error: Rectangle {
+                height: 40px;
+                border-radius: Theme.radius-card;
+                background: Theme.danger-soft;
+                border-width: 1px;
+                border-color: Theme.danger;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-3;
+                    padding-right: Theme.space-2;
+                    spacing: Theme.space-2;
+                    cross-axis-alignment: center;
+
+                    Icon {
+                        name: IconName.warning;
+                        size: Theme.icon-sm;
+                        icon-color: Theme.danger;
+                    }
+
+                    Text {
+                        text: root.error-text;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-small;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    FluentButton {
+                        text: @tr("重试");
+                        subtle: true;
+                        clicked => {
+                            root.refresh();
+                        }
+                    }
+                }
+            }
+
+            // ---------------- 文件列表 ----------------
+            list-area := FocusScope {
+                vertical-stretch: 1;
+                horizontal-stretch: 1;
+
+                init => {
+                    self.focus();
+                }
+
+                // 快捷键总表
+                //
+                // 一律用 `enabled:` 而不是在 activated 里 if：KeyBinding 在**捕获阶段**判定，
+                // 匹配上就吃掉这次按键，焦点所在的行内输入框（重命名框）再也收不到。
+                // 把开关放到 enabled 上，不适用时按键会正常往下传——
+                // 重命名时 Enter 才能提交、Delete 才能删字、Esc 才能取消。
+                KeyBinding {
+                    keys: @keys(Return);
+                    enabled: root.renaming-id == "" && root.selected-count == 1;
+                    activated => {
+                        root.open-selected();
+                    }
+                }
+
+                KeyBinding {
+                    keys: @keys(F2);
+                    enabled: root.renaming-id == "" && root.selected-count == 1;
+                    activated => {
+                        root.rename-selected();
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(Delete);
+                    enabled: root.renaming-id == "" && root.has-selection;
+                    activated => {
+                        root.delete-selected();
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(F5);
+                    activated => {
+                        root.refresh();
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(Alt+LeftArrow);
+                    activated => {
+                        root.navigate-up();
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(Control+A);
+                    enabled: root.renaming-id == "";
+                    activated => {
+                        root.select-all();
+                    }
+                }
+                // Esc 的**单一**出口：搜索中退出搜索，否则清空选择。
+                //
+                // 为什么合并成一条而不是再加一条同样的 @keys(Escape)：同一个 FocusScope 里
+                // 出现两条 keys 相同的 KeyBinding 会被编译器直接判成错误
+                // （i-slint-compiler-1.17.1 passes/key_bindings.rs:47-56 `push_error`
+                // "This KeyBinding element has the same keys as an existing KeyBinding"），
+                // 所以"互斥条件"在这里只能表现为**一个** binding 内部的分派。
+                // 搜索优先：搜索时选择集本来就是空的（search_changed 会清空），
+                // 反过来的顺序会让 Esc 变成"清了个空选择"而退不出搜索。
+                KeyBinding {
+                    keys: @keys(Escape);
+                    enabled: root.renaming-id == "" && (root.searching || root.has-selection);
+                    activated => {
+                        if (root.searching) {
+                            root.search-cleared();
+                        } else {
+                            root.clear-selection();
+                        }
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(Control+F);
+                    activated => {
+                        search.focus-input();
+                    }
+                }
+
+                // —— 键盘选行 ——
+                // 这张表原本只有"对已选中项做动作"的键（Enter / F2 / Delete…），没有任何
+                // "移动选择"的键：纯键盘用户根本没法定出第一行，只能用鼠标点。
+                // 六个键把当前行沿 rows 前后移动，Shift = 扩选（与单击时 Ctrl/Shift 的
+                // 语义对齐，由 Rust 侧 range_selection 完成区间计算）。
+                //
+                // 条件一律放在 enabled 上（同上面的总表）：重命名输入中按键必须下传给
+                // TextInput（否则方向键会被这里吃掉、光标动不了）；没有行时也不该有动作。
+                KeyBinding {
+                    keys: @keys(DownArrow);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(1, ModifiersApi.shift);
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(UpArrow);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(-1, ModifiersApi.shift);
+                    }
+                }
+                // Home / End 用 ±rows.length 表达"跳到两端"：钳制在 Rust 侧统一做，
+                // 这里不需要为"第一行/最后一行"单独开一条回调。
+                KeyBinding {
+                    keys: @keys(Home);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(-root.rows.length, ModifiersApi.shift);
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(End);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(root.rows.length, ModifiersApi.shift);
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(PageDown);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(root.page-rows, ModifiersApi.shift);
+                    }
+                }
+                KeyBinding {
+                    keys: @keys(PageUp);
+                    enabled: root.renaming-id == "" && root.rows.length > 0;
+                    activated => {
+                        root.move-selection(-root.page-rows, ModifiersApi.shift);
+                    }
+                }
+
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    border-radius: Theme.radius-card;
+                    background: Theme.card-bg;
+                    border-width: 1px;
+                    border-color: Theme.stroke;
+                    clip: true;
+
+                    VerticalLayout {
+                        spacing: 0px;
+
+                        // 刷新指示：只占 2px，不清空列表（非侵入式加载反馈）
+                        // 用不确定态进度条而不是"宽度线性增长后归零"的矩形：后者是锯齿式拉扯，
+                        // 读不出"正在加载"，而 FluentProgressBar 自带滑块循环且尊重 reduce-motion
+                        if root.refreshing: FluentProgressBar {
+                            indeterminate: true;
+                            bar-height: 2px;
+                            // 这条只是"正在刷新"的细指示，不需要轨道底色：轨道会在这里
+                            // 画出一条与卡片等宽的浅灰线，看起来像一条多余的分隔线。
+                            track-color: transparent;
+                        }
+
+                        // 表头
+                        Rectangle {
+                            height: FileColumns.header-height;
+                            background: Theme.layer-bg;
+
+                            HorizontalLayout {
+                                padding-left: FileColumns.pad-left;
+                                padding-right: FileColumns.pad-right;
+                                spacing: FileColumns.gap;
+                                // 名称列吸收剩余宽度，其余列保持固定宽度并逐个对齐
+                                alignment: stretch;
+                                cross-axis-alignment: center;
+
+                                Rectangle {
+                                    width: FileColumns.icon;
+                                    horizontal-stretch: 0;
+                                    background: transparent;
+                                }
+
+                                // 名称（可排序）
+                                name-header := Rectangle {
+                                    horizontal-stretch: 1;
+                                    height: parent.height;
+                                    background: name-ta.has-hover ? Theme.hover-bg : transparent;
+                                    border-radius: Theme.radius-control;
+
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        alignment: start;
+                                        cross-axis-alignment: center;
+
+                                        // 指示器放在标签前面：不受横向布局剩余空间分配的影响
+                                        if root.sort-key == 0: Icon {
+                                            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                            size: Theme.icon-sm;
+                                            icon-color: Theme.accent;
+                                        }
+
+                                        Text {
+                                            text: @tr("名称");
+                                            font-family: Theme.font-family;
+                                            font-size: Theme.font-caption;
+                                            font-weight: root.sort-key == 0 ? Theme.weight-semibold : Theme.weight-regular;
+                                            color: root.sort-key == 0 ? Theme.text-secondary : Theme.text-tertiary;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    name-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.sort-changed(0);
+                                        }
+                                    }
+                                }
+
+                                // 大小（可排序）
+                                if root.detail-level >= 1: size-header := Rectangle {
+                                    width: FileColumns.size;
+                                    horizontal-stretch: 0;
+                                    height: parent.height;
+                                    background: size-ta.has-hover ? Theme.hover-bg : transparent;
+                                    border-radius: Theme.radius-control;
+
+                                    HorizontalLayout {
+                                        alignment: end;
+                                        cross-axis-alignment: center;
+                                        spacing: 4px;
+
+                                        if root.sort-key == 1: Icon {
+                                            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                            size: Theme.icon-sm;
+                                            icon-color: Theme.accent;
+                                        }
+
+                                        Text {
+                                            text: @tr("大小");
+                                            font-family: Theme.font-family;
+                                            font-size: Theme.font-caption;
+                                            font-weight: root.sort-key == 1 ? Theme.weight-semibold : Theme.weight-regular;
+                                            color: root.sort-key == 1 ? Theme.text-secondary : Theme.text-tertiary;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    size-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.sort-changed(1);
+                                        }
+                                    }
+                                }
+
+                                // 修改时间（可排序）
+                                if root.detail-level >= 2: time-header := Rectangle {
+                                    width: FileColumns.time;
+                                    horizontal-stretch: 0;
+                                    height: parent.height;
+                                    background: time-ta.has-hover ? Theme.hover-bg : transparent;
+                                    border-radius: Theme.radius-control;
+
+                                    HorizontalLayout {
+                                        spacing: 4px;
+                                        cross-axis-alignment: center;
+
+                                        Text {
+                                            text: @tr("修改时间");
+                                            font-family: Theme.font-family;
+                                            font-size: Theme.font-caption;
+                                            font-weight: root.sort-key == 2 ? Theme.weight-semibold : Theme.weight-regular;
+                                            color: root.sort-key == 2 ? Theme.text-secondary : Theme.text-tertiary;
+                                            vertical-alignment: center;
+                                        }
+
+                                        if root.sort-key == 2: Icon {
+                                            name: root.sort-asc ? IconName.sort-asc : IconName.sort-desc;
+                                            size: Theme.icon-sm;
+                                            icon-color: Theme.accent;
+                                        }
+                                    }
+
+                                    time-ta := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.sort-changed(2);
+                                        }
+                                    }
+                                }
+
+                                if root.detail-level >= 3: kind-header := Text {
+                                    width: FileColumns.kind;
+                                    text: @tr("类型");
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-caption;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: 1px;
+                            background: Theme.divider;
+                        }
+
+                        // 列表主体
+                        list-body := Rectangle {
+                            vertical-stretch: 1;
+                            background: transparent;
+
+                            if root.rows.length > 0: ListView {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+
+                                // 视口偏移引到本页属性，供 selection-index 的跟随逻辑使用
+                                // （`if` 内部的 id 在外层不可见，见 list-viewport-y 的说明）
+                                viewport-y <=> root.list-viewport-y;
+
+                                // 滚动即收起 Tooltip：行被 ListView 回收时行内按钮不会收到
+                                // has-hover=false，气泡会挂在旧位置指着已回收的行。
+                                // 滚轮 / 拖动滚动条 / 触摸板滑动都会改 viewport-y，因此不必
+                                // 另加一层覆盖全窗的 TouchArea 去截 MouseWheel（那会吞点击）。
+                                changed viewport-y => {
+                                    TooltipState.visible = false;
+                                }
+
+                                for row in root.rows : FileRow {
+                                    entry: row;
+                                    renaming: row.id == root.renaming-id;
+                                    detail-level: root.detail-level;
+                                    is-drop-target: row.is_dir && !root.searching;
+                                    drag-data: root.make-drag-data(row.id, row.name, row.is_dir);
+
+                                    item-clicked(ctrl, shift) => {
+                                        list-area.focus();
+                                        root.select-item(row.id, ctrl, shift);
+                                    }
+                                    item-double-clicked => {
+                                        root.open-item(row.id, row.name, row.is_dir);
+                                    }
+                                    context-requested(id, name, is-dir, x, y) => {
+                                        list-area.focus();
+                                        root.context-requested(id, name, is-dir, x, y);
+                                    }
+                                    rename-submitted(name) => {
+                                        root.rename-submitted(row.id, name);
+                                    }
+                                    rename-cancelled => {
+                                        root.rename-cancelled(row.id);
+                                    }
+                                    drop-can-accept(event, folder-id) => {
+                                        root.drop-can-accept(event, folder-id);
+                                    }
+                                    drop-requested(event, folder-id) => {
+                                        root.drop-requested(event, folder-id);
+                                    }
+                                }
+                            }
+
+                            // ---- 状态：首次加载 / 加载失败 / 空 ----
+                            if root.show-loading: FluentLoadingState {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+                                title: root.searching ? @tr("正在搜索…") : @tr("正在加载目录…");
+                                description: root.searching ? @tr("正在云端检索匹配的文件") : @tr("正在从云端读取目录内容");
+                                // 加载态原来没有出口：目录读不出来时用户只能干等（或关窗口）。
+                                // 取消只递增代数让在途结果被丢弃，列表状态就地归一。
+                                cancel-text: @tr("取消");
+                                cancel => {
+                                    root.cancel-loading();
+                                }
+                            }
+
+                            if root.show-error: FluentErrorState {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+                                title: @tr("加载失败");
+                                description: root.error-text;
+                                retry-text: @tr("重试");
+                                retry => {
+                                    root.refresh();
+                                }
+                            }
+
+                            if root.show-empty && !root.searching: FluentEmptyState {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+                                icon: IconName.folder;
+                                title: @tr("这里还没有文件");
+                                description: @tr("把文件拖到这里即可上传，或使用右上角的“上传”“新建文件夹”");
+                                action-text: @tr("上传文件");
+                                secondary-text: @tr("新建文件夹");
+                                action => {
+                                    root.upload();
+                                }
+                                secondary => {
+                                    root.create-folder();
+                                }
+                            }
+
+                            if root.show-empty && root.searching: FluentEmptyState {
+                                x: 0;
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height;
+                                icon: IconName.search;
+                                title: @tr("没有找到匹配的文件");
+                                description: @tr("换个关键词试试，或退出搜索回到当前目录");
+                                action-text: @tr("退出搜索");
+                                action => {
+                                    root.search-cleared();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 拖入上传遮罩
+                DropOverlay {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    active: root.drop-active;
+                    target-name: root.drop-target-name;
+                }
+            }
+
+            // ---------------- 状态栏 ----------------
+            HorizontalLayout {
+                height: Theme.statusbar-height;
+                spacing: Theme.space-3;
+                cross-axis-alignment: center;
+
+                Text {
+                    text: root.status-text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-caption;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                task-chip := Rectangle {
+                    height: 24px;
+                    horizontal-stretch: 0;
+                    border-radius: 12px;
+                    background: chip-ta.has-hover ? Theme.control-bg-hover : Theme.control-bg;
+                    border-width: 1px;
+                    border-color: chip-ta.has-hover ? Theme.stroke-strong : Theme.stroke;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 10px;
+                        spacing: 6px;
+                        cross-axis-alignment: center;
+
+                        Icon {
+                            name: IconName.transfer;
+                            size: Theme.icon-sm;
+                            icon-color: root.active-transfers > 0 ? Theme.accent : Theme.text-tertiary;
+                        }
+
+                        Text {
+                            text: root.active-transfers > 0 ? @tr("传输中 {0}", root.active-transfers) : @tr("传输任务");
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-caption;
+                            color: root.active-transfers > 0 ? Theme.accent : Theme.text-secondary;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    chip-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.toggle-transfers();
+                        }
+                    }
+                }
+
+                if root.capacity-text != "" && !root.narrow: Text {
+                    text: root.capacity-text;
+                    font-family: Theme.font-family;
+                    font-size: Theme.font-caption;
+                    color: Theme.text-tertiary;
+                    vertical-alignment: center;
+                }
             }
         }
     }

@@ -2616,3 +2616,346 @@ fn close_overlays_on_focus_loss_clears_every_overlay() {
          顺序为 Tooltip / 账号菜单 / 右键菜单 / 排序浮层）"
     );
 }
+
+// ==================== J. 第四轮 W3：浮层投影（D-18）与云盘页限宽（D-19） ====================
+
+/// 超宽档：1920×1080。内容区 1672px，`Theme.workspace-max-width`（1360px）在这里才真的生效
+const ULTRA_WIDE: (f32, f32) = (1920.0, 1080.0);
+
+/// `ui/main.slint` 源码：J3 的结构性断言要读它
+const MAIN_SLINT: &str = include_str!("../ui/main.slint");
+/// `ui/components/dialog.slint` 源码：同上
+const DIALOG_SLINT: &str = include_str!("../ui/components/dialog.slint");
+
+/// 云盘页限宽列（`pages/cloud.slint` 的 `workspace-column`）
+fn workspace_column(ui: &crate::app::MainWindow) -> ElementHandle {
+    by_id(ui, "CloudPage::workspace-column")
+}
+
+/// 从 Slint 源码里切出「含 `anchor` 那一行开头的元素」的完整块（含自身收尾的花括号）
+///
+/// 判据是**缩进**而不是花括号深度：Slint 的块收尾花括号与元素声明同缩进，所以从 anchor
+/// 那一行往下找第一行「缩进相同且只有一个 `}`」就是块的结尾。不能数深度——块里的
+/// `@tr("传输中 {0}")` 这类文案自带花括号，深度会被它们骗过去。
+fn element_block(source: &str, anchor: &str) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let start = lines.iter().position(|line| line.contains(anchor))?;
+    let indent = lines[start].chars().take_while(|c| *c == ' ').count();
+    let closer = format!("{}}}", " ".repeat(indent));
+    let end = start + 1 + lines[start + 1..].iter().position(|line| *line == closer)?;
+    Some(lines[start..=end].join("\n"))
+}
+
+/// J3 的一截：`source` 里 `anchor` 那个元素块必须声明完整的一套投影令牌，且不准写字面量
+fn expect_elevated(failures: &mut Vec<String>, source: &str, tag: &str, anchor: &str) {
+    let Some(block) = element_block(source, anchor) else {
+        failures.push(format!(
+            "J3: {tag} —— 源码里找不到 `{anchor}` 所在的元素块（锚点过时了？）"
+        ));
+        return;
+    };
+
+    for token in [
+        "drop-shadow-color: Theme.shadow;",
+        "drop-shadow-blur: Theme.shadow-blur;",
+        "drop-shadow-offset-y: Theme.shadow-offset-y;",
+    ] {
+        if !block.contains(token) {
+            failures.push(format!(
+                "J3: {tag} 的元素块里缺 `{token}` —— D-18 回退（该浮层没有投影，或没引令牌）"
+            ));
+        }
+    }
+
+    // 几何一律引令牌：块里每一条 drop-shadow-* 声明的取值部分都不许是字面量
+    for line in block.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("drop-shadow-") && !trimmed.contains("Theme.") {
+            failures.push(format!(
+                "J3: {tag} 的 `{trimmed}` 用了数值字面量 —— 投影几何必须引 \
+                 `theme/tokens.slint` 的令牌（改一处就是改全仓）"
+            ));
+        }
+    }
+}
+
+/// J1（守 D-19）云盘页的工作区列必须限宽、居中，且默认窗口零变化。
+///
+/// 缺陷（D-19）：云盘页是唯一不限宽的页面——1920px 窗口的内容区有 1672px，文件行被拉成
+/// 一条线。`transfers.slint` / `links.slint` 早就用
+/// `Math.min(parent.width, content-max-width)` + `HorizontalLayout { alignment: center; }`
+/// 限宽居中了，只有云盘页漏了。
+///
+/// 三档的期望值全部**由令牌算出来**，不写字面量（D-13 的纪律：上限一旦有第二份副本，
+/// UI 改了测试还会静默按旧数字通过）：
+///   · 1920×1080 → 内容区 1672px，被 `workspace-max-width` 截到 1360px（限宽生效）
+///   · 1600×760  → 内容区 1352px，小于上限，不受限（与 `check_detail_level_columns`
+///                 的既有无上限期望一致）
+///   · 1180×760  → 内容区 932px，**默认窗口零变化**
+///
+/// 回退什么会红：删掉 `pages/cloud.slint` 限宽列上的
+/// `width: Math.min(parent.width, Theme.workspace-max-width)` → 1920 档实测宽度变成
+/// 1672，第一档立刻超出 1px 容差。
+#[test]
+fn check_workspace_caps_wide_rows() {
+    let mut failures: Vec<String> = Vec::new();
+
+    for (width, height) in [ULTRA_WIDE, EXTRA_WIDE, WIDE] {
+        let ui = boot((width, height));
+        ui.set_logged_in(true);
+        ui.set_current_page(0);
+        settle();
+
+        let content = content_width(&ui, width);
+        let cap = ui.global::<crate::app::Theme>().get_workspace_max_width();
+        let expected = content.min(cap);
+
+        let column = workspace_column(&ui);
+        let size = column.size();
+        let pos = column.absolute_position();
+        // 这一列的两条基准线：内容区左边缘（= 导航栏右边缘）与窗口右边缘
+        let left_margin = pos.x - (width - content);
+        let right_margin = width - right(&column);
+
+        println!(
+            "J1 {width}x{height}: 列宽={:.1}（期望 min(内容区 {content:.0}, 上限 {cap:.0}) \
+             = {expected:.0}）x={:.1} 左边距={left_margin:.1} 右边距={right_margin:.1}",
+            size.width, pos.x,
+        );
+
+        // 先挡掉"列没被实例化 / 零宽"这类假绿：零宽会让下面的居中断言恒真
+        expect(&mut failures, size.width > 1.0, || {
+            format!(
+                "J1 {width}x{height}: 工作区列宽 {:.1}，限宽列没有被实例化",
+                size.width
+            )
+        });
+
+        expect(&mut failures, (size.width - expected).abs() <= 1.0, || {
+            format!(
+                "J1 {width}x{height}: D-19 回退 —— 工作区列实测宽度 {:.1} 与 \
+                     min(内容区 {content:.0}, 上限 {cap:.0}) = {expected:.0} 不符",
+                size.width,
+            )
+        });
+
+        expect(
+            &mut failures,
+            (left_margin - right_margin).abs() <= 1.0,
+            || {
+                format!(
+                    "J1 {width}x{height}: 工作区列没有居中（左边距 {left_margin:.1}，\
+                     右边距 {right_margin:.1}）—— 外层缺 `HorizontalLayout {{ alignment: center; }}`"
+                )
+            },
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "J1 云盘页限宽失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// J2（守 D-19 的同源约束）列宽判定必须吃**限宽之后**的宽度。
+///
+/// 缺陷形状：渲染被限到 1360px，`detail-level` 却仍按内容区 1672px 判定。1920px 窗口下
+/// 两者都落在 3 档（1360 ≥ 1300），所以缺陷不表现为"少一列"，而是"按更宽的基准排出的
+/// 列被塞进更窄的列里"——名称列被挤扁。
+///
+/// 三截行为断言：
+///  1. 渲染宽度 == `min(内容区, workspace-max-width)`；
+///  2. 「类型」列在元素树里：`min(1672, 1360) = 1360 ≥ 1300`，而 1300 正是
+///     `LayoutMetrics.detail-level-of` 的最高档门槛——所以这条同时钉住了令牌的硬约束
+///     **`workspace-max-width` 必须 ≥ 1300px**（低于它「类型」列永远不可达、四列渲染
+///     是死代码）；
+///  3. 没有被挤扁：名称列吸收剩余宽度，实宽必须仍 > 400px，且最后一列不许越出限宽列
+///     （右侧只留 `PAGE_PADDING` 的页面内边距）。
+///
+/// 第四条是**结构性断言**，理由要看清：`workspace-max-width` 取 1360px 之后，
+/// 「列宽判定用不用 cap」在档位语义上不可区分——1360 与 1672 同为 3 档，任何纯行为断言
+/// 在这一档都是恒真的空转。要把耦合钉住只能断言 `main.slint` 那两行绑定本身
+/// （`workspace-width` 吃 `content-width` 并被上限钳制，`detail-level` 吃
+/// `workspace-width`）。它的真实价值是：上限一旦被改到 1300 以下，回退立刻可见。
+///
+/// 回退什么会红：把 `detail-level` 的输入改回 `root.content-width` → 第四截变红。
+#[test]
+fn check_detail_level_uses_capped_width() {
+    let mut failures: Vec<String> = Vec::new();
+    let (width, height) = ULTRA_WIDE;
+
+    let ui = boot((width, height));
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+    // 有行数据才能断言"名称列没有被挤扁"（名称列宽由表头与数据行共用同一份列宽体系）
+    ui.set_file_list(two_row_model(None));
+    settle();
+
+    let content = content_width(&ui, width);
+    let cap = ui.global::<crate::app::Theme>().get_workspace_max_width();
+    let column = workspace_column(&ui);
+    let column_width = column.size().width;
+
+    println!("J2 {width}x{height}: 内容区 {content:.0} 上限 {cap:.0} → 列宽 {column_width:.0}",);
+
+    // ① 渲染宽度必须是被钳制过的
+    expect(
+        &mut failures,
+        (column_width - content.min(cap)).abs() <= 1.0,
+        || {
+            format!(
+                "J2 {width}x{height}: 工作区列实测 {column_width:.1} ≠ min(内容区 {content:.0}, \
+                 上限 {cap:.0}) —— 渲染侧没有限宽"
+            )
+        },
+    );
+
+    // ② 「类型」列必须在元素树里（= detail-level 到了 3 档，= 上限 ≥ 1300px）
+    let kind = maybe_by_id(&ui, "CloudPage::kind-header");
+    println!(
+        "J2 {width}x{height}: 「类型」列表头在元素树里={}（列宽 {column_width:.0} 需 ≥ 1300）",
+        kind.is_some()
+    );
+    expect(&mut failures, kind.is_some(), || {
+        format!(
+            "J2 {width}x{height}: 「类型」列头不在元素树里 —— 列宽判定没有吃限宽之后的宽度，\
+             或 `Theme.workspace-max-width` 被改到了 1300px 以下（令牌的硬约束：必须 ≥ 1300px，\
+             否则四列渲染整体成为死代码）"
+        )
+    });
+
+    // ③ 没有被挤扁：名称列吸收剩余宽度，实宽仍然要够
+    let name_width = by_id(&ui, "CloudPage::name-header").size().width;
+    println!("J2 {width}x{height}: 名称列实宽={name_width:.1}");
+    expect(&mut failures, name_width > 400.0, || {
+        format!(
+            "J2 {width}x{height}: 名称列实宽只有 {name_width:.1}px（期望 > 400px）—— \
+             列被挤扁了：四列是按更宽的基准排进这条限宽列的"
+        )
+    });
+
+    // ④ 最后一列不许越出限宽列（右侧只剩页面内边距）
+    if let Some(kind) = &kind {
+        let kind_right = right(kind);
+        let limit = right(&column) - PAGE_PADDING;
+        println!("J2 {width}x{height}: 类型列右边缘={kind_right:.1} 限宽列内缘={limit:.1}");
+        expect(&mut failures, kind_right <= limit + 1.0, || {
+            format!(
+                "J2 {width}x{height}: 类型列右边缘 {kind_right:.1} 越出限宽列内缘 {limit:.1} \
+                 —— 列宽之和超过了可用宽度"
+            )
+        });
+    }
+
+    // ⑤ 结构性：`main.slint` 的两行绑定必须把 `detail-level` 喂 `workspace-width`
+    let has_workspace_width = MAIN_SLINT
+        .contains("property <length> workspace-width: Math.min(root.content-width, Theme.workspace-max-width);");
+    let has_capped_level = MAIN_SLINT.contains(
+        "property <int> detail-level: LayoutMetrics.detail-level-of(root.workspace-width);",
+    );
+    println!(
+        "J2: main.slint 绑定 workspace-width={has_workspace_width} detail-level(workspace)={has_capped_level}"
+    );
+    expect(&mut failures, has_workspace_width, || {
+        "J2: `main.slint` 里没有 `workspace-width = Math.min(root.content-width, \
+         Theme.workspace-max-width)` —— 列宽判定的输入丢了上限"
+            .to_string()
+    });
+    expect(&mut failures, has_capped_level, || {
+        "J2: D-19 回退 —— `detail-level` 不是用 `root.workspace-width` 判的。\
+         列宽判定必须与渲染宽度同源，否则超宽窗口会按 1672px 排四列、却只画 1360px 宽"
+            .to_string()
+    });
+
+    assert!(
+        failures.is_empty(),
+        "J2 列宽判定同源失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// J3（守 D-18）五处浮层必须声明投影，且几何全部引令牌。
+///
+/// 缺陷（D-18）：`Theme.shadow` 零引用——对话框卡片、账号菜单、右键菜单、Toast、Tooltip
+/// 全都没有投影，`screenshots/after/16-dialog.png` 里对话框就是贴在浅色遮罩上的一块纯白，
+/// Fluent 的 elevation 语义整体丢失。
+///
+/// **这是弱断言，但它守的东西是可复核的**：测试后端（`i-slint-backend-testing`）只暴露
+/// 几何与可访问性，读不到 `drop-shadow-*` 的取值；`BoxShadow` 又是**原生项而不是元素**，
+/// `ElementQuery` 根本看不见它（实测 `match_inherits("BoxShadow")` 恒为 0 个）。所以这条
+/// 断言拆成两截：
+///  1. **源码结构**：五个浮层块里各有一整套投影声明，取值全部引 `Theme`，没有字面量；
+///  2. **编译产物**：`<id>_shadow_<行号>` 这个 `BoxShadow` 字段必须真的出现在 slint 生成的
+///     代码里（`drop-shadow-*` 是语法糖，由编译器 `passes/lower_shadows.rs` 落成原生项，
+///     插在那个元素下面的 item 树里）。源码能证明"写了"，产物能证明"真的进了 item 树"。
+///
+/// **像素级判别在这条渲染路径上不存在**：`ui_preview` 走的软件渲染器把 `draw_box_shadow`
+/// 留成了空实现（`i-slint-renderer-software-1.17.1/lib.rs:3088-3096` 的 `// TODO`），所以
+/// 16 / 17 / 22 / 27 / 29 这几张基线图上**看不到**投影边缘——那是渲染后端的缺口，不是 UI
+/// 的缺陷；真实窗口（winit + femtoVG）会照常把它画出来。**别拿基线图当投影的证据。**
+///
+/// 回退什么会红：把五处 `drop-shadow-blur:` 全删掉（两截都红），或把取值改成 `12px`
+/// 这类字面量（第一截红）。
+#[test]
+fn check_flyout_has_elevation() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot(WIDE);
+    let theme = ui.global::<crate::app::Theme>();
+    let blur = theme.get_shadow_blur();
+    let offset = theme.get_shadow_offset_y();
+    println!("J3 令牌: shadow-blur={blur:.1} shadow-offset-y={offset:.1}");
+    expect(&mut failures, blur > 0.0 && offset > 0.0, || {
+        format!(
+            "J3: 投影几何令牌异常（shadow-blur={blur:.1} shadow-offset-y={offset:.1}）—— \
+             blur 为 0 时投影退化成一条硬边，offset 为 0 时会与描边重合"
+        )
+    });
+
+    for (source, tag, anchor) in [
+        (MAIN_SLINT, "Toast", "toast := Rectangle {"),
+        (MAIN_SLINT, "账号菜单", "menu := Rectangle {"),
+        (MAIN_SLINT, "右键菜单", "ctx := Rectangle {"),
+        (MAIN_SLINT, "Tooltip", "tooltip := Rectangle {"),
+        (DIALOG_SLINT, "对话框卡片", "card := Rectangle {"),
+    ] {
+        expect_elevated(&mut failures, source, tag, anchor);
+    }
+
+    // 第二截：编译产物里必须真的长出 `BoxShadow` 原生项。
+    // 读不到产物（例如有人只搬走了 target/）时打印一行跳过，不把它算成缺陷——
+    // 这一截的职责是"加固第一截"，不是成为新的脆弱点。
+    let generated = std::path::Path::new(env!("OUT_DIR")).join("main.rs");
+    match std::fs::read_to_string(&generated) {
+        Err(err) => println!(
+            "J3 跳过编译产物断言：读不到 {}（{err}）",
+            generated.display()
+        ),
+        Ok(code) => {
+            for id in ["toast", "menu", "ctx", "tooltip", "card"] {
+                let field = format!("{id}_shadow_");
+                let hit = code.contains(&field);
+                println!(
+                    "J3 编译产物: `{field}<行号> : sp::BoxShadow` {}",
+                    if hit { "存在" } else { "缺失" }
+                );
+                expect(&mut failures, hit, || {
+                    format!(
+                        "J3: D-18 回退 —— slint 生成的代码里没有 `{field}<行号> : sp::BoxShadow`，\
+                         说明 `{id}` 那一处的 `drop-shadow-*` 没有被落成原生项（投影不会画出来）"
+                    )
+                });
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "J3 浮层投影失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

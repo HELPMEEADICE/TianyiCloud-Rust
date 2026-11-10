@@ -576,5 +576,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     shoot(&ui, &window, &out, "27-cloud-sort-menu", 1180, 760)?;
     ui.set_sort_menu_open(false);
 
+    // ---------------- 28. 云盘（超宽窗口 1920×1080，D-19 的视觉证据） ----------------
+    // 修之前：内容区 1672px，文件行被拉成一条线、右侧一大片空白。
+    // 修之后：工作区列被 `Theme.workspace-max-width`（1360px）限住并居中，左右各留
+    // 156px；同时 `min(1672, 1360) = 1360 ≥ 1300`，四列（名称 / 大小 / 修改时间 / 类型）
+    // 全开——这张图同时是"限宽生效"与"限宽没把类型列吃掉"的证据。
+    ui.set_selected_count(0);
+    ui.set_status_text(SharedString::from("8 个项目"));
+    ui.set_file_list(ModelRc::new(VecModel::from(demo_files())));
+    shoot(&ui, &window, &out, "28-cloud-wide-1920", 1920, 1080)?;
+
+    // ---------------- 29. 账号菜单打开态（1180×760，D-18 的视觉证据） ----------------
+    // 账号菜单是唯一一个"常驻可点、平时没有截图覆盖"的浮层：它只在点左下角头像后出现，
+    // 旧的 22 只覆盖了右键菜单、27 只覆盖了排序浮层。D-18 修完之后它周围应该有一圈
+    // 柔和的投影（`Theme.shadow` + `shadow-blur` 16px / `shadow-offset-y` 4px）。
+    ui.set_account_menu_open(true);
+    shoot(&ui, &window, &out, "29-account-menu", 1180, 760)?;
+    ui.set_account_menu_open(false);
+
     Ok(())
 }

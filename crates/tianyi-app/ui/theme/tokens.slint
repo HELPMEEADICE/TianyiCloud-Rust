@@ -111,6 +111,19 @@ export global Theme {
     out property <color> tooltip-text: #FFFFFF;
     out property <color> tooltip-stroke: dark ? #4A4A4A : #1F1F1F;
 
+    // ---------------------------------------------------------------- 投影
+    //
+    // Fluent 的 elevation：卡片与浮层靠一层柔和的投影从背景里浮起来，而不是靠更深一档
+    // 的描边。颜色走上面已有的 `shadow`（明暗两套都已定义），这里只补几何两档——
+    // 组件里一律引令牌，不许再写 16px / 4px 这类数值字面量，改一处就是改全仓。
+    //
+    // 只给真正的「浮起来的东西」用：对话框卡片、右键菜单、账号菜单、Toast、Tooltip。
+    // 不要加在铺满窗口的遮罩上——那等于沿窗口四边描一圈阴影。
+    /// 投影模糊半径（浮层边缘的柔化范围）
+    out property <length> shadow-blur: 16px;
+    /// 投影向下偏移（Fluent 的投影只向下，不向上）
+    out property <length> shadow-offset-y: 4px;
+
     // ---------------------------------------------------------------- 圆角
     out property <length> radius-control: 4px;
     out property <length> radius-card: 8px;
@@ -159,6 +172,21 @@ export global Theme {
     out property <length> nav-item-height: 36px;
     /// 内容区最大宽度（超宽窗口下避免行被拉成一条线）
     out property <length> content-max-width: 1040px;
+    /// 工作区（云盘页那条「命令栏 → 操作栏 → 提示条 → 列表 → 状态栏」的列）最大宽度。
+    ///
+    /// 为什么**不**复用 `content-max-width`（1040px）：1040 是传输 / 下载直链页的列表宽度，
+    /// 那两个页面是「图标 + 两段文字」的行，宽到 1040 一行就已经读不动了；云盘页是四列
+    /// 表格（名称 / 大小 / 修改时间 / 类型），固定列宽 20 + 96 + 156 + 88 加内边距与间距
+    /// 已经吃掉 400px 上下，1040 会把名称列压到 600 出头——而且 1040 < 1300 会先把页面
+    /// **永久卡在两列档**（见下），四列表头整体变成死代码。
+    ///
+    /// 硬约束：**必须 ≥ 1300px**。1300 是 `LayoutMetrics.detail-level-of` 的最高档门槛，
+    /// 而 `main.slint` 的 `detail-level` 吃的正是「限宽之后」的宽度
+    /// （`detail-level-of(root.workspace-width)`）。一旦本值被改到 1300 以下，超宽窗口下
+    /// `detail-level` 永远到不了 3，「类型」列永远不可达，`kind-header` 与 `FileRow`
+    /// 的类型列就成了永远渲染不出来的死代码。取 1360px：比门槛留 60px 余量，同时明显
+    /// 窄于 1920 窗口的内容区（1672px），限宽才真的起作用。
+    out property <length> workspace-max-width: 1360px;
     /// 设置页单列最大宽度（对齐 Win11 设置应用）
     out property <length> settings-max-width: 880px;
     /// 空 / 加载 / 错误状态的文字组最大宽度
