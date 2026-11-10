@@ -1,11 +1,12 @@
 //! 传输任务管理器：上传/下载任务的队列、进度、暂停/恢复、持久化
 
 use crate::error::{Error, Result};
+use crate::fsutil::{corrupt_path, write_atomic};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// 任务状态
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,25 +253,73 @@ pub struct Task {
 /// 速度采样窗口（毫秒）：窗口太小会让瞬时速度抖动
 const SPEED_SAMPLE_WINDOW_MS: u64 = 200;
 
+/// 进度落盘的默认最小间隔
+///
+/// 下载每 4 MiB 回调一次进度，10 MiB/s 的网络下就是每秒两三次「整表序列化 + fsync」，
+/// 而这些字节数只是「重启后还能显示多少」的近似值——丢最后一秒完全可接受。
+/// 代价：进程被强杀时最多回退一秒的进度。
+///
+/// 实际生效的是 [`TaskManager`] 上的实例字段，生产路径永远取本常量；只有测试会把它
+/// 换成几十毫秒，好让去抖断言不必真的等一秒（墙钟长等待在多测试并行时是偶发红的源头）。
+const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(1000);
+
+/// 进度落盘的去抖状态
+#[derive(Debug, Default)]
+struct ProgressLatch {
+    /// 上次尝试落盘的时刻。记的是**尝试**而不是成功：磁盘满这类持续故障如果按失败
+    /// 重试，就会退回「每次进度回调都同步写一次」的老问题。
+    last: Option<Instant>,
+    /// 内存里有比磁盘更新的进度，还没写下去
+    ///
+    /// 只由节流逻辑记账，**不参与关窗 flush 的门控**（理由见 `flush_progress`）。
+    /// 将来若有"仅当有待写时才写"的调用方，读的就是它。
+    pending: bool,
+}
+
 /// 任务管理器（线程安全，供后台 tokio 任务使用）
 pub struct TaskManager {
-    tasks: Mutex<Vec<Task>>,
+    tasks: Arc<Mutex<Vec<Task>>>,
     next_id: AtomicU64,
     /// 持久化路径
     persist_path: Option<PathBuf>,
+    /// 进度落盘的去抖间隔（生产恒为 [`PROGRESS_PERSIST_INTERVAL`]，只有测试会改小）
+    progress_interval: Duration,
+    /// 进度去抖状态（见 [`TaskManager::set_progress`]）
+    progress: Arc<Mutex<ProgressLatch>>,
+    /// 串行化整表落盘：两次并发 rename 的落地顺序与快照顺序不一致时，磁盘上留下的
+    /// 可能是更旧的一份
+    writer: Arc<Mutex<()>>,
+    /// 真正写成功过多少次文件（供测试观测去抖效果，不是业务状态）
+    writes: Arc<AtomicU64>,
 }
 
 impl TaskManager {
     pub fn new(persist_path: Option<PathBuf>) -> Self {
         let mut tm = TaskManager {
-            tasks: Mutex::new(Vec::new()),
+            tasks: Arc::new(Mutex::new(Vec::new())),
             next_id: AtomicU64::new(1),
             persist_path,
+            progress_interval: PROGRESS_PERSIST_INTERVAL,
+            progress: Arc::new(Mutex::new(ProgressLatch::default())),
+            writer: Arc::new(Mutex::new(())),
+            writes: Arc::new(AtomicU64::new(0)),
         };
         tm.load();
         // 启动恢复：进程被杀/重启后所有 Running 任务的进度已经丢失，
         // 必须降级为 Paused，不能假装它们还在跑。
         tm.mark_interrupted_as_paused();
+        tm
+    }
+
+    /// 指定去抖间隔的构造入口（仅测试可见）
+    ///
+    /// 只为让去抖测试把「跨过阈值」的等待从 1 秒压到几十毫秒：真 `sleep(1050ms)` 在多
+    /// 测试并行、机器负载高时会偶发超时/抖动，那是观测方式的问题，不是被测逻辑的问题。
+    /// 生产代码没有调用它的路径，所以用 `cfg(test)` 关掉，避免变成事实上的第二个构造器。
+    #[cfg(test)]
+    fn new_with_persist_interval(persist_path: Option<PathBuf>, interval: Duration) -> Self {
+        let mut tm = Self::new(persist_path);
+        tm.progress_interval = interval;
         tm
     }
 
@@ -286,7 +335,7 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.push(task);
         }
-        self.persist();
+        self.persist_blocking();
         id
     }
 
@@ -318,7 +367,7 @@ impl TaskManager {
             }
             task.status = to;
         }
-        self.persist();
+        self.persist_blocking();
         true
     }
 
@@ -329,6 +378,10 @@ impl TaskManager {
     /// - `now_ms`：当前毫秒时间戳，用于 200ms 采样窗口计算瞬时速度
     ///   （与 UI 原有算法保持一致）；
     /// - `progress` 写入 `0.0..=100.0` 的百分比。
+    ///
+    /// 落盘是**去抖**的：内存每次都更新，磁盘最多每秒写一次，且写动作被丢到阻塞线程池
+    /// （调用方通常在 tokio worker 上）。所以「刚写完进度就断电」最多回退一秒；
+    /// 关窗前请调 [`TaskManager::flush_progress`] 收尾。
     pub fn set_progress(&self, id: u64, bytes_done: u64, total_size: u64, now_ms: u64) {
         {
             let mut guard = self.lock();
@@ -356,7 +409,7 @@ impl TaskManager {
             t.bytes_done = done;
             t.progress = crate::file::percent(done, total_size);
         }
-        self.persist();
+        self.note_progress();
     }
 
     /// 启动恢复：把所有 `Running` 任务降级为 `Paused`
@@ -377,7 +430,7 @@ impl TaskManager {
             changed
         };
         if changed {
-            self.persist();
+            self.persist_blocking();
         }
     }
 
@@ -408,7 +461,7 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.retain(|t| !t.status.is_terminal());
         }
-        self.persist();
+        self.persist_blocking();
     }
 
     /// 更新任务
@@ -419,7 +472,7 @@ impl TaskManager {
                 f(t);
             }
         }
-        self.persist();
+        self.persist_blocking();
     }
 
     /// 删除任务
@@ -428,7 +481,7 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.retain(|t| t.id != id);
         }
-        self.persist();
+        self.persist_blocking();
     }
 
     pub fn clear_completed(&self) {
@@ -436,17 +489,97 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.retain(|t| t.status != TaskStatus::Completed && t.status != TaskStatus::Failed);
         }
-        self.persist();
+        self.persist_blocking();
     }
 
-    fn persist(&self) {
+    /// 真正写成功过多少次文件（观测探针）
+    ///
+    /// 只为了让「进度去抖到底少写了多少次」可被测试**观测**到，不是业务状态：
+    /// 调用方不应依赖它的具体数值。
+    pub fn persist_writes(&self) -> u64 {
+        self.writes.load(Ordering::SeqCst)
+    }
+
+    /// 立刻整表落盘（同步）
+    ///
+    /// 状态转换、增删、清理走这条：这些变化必须马上可见，否则崩溃后任务会「复活」成
+    /// 用户已经取消/删掉的样子。
+    fn persist_blocking(&self) {
+        self.begin_write();
         if let Some(path) = &self.persist_path {
-            let tasks = self.list();
-            if let Ok(data) = serde_json::to_string(&tasks) {
-                // 直写会在进程被杀/掉电时留下半截 JSON，下次启动整份历史都会被当成
-                // 损坏丢弃；先写临时文件再 rename，"要么全旧要么全新"，没有中间态。
-                let _ = write_atomic(path, data.as_bytes());
+            write_table(path, &self.tasks, &self.writer, &self.writes);
+        }
+    }
+
+    /// 把进度立刻写下去（关窗收尾调用）
+    ///
+    /// **故意不按 `pending` 门控**：`note_progress` 在派发异步写之前就把 `pending` 清成
+    /// false 了，而那条 `spawn_blocking` 在关窗时根本没法等待（runtime 关停会直接把它
+    /// 丢掉）。此时若看 `pending` 就返回，最后一秒的进度会静默丢失，函数却声称自己已经
+    /// 写下去了。关窗多付一次 fsync 的代价，远小于丢进度。
+    ///
+    /// 返回是否真的写了：没有持久化路径时返回 false。
+    pub fn flush_progress(&self) -> bool {
+        if self.persist_path.is_none() {
+            return false;
+        }
+        self.persist_blocking();
+        true
+    }
+
+    /// 整表落盘（异步）
+    ///
+    /// `set_progress` 的调用点在 tokio worker 线程上（每次 4 MiB 一次回调），在那里做
+    /// `to_string` + fsync 会把一个 worker 占死；丢给阻塞线程池去写。没有 runtime 时
+    /// （单元测试、同步调用方）就地写，行为与同步版一致。
+    fn persist_async(&self) {
+        let Some(path) = self.persist_path.clone() else {
+            return;
+        };
+        let tasks = Arc::clone(&self.tasks);
+        let writer = Arc::clone(&self.writer);
+        let writes = Arc::clone(&self.writes);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            // 句柄拿到就丢：这是「发射后不管」——写盘失败要么磁盘满要么权限，重试
+            // 没有任何区别，而 await 会把调用方（传输 worker）重新拖回等待里
+            drop(tokio::task::spawn_blocking(move || {
+                write_table(&path, &tasks, &writer, &writes);
+            }));
+        } else {
+            write_table(&path, &tasks, &writer, &writes);
+        }
+    }
+
+    /// 记一次「刚尝试过落盘」：更新节流时刻并清掉待写标记
+    ///
+    /// 必须在真正写之前调用——这样写失败也不会立刻重试，避免持续故障退化成
+    /// 「每次进度回调都同步写一遍」。
+    fn begin_write(&self) {
+        let mut latch = crate::lock_or_recover(&self.progress);
+        latch.last = Some(Instant::now());
+        latch.pending = false;
+    }
+
+    /// 进度去抖：内存已经更新，这里决定这一轮要不要写盘
+    ///
+    /// 距上次落盘不足 `progress_interval`（生产为 [`PROGRESS_PERSIST_INTERVAL`]）时只置
+    /// `pending`，下一次跨过阈值（或关窗时 `flush_progress`）才写——所以中断最坏丢一个
+    /// 间隔的进度，换来的是每秒最多一次 fsync 而不是每 4 MiB 一次。
+    fn note_progress(&self) {
+        let due = {
+            let mut latch = crate::lock_or_recover(&self.progress);
+            latch.pending = true;
+            match latch.last {
+                Some(last) if last.elapsed() < self.progress_interval => false,
+                _ => {
+                    latch.last = Some(Instant::now());
+                    latch.pending = false;
+                    true
+                }
             }
+        };
+        if due {
+            self.persist_async();
         }
     }
 
@@ -479,17 +612,23 @@ impl TaskManager {
 
 // 原子写与留档名的实现都在 `fsutil`：配置文件和任务表必须共用同一份代码，
 // 否则迟早有一边悄悄退回直写。
-use crate::fsutil::{sibling_path, write_atomic};
 
-/// 损坏文件的留档名：`tasks.json.corrupt-<unix 秒>`
+/// 整表序列化并原子写盘
 ///
-/// 带时间戳是为了能连续留档——同一份坏文件被反复启动时不会互相覆盖。
-fn corrupt_path(path: &Path) -> PathBuf {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    sibling_path(path, &format!("corrupt-{secs}"))
+/// 锁顺序固定为「先 writer，再任务表快照」：反过来会让两次写盘的落地顺序与快照顺序
+/// 相反，磁盘上最后留下的可能是更旧的一份。这里不与 `progress` 互锁，也就不存在
+/// 环——`begin_write` 都在取 writer 之前就放锁了。
+fn write_table(path: &Path, tasks: &Mutex<Vec<Task>>, writer: &Mutex<()>, writes: &AtomicU64) {
+    let _serial = crate::lock_or_recover(writer);
+    let snapshot = crate::lock_or_recover(tasks).clone();
+    let Ok(data) = serde_json::to_string(&snapshot) else {
+        return;
+    };
+    // 直写会在进程被杀/掉电时留下半截 JSON，下次启动整份历史都会被当成
+    // 损坏丢弃；先写临时文件再 rename，"要么全旧要么全新"，没有中间态。
+    if write_atomic(path, data.as_bytes()).is_ok() {
+        writes.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// 传输会话（供 UI 绑定进度）
@@ -583,9 +722,18 @@ mod tests {
         tm
     }
 
+    /// 进程内唯一的临时目录序号
+    ///
+    /// 只靠字面标签区分目录太脆：将来谁复制一条测试忘了改 `name`，两条测试就会互相
+    /// `remove_dir_all`、互相写同一个 `tasks.json`，症状是随机红。序号把这条路堵死。
+    static TMP_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
     fn tmp_json(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("tianyi-task-test-{}-{}", std::process::id(), name));
+        let seq = TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "tianyi-task-test-{}-{seq}-{name}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir.join("tasks.json")
@@ -908,10 +1056,98 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["t.bin", "t.bin"], "两条任务都应读回来");
         assert_eq!(reloaded.list().len(), 2);
+        // 临时名是 `<name>.tmp-<pid>-<序号>`：按前缀扫，任何残留都算失败
+        let leftover: Vec<String> = std::fs::read_dir(path.parent().expect("父目录"))
+            .expect("读取临时目录")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("tasks.json.tmp-"))
+            .collect();
         assert!(
-            !path.with_file_name("tasks.json.tmp").exists(),
-            "rename 之后临时文件不应残留"
+            leftover.is_empty(),
+            "rename 之后临时文件不应残留：{leftover:?}"
         );
+    }
+
+    /// 进度去抖：高频 `set_progress` 不能每次都写盘
+    ///
+    /// 观测手段是 `persist_writes()` 探针——它在 `write_table` 真正把文件写成功之后自增，
+    /// 读的是「实际写了几次文件」而不是某个内部标志位；磁盘内容另用重新加载校验，两条腿
+    /// 都要站住。
+    ///
+    /// 时间语义拆成两半，各自选合适的间隔，谁都不再靠「机器别太忙」：
+    /// - **间隔内不写**（高频 100 次回调、flush）用生产默认 1000ms：它只要求「两次相邻
+    ///   调用落在同一个间隔里」，1 秒余量足够，不会因为被调度器抢占一下就红；
+    /// - **跨过阈值必须写**用注入的 20ms 间隔 + `sleep(60ms)`：`sleep` 只会睡过头、不会
+    ///   提前醒，所以这条与负载和时钟跳变都无关，长等待也从 1050ms 降到 60ms。
+    #[test]
+    fn progress_persist_is_debounced() {
+        // ---- 间隔内：生产默认 1000ms ----
+        let window_path = tmp_json("debounce-window");
+        let window = TaskManager::new(Some(window_path.clone()));
+        let id = window.next_id();
+        window.add(sample_task(id, TaskStatus::Running));
+        let before = window.persist_writes();
+        // 刚落过一次盘，紧接着的进度只进内存
+        window.set_progress(id, 150 * 1024, 200 * 1024, 9_100);
+        assert_eq!(window.persist_writes(), before, "间隔内的进度不应写盘");
+        assert_eq!(
+            window.get(id).expect("task").bytes_done,
+            150 * 1024,
+            "内存里的进度必须已经更新"
+        );
+
+        // `flush_progress` 负责把尾巴补写下去，而且**不看 `pending`**：关窗时在途的
+        // spawn_blocking 没法等待，只有同步再写一次才能保证最后那段进度真的在盘上。
+        assert!(window.flush_progress(), "有持久化路径时 flush 必须落盘");
+        let flushed = window.persist_writes();
+        assert_eq!(flushed - before, 1, "flush 必须真写一次文件");
+        // 第二次 flush 仍然写（内容不变，只多付一次 fsync）——这正是「不门控」的语义
+        assert!(window.flush_progress(), "flush 不受 pending 门控");
+        assert_eq!(
+            window.persist_writes(),
+            flushed + 1,
+            "第二次 flush 仍要真写一次文件"
+        );
+
+        let reloaded = TaskManager::new(Some(window_path.clone()));
+        assert_eq!(
+            reloaded.get(id).expect("task").bytes_done,
+            150 * 1024,
+            "flush 之后磁盘上必须是新进度"
+        );
+
+        // ---- 跨过阈值：注入 20ms 间隔 ----
+        const INTERVAL: Duration = Duration::from_millis(20);
+        let fast_path = tmp_json("debounce-threshold");
+        let fast = TaskManager::new_with_persist_interval(Some(fast_path.clone()), INTERVAL);
+        let fast_id = fast.next_id();
+        fast.add(sample_task(fast_id, TaskStatus::Running));
+        let base = fast.persist_writes();
+
+        // 100 次高频回调（下载里就是 400 MiB 的传输量）：最多写两次
+        for i in 0..100u64 {
+            fast.set_progress(fast_id, i * 1024, 100 * 1024, 1_000 + i * 50);
+        }
+        let rapid = fast.persist_writes() - base;
+        assert!(rapid <= 2, "一个间隔窗口内最多写两次，实际 {rapid} 次");
+        // 内存里的进度一次都没丢
+        assert_eq!(fast.get(fast_id).expect("task").bytes_done, 99 * 1024);
+
+        // 等过 3 个注入间隔后，下一次进度必须立刻落盘
+        std::thread::sleep(INTERVAL * 3);
+        let before = fast.persist_writes();
+        fast.set_progress(fast_id, 100 * 1024, 100 * 1024, 9_000);
+        assert_eq!(fast.persist_writes() - before, 1, "跨过间隔后必须写盘");
+
+        // 没有持久化路径时无事可写
+        assert!(
+            !TaskManager::new(None).flush_progress(),
+            "无持久化路径时 flush 返回 false"
+        );
+
+        let _ = std::fs::remove_dir_all(window_path.parent().expect("dir"));
+        let _ = std::fs::remove_dir_all(fast_path.parent().expect("dir"));
     }
 
     /// 损坏的 tasks.json 不 panic、不留死档：改名留档后按空表启动

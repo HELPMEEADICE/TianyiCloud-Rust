@@ -1,6 +1,7 @@
 //! 应用配置与账号持久化
 
 use crate::error::{Error, Result};
+use crate::fsutil::corrupt_path;
 use crate::models::{AccountConfig, TokenInfo};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -279,7 +280,23 @@ impl AppStore {
         }
         let data = std::fs::read_to_string(&self.config_path)
             .map_err(|e| Error::Config(format!("read config: {e}")))?;
-        AppConfig::from_json_str(&data)
+        match AppConfig::from_json_str(&data) {
+            Ok(cfg) => Ok(cfg),
+            Err(e) => {
+                // 解析失败不再静默丢设置：先改名留档（用户和我们事后都还能把内容捞回来），
+                // **再**写默认值——顺序不能反：留档是 rename 走原路径，先写默认值会把
+                // 要留档的文件覆盖掉。之后按默认配置启动，一个坏文件不该让客户端起不来。
+                let archived = corrupt_path(&self.config_path);
+                log::warn!(
+                    "配置文件解析失败（{e}），已留档为 {}，本次按默认配置启动",
+                    archived.display()
+                );
+                let _ = std::fs::rename(&self.config_path, &archived);
+                let cfg = AppConfig::default_config();
+                self.save_config(&cfg)?;
+                Ok(cfg)
+            }
+        }
     }
 
     pub fn save_config(&self, cfg: &AppConfig) -> Result<()> {
@@ -305,7 +322,21 @@ impl AppStore {
         }
         let data = std::fs::read_to_string(&self.accounts_path)
             .map_err(|e| Error::Config(format!("read accounts: {e}")))?;
-        serde_json::from_str(&data).map_err(|e| Error::Config(format!("parse accounts: {e}")))
+        match serde_json::from_str::<Accounts>(&data) {
+            Ok(accounts) => Ok(accounts),
+            Err(e) => {
+                // 与 `tasks.json` 同一条规则：坏文件改名留档后按空账号表启动。
+                // 不在这里补写一份空文件——空账号表是「还没登录」的合法状态，
+                // 下次登录 `save_accounts` 自然会把它建起来。
+                let archived = corrupt_path(&self.accounts_path);
+                log::warn!(
+                    "账号文件解析失败（{e}），已留档为 {}，本次按空账号表启动",
+                    archived.display()
+                );
+                let _ = std::fs::rename(&self.accounts_path, &archived);
+                Ok(Accounts::default())
+            }
+        }
     }
 
     pub fn save_accounts(&self, accounts: &Accounts) -> Result<()> {
@@ -582,9 +613,16 @@ mod tests {
         let loaded = store.load_config().expect("读回配置");
         assert_eq!(loaded.upload_thread, 7, "覆盖后应读到新值");
         assert_eq!(loaded.download_dir, cfg.download_dir);
+        // 临时名是 `<name>.tmp-<pid>-<序号>`：这里按前缀扫，任何残留都算失败
+        let leftover: Vec<String> = std::fs::read_dir(&dir)
+            .expect("读取临时目录")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("config.json.tmp-"))
+            .collect();
         assert!(
-            !dir.join("config.json.tmp").exists(),
-            "rename 之后临时文件不应残留"
+            leftover.is_empty(),
+            "rename 之后临时文件不应残留：{leftover:?}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

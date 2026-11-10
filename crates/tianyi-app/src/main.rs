@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tianyi_core::lock_or_recover;
 
 /// 传输面板刷新间隔（毫秒）
 const TICK_MS: u64 = 200;
@@ -123,7 +124,7 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
             winit::event::WindowEvent::HoveredFile(_) => {
                 state.hovering.store(true, Ordering::SeqCst);
                 let ui = ui.clone();
-                let target = state.hover_target.lock().unwrap().clone();
+                let target = lock_or_recover(&state.hover_target).clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(app) = ui.upgrade() {
                         app.set_drop_active(true);
@@ -142,21 +143,21 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
             }
             winit::event::WindowEvent::DroppedFile(path) => {
                 state.hovering.store(false, Ordering::SeqCst);
-                state.pending.lock().unwrap().push(path.clone());
+                lock_or_recover(&state.pending).push(path.clone());
                 // 同一批文件会在几十毫秒内陆续到达：每次调度都带批次号，
                 // 只有批次号仍然匹配的定时器才消费路径，避免重复上传。
                 let batch_id = {
-                    let mut b = state.batch.lock().unwrap();
+                    let mut b = lock_or_recover(&state.batch);
                     *b += 1;
                     *b
                 };
                 let ui = ui.clone();
                 slint::Timer::single_shot(Duration::from_millis(80), move || {
-                    let current = *state.batch.lock().unwrap();
+                    let current = *lock_or_recover(&state.batch);
                     if current != batch_id {
                         return; // 已有更新的批次，交给它统一处理
                     }
-                    let paths: Vec<PathBuf> = state.pending.lock().unwrap().drain(..).collect();
+                    let paths: Vec<PathBuf> = lock_or_recover(&state.pending).drain(..).collect();
                     if paths.is_empty() {
                         return;
                     }

@@ -5,30 +5,54 @@
 use serde::{Deserialize, Serialize};
 
 /// 会话刷新 Token 信息
+///
+/// 每个字段都带 `#[serde(default)]`：账号文件是跨版本共用的，少一个字段就让整份
+/// `accounts.json` 解析失败，等于所有已保存的登录态一起丢；按空串兜底的成本则只是一次
+/// 重新登录。新增字段时同样必须带默认值。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenInfo {
+    #[serde(default)]
     pub access_token: String,
+    #[serde(default)]
     pub refresh_token: String,
+    #[serde(default)]
     pub session_key: String,
+    #[serde(default)]
     pub session_secret: String,
+    #[serde(default)]
     pub family_session_key: String,
+    #[serde(default)]
     pub family_session_secret: String,
+    #[serde(default)]
     pub login_name: String,
 }
 
 /// 账号配置（持久化到磁盘）
+///
+/// 字段全部带 `#[serde(default)]`：旧版文件缺字段也照样能加载。删掉曾经的 `password`
+/// 不需要写迁移——写入侧从未给它赋过值（磁盘上恒为 `""`），而 serde 默认忽略未知字段，
+/// 所以含 `password` 的旧文件仍然能正常读入。密码是登录时一次性使用的输入，从不落盘。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AccountConfig {
+    #[serde(default)]
     pub login_type: String,
+    #[serde(default)]
     pub username: String,
-    pub password: String,
+    #[serde(default)]
     pub family_id: String,
+    #[serde(default)]
     pub space_type: String,
+    #[serde(default)]
     pub order_by: String,
+    #[serde(default)]
     pub order_direction: String,
+    #[serde(default)]
     pub upload_method: String,
+    #[serde(default)]
     pub upload_thread: u32,
+    #[serde(default)]
     pub rapid_upload: bool,
+    #[serde(default)]
     pub token: TokenInfo,
 }
 
