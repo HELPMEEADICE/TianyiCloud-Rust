@@ -2,7 +2,6 @@
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -478,29 +477,9 @@ impl TaskManager {
     }
 }
 
-/// 原子覆盖写入：同目录临时文件 → `fsync` → rename
-///
-/// 临时文件必须与目标**同目录**：`%TEMP%` 与配置目录经常不在同一个卷上，跨卷 rename
-/// 会直接失败（EXDEV）。先 `sync_all` 再 rename，rename 成功时内容已经在盘上，
-/// 不会出现"文件名换了、内容却还在页缓存里丢了"。
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = sibling_path(path, "tmp");
-    {
-        let mut file = std::fs::File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    std::fs::rename(&tmp, path)
-}
-
-/// 与目标同目录、同名前缀的兄弟路径：`tasks.json` + `tmp` → `tasks.json.tmp`
-fn sibling_path(path: &Path, suffix: &str) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    path.with_file_name(format!("{name}.{suffix}"))
-}
+// 原子写与留档名的实现都在 `fsutil`：配置文件和任务表必须共用同一份代码，
+// 否则迟早有一边悄悄退回直写。
+use crate::fsutil::{sibling_path, write_atomic};
 
 /// 损坏文件的留档名：`tasks.json.corrupt-<unix 秒>`
 ///

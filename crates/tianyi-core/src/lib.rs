@@ -8,6 +8,7 @@ pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod file;
+mod fsutil;
 pub mod models;
 pub(crate) mod retry;
 pub mod task;

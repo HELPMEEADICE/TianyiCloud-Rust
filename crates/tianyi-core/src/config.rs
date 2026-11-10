@@ -227,7 +227,10 @@ impl AppStore {
             );
         }
         let data = serde_json::to_string_pretty(&value)?;
-        std::fs::write(&self.config_path, data).map_err(|e| Error::Config(e.to_string()))
+        // 直写会在中途失败时把配置文件截成半截（读回即解析失败，等于丢设置），
+        // 统一走 fsutil 的「临时文件 → fsync → rename」。
+        crate::fsutil::write_atomic(&self.config_path, data.as_bytes())
+            .map_err(|e| Error::Config(e.to_string()))
     }
 
     pub fn load_accounts(&self) -> Result<Accounts> {
@@ -241,7 +244,9 @@ impl AppStore {
 
     pub fn save_accounts(&self, accounts: &Accounts) -> Result<()> {
         let data = serde_json::to_string_pretty(accounts)?;
-        std::fs::write(&self.accounts_path, data).map_err(|e| Error::Config(e.to_string()))
+        // `save_token` 也走这里：账号文件一次写坏就等于所有已保存的登录态全丢
+        crate::fsutil::write_atomic(&self.accounts_path, data.as_bytes())
+            .map_err(|e| Error::Config(e.to_string()))
     }
 
     /// 保存单个账号的 token 信息
@@ -433,6 +438,35 @@ mod tests {
         );
         let loaded = store.load_config().expect("load config");
         assert_eq!(loaded.version, AppConfig::CURRENT_VERSION);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 原子写：覆盖已存在的配置文件成功，读回等价，且不残留 `.tmp`
+    #[test]
+    fn test_save_config_overwrites_atomically() {
+        let dir = std::env::temp_dir().join(format!(
+            "tianyi-config-atomic-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AppStore::new(Some(dir.clone())).expect("store");
+
+        let mut cfg = AppConfig::default_config();
+        cfg.upload_thread = 2;
+        store.save_config(&cfg).expect("首次保存");
+        // 覆盖已存在的目标：rename 在 Windows 上必须是替换而不是失败
+        cfg.upload_thread = 7;
+        store.save_config(&cfg).expect("覆盖保存");
+
+        let loaded = store.load_config().expect("读回配置");
+        assert_eq!(loaded.upload_thread, 7, "覆盖后应读到新值");
+        assert_eq!(loaded.download_dir, cfg.download_dir);
+        assert!(
+            !dir.join("config.json.tmp").exists(),
+            "rename 之后临时文件不应残留"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
