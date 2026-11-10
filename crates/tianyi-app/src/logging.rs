@@ -28,6 +28,13 @@ const FILE_PREFIX: &str = "tianyi-cloud.";
 const FILE_SUFFIX: &str = ".log";
 /// 保留天数：严格超过这个天数的旧日志在启动时删除
 const KEEP_DAYS: i64 = 7;
+/// 单个日志文件的体积上限
+///
+/// 只按天滚动挡不住"一天就把磁盘写满"：调试级日志 + 长时间挂机时单日文件可以到几百 MB。
+/// 超过这个上限就滚成 `.log.1`，并把历史逐级后移，最多留 [`MAX_HISTORY`] 份。
+const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+/// 单日最多保留的历史分段数（`.log.1` … `.log.3`）
+const MAX_HISTORY: usize = 3;
 
 /// 已解析好的日志目录（`init` 与设置页必须看到同一个路径）
 static LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -127,9 +134,39 @@ pub fn should_prune(file_date: LogDate, today: LogDate) -> bool {
     today.days_from_epoch() - file_date.days_from_epoch() > KEEP_DAYS
 }
 
+/// 写入前判断：已有字节 + 本次要写的字节是否超过单文件上限
+///
+/// 用「大于」而不是「大于等于」：正好写满上限的那一条仍然落盘，否则日志会在整数边界上
+/// 反复滚动，每次都白白 rename 三份历史文件。
+pub fn should_rotate(current_size: u64, incoming: usize, limit: u64) -> bool {
+    current_size.saturating_add(incoming as u64) > limit
+}
+
+/// 历史分段的文件名：`tianyi-cloud.2024-05-06.log` + 1 → `tianyi-cloud.2024-05-06.log.1`
+fn history_path(base: &Path, n: usize) -> PathBuf {
+    let name = base
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    base.with_file_name(format!("{name}.{n}"))
+}
+
 /// 从文件名反解日期；不是本程序的日志文件时返回 `None`
+///
+/// 滚动的历史分段（`….log.2`）与主文件同属一天，保留期按同一条线算，否则历史分段会在
+/// 目录里永远留着。
 fn parse_log_date(name: &str) -> Option<LogDate> {
-    let body = name.strip_prefix(FILE_PREFIX)?.strip_suffix(FILE_SUFFIX)?;
+    let main = match name.strip_suffix(FILE_SUFFIX) {
+        Some(main) => main,
+        None => {
+            let (head, tail) = name.rsplit_once('.')?;
+            if tail.is_empty() || !tail.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            head.strip_suffix(FILE_SUFFIX)?
+        }
+    };
+    let body = main.strip_prefix(FILE_PREFIX)?;
     let mut parts = body.split('-');
     let year: i64 = parts.next()?.parse().ok()?;
     let month: u32 = parts.next()?.parse().ok()?;
@@ -298,6 +335,29 @@ impl FileWriter {
         self.dir.join(log_file_name_for(self.date))
     }
 
+    /// 当前文件已写字数（取不到元数据时按 0：宁可少滚一次，也不要因为读不到大小停写）
+    fn size(&self) -> u64 {
+        self.file.metadata().map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// 把当前文件滚成 `.1`，历史逐级后移，最老的一份丢弃
+    fn rotate(&mut self) -> std::io::Result<()> {
+        let base = self.path();
+        let _ = self.file.sync_data();
+        // 先删最老的一份，再把 .N 逐级后移，最后让主文件变成 .1：总数因此永远是 ≤ MAX_HISTORY
+        let _ = std::fs::remove_file(history_path(&base, MAX_HISTORY));
+        for n in (1..MAX_HISTORY).rev() {
+            let from = history_path(&base, n);
+            if from.exists() {
+                let _ = std::fs::rename(from, history_path(&base, n + 1));
+            }
+        }
+        std::fs::rename(&base, history_path(&base, 1))?;
+        // 句柄跟着文件名走：不重新打开就会继续写进刚被滚走的那一份
+        self.file = OpenOptions::new().create(true).append(true).open(&base)?;
+        Ok(())
+    }
+
     /// 写入一条 `log` 记录并立刻刷盘
     ///
     /// 每条都 flush：用户能够报上来的日志，往往就是程序上次崩溃前后那几行，
@@ -316,6 +376,15 @@ impl FileWriter {
             record.target(),
             record.args()
         );
+        self.append(&line, MAX_FILE_BYTES)
+    }
+
+    /// 追加一行文本；`limit` 显式传入是为了单测能压到几十字节就验证滚动，
+    /// 而不必真的写满 8 MiB
+    fn append(&mut self, line: &str, limit: u64) -> std::io::Result<()> {
+        if should_rotate(self.size(), line.len(), limit) {
+            self.rotate()?;
+        }
         self.file.write_all(line.as_bytes())?;
         self.file.flush()
     }
@@ -686,6 +755,104 @@ mod tests {
         );
         let text = std::fs::read_to_string(&path).expect("日志文件应存在且可读");
         assert!(text.contains("hello log file") && text.contains("third line"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---------------- 单文件体积滚动 ----------------
+
+    #[test]
+    fn should_rotate_only_past_the_limit() {
+        let limit = 1024;
+        // 远小于上限：不滚
+        assert!(!should_rotate(0, 10, limit));
+        assert!(!should_rotate(64, 128, limit));
+        // 写完这一条正好等于上限：仍然落盘（宁可写满，也不要在边界上反复滚动）
+        assert!(!should_rotate(1000, 24, limit));
+        // 超过上限：滚
+        assert!(should_rotate(1000, 25, limit));
+        // 已经满/超了，再来任何一条都得先滚
+        assert!(should_rotate(1024, 1, limit));
+        assert!(should_rotate(4096, 1, limit));
+        // 空写入不触发
+        assert!(!should_rotate(1024, 0, limit));
+    }
+
+    #[test]
+    fn rotation_keeps_at_most_three_history_files() {
+        let dir = temp_dir("rotate");
+        let date = LogDate {
+            year: 2024,
+            month: 5,
+            day: 6,
+        };
+        let mut writer = FileWriter::open(&dir, date).expect("打开日志文件");
+        // 上限压到 40 字节：每写两条就滚一次，12 条足够滚出 3 份以上历史
+        for i in 0..12 {
+            writer
+                .append(&format!("line-{i}-0123456789\n"), 40)
+                .expect("写入一行");
+        }
+        let base = log_file_name_for(date);
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("读取日志目录")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        for n in 1..=MAX_HISTORY {
+            assert!(
+                names.contains(&format!("{base}.{n}")),
+                "缺少历史分段 .{n}：{names:?}"
+            );
+        }
+        assert!(
+            !names.contains(&format!("{base}.{}", MAX_HISTORY + 1)),
+            "最多保留 {MAX_HISTORY} 份历史：{names:?}"
+        );
+        assert!(names.contains(&base), "主文件必须还在：{names:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_keeps_today_log_and_its_rotated_segments() {
+        let dir = temp_dir("prune-rotated");
+        let today = LogDate {
+            year: 2024,
+            month: 5,
+            day: 14,
+        };
+        let expired = LogDate {
+            year: 2024,
+            month: 5,
+            day: 6,
+        }; // 8 天前
+        std::fs::create_dir_all(&dir).expect("创建临时日志目录");
+        let today_log = log_file_name_for(today);
+        let expired_log = log_file_name_for(expired);
+        // 当天：主文件 + 两个历史分段（体积滚动的产物）
+        for name in [
+            today_log.clone(),
+            format!("{today_log}.1"),
+            format!("{today_log}.2"),
+        ] {
+            std::fs::write(dir.join(name), b"x").expect("写入当天日志");
+        }
+        // 过期：主文件 + 一个历史分段
+        for name in [expired_log.clone(), format!("{expired_log}.1")] {
+            std::fs::write(dir.join(name), b"x").expect("写入过期日志");
+        }
+
+        let removed = prune_old(&dir, today);
+        assert_eq!(removed.len(), 2, "过期的两份都该删，实际：{removed:?}");
+        assert!(
+            dir.join(&today_log).exists(),
+            "当天主文件不能被历史分段误伤"
+        );
+        assert!(dir.join(format!("{today_log}.1")).exists());
+        assert!(dir.join(format!("{today_log}.2")).exists());
+        assert!(!dir.join(&expired_log).exists());
+        assert!(!dir.join(format!("{expired_log}.1")).exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }
