@@ -38,6 +38,14 @@ export global Theme {
     out property <color> control-bg-disabled: dark ? #262626 : #F5F5F5;
     /// 进度条轨道（未填充部分）
     out property <color> progress-track: dark ? #3A3A3A : #E6E6E6;
+    /// 分段控件的沟槽底（Win11 的浅沟槽：比控件底再深一档，选中药丸才浮得起来）
+    out property <color> segmented-track: dark ? #2A2A2A : #F0F0F0;
+    /// 开关滑块（未选中态）；选中态复用 text-on-accent，与 Win11 一致
+    out property <color> switch-knob: dark ? #C8C8C8 : #FFFFFF;
+    /// 二维码底：两套主题都必须是纯白。
+    /// 二维码靠明暗对比才能被扫出来，深色主题下若跟着变成深底，手机端直接扫不动。
+    /// 与 tooltip-text 同理，这是设计意图，不是漏改用令牌。
+    out property <color> qr-surface: #FFFFFF;
     /// 悬停高亮（列表行 / 导航项）
     out property <color> hover-bg: dark ? #333333 : #EDEDED;
     /// 按下态（比 hover 更深一档）
@@ -45,6 +53,12 @@ export global Theme {
     /// 选中态
     out property <color> selected-bg: dark ? #1F3A4D : #E8F1FB;
     out property <color> selected-bg-hover: dark ? #24475E : #DCEAF9;
+
+    // ---------------------------------------------------------------- 状态视图
+    // 空 / 加载 / 错误三态的 64px 图标底。加载态偏冷一档，暗示"正在动"，
+    // 与静态空态区分开——只改这一个色值，不动任何几何。
+    out property <color> state-icon-bg: dark ? #303030 : #F1F1F1;
+    out property <color> state-icon-bg-busy: dark ? #2A3A44 : #EAF3FB;
 
     // ---------------------------------------------------------------- 描边
     out property <color> stroke: dark ? #3D3D3D : #E1E1E1;
@@ -82,6 +96,10 @@ export global Theme {
     /// 遮罩 / 阴影
     out property <color> shadow: dark ? #00000066 : #0000001F;
     out property <color> overlay-scrim: dark ? #00000073 : #00000033;
+    /// 拖入上传遮罩的底色：强调色的极淡填充（带 alpha），压在文件列表之上仍然看得见内容
+    out property <color> drag-tint: dark ? #2E6E9E33 : #0F6CBD22;
+    /// 占据整块的「已失效」覆盖层（二维码过期 / 失败）：亮色下压白、深色下压黑
+    out property <color> flyout-scrim: dark ? #1A1A1ACC : #FFFFFFD9;
     /// 登录页背景柔光起始色
     out property <color> login-glow: dark ? #1B2836 : #E9F1FA;
 

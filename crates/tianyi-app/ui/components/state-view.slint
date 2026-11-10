@@ -75,8 +75,7 @@ component StateScaffold inherits Rectangle {
             height: 64px;
             border-radius: 20px;
             horizontal-stretch: 0;
-            background: root.busy ? (Theme.dark ? #2A3A44 : #EAF3FB)
-                : (Theme.dark ? #303030 : #F1F1F1);
+            background: root.busy ? Theme.state-icon-bg-busy : Theme.state-icon-bg;
 
             if !root.busy: Icon {
                 x: (parent.width - self.width) / 2;

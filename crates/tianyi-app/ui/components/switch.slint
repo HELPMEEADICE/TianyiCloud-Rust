@@ -57,7 +57,7 @@ export component FluentSwitch inherits Rectangle {
                 width: 14px;
                 height: 14px;
                 border-radius: 7px;
-                background: root.checked ? Theme.text-on-accent : (Theme.dark ? #C8C8C8 : #FFFFFF);
+                background: root.checked ? Theme.text-on-accent : Theme.switch-knob;
                 x: root.checked ? track.width - self.width - 3px : 3px;
 
                 animate x {
