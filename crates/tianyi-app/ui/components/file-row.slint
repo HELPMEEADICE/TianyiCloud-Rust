@@ -40,6 +40,35 @@ export component FileRow inherits Rectangle {
     callback drop-can-accept(DropEvent, string) -> DragAction;
     callback drop-requested(DropEvent, string) -> DragAction;
 
+    // 无障碍：`ListView` 自带 `accessible-role: list`，但行本身只是一个裸 Rectangle ——
+    // 读屏看到的是**一个空列表**（有若干项、每项没有任何名字）。这里把行标成 list-item
+    // 并给出名称、详情与默认动作，读屏才能逐行念出文件名。
+    //
+    // 刻意**不**加 `accessible-checked`：Slint / WinUI 的选中语义里没有"多选列表项"的
+    // 对应项，硬套 checked 会让读屏每移动一次就念一遍"已勾选"，把名称盖掉。选中状态
+    // 由 `selected-count` 与批量操作栏的文案承担（读屏读得到），不需要在每一行重复。
+    //
+    // 默认动作 = 双击：文件夹进入、文件预览，与鼠标双击同一条路径（`open-item`）。
+    accessible-role: list-item;
+    accessible-label: root.entry.name;
+    accessible-description: root.detail-description(root.entry.size_text, root.entry.modified, root.entry.kind_text);
+    accessible-action-default => {
+        root.item-double-clicked();
+    }
+
+    /// 详情拼接的单步：空值跳过，`—` 是本行表示"没有大小"的占位符，同样跳过。
+    /// 用 " · " 连接（与状态栏、传输详情的分隔符一致），读屏按停顿念出来。
+    pure function join-part(acc: string, part: string) -> string {
+        part == "" || part == "—" ? acc
+            : acc == "" ? part
+            : acc + " · " + part
+    }
+
+    /// "大小 · 修改时间 · 类型"——三个次要列合成一句读屏描述
+    pure function detail-description(size: string, time: string, kind: string) -> string {
+        root.join-part(root.join-part(root.join-part("", size), time), kind)
+    }
+
     // 拖出下载的按压追踪
     property <bool> drag-pressed: false;
     property <bool> drag-armed: false;
