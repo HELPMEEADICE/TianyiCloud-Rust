@@ -556,11 +556,24 @@ export component CloudPage inherits Rectangle {
                     root.select-all();
                 }
             }
+            // Esc 的**单一**出口：搜索中退出搜索，否则清空选择。
+            //
+            // 为什么合并成一条而不是再加一条同样的 @keys(Escape)：同一个 FocusScope 里
+            // 出现两条 keys 相同的 KeyBinding 会被编译器直接判成错误
+            // （i-slint-compiler-1.17.1 passes/key_bindings.rs:47-56 `push_error`
+            // "This KeyBinding element has the same keys as an existing KeyBinding"），
+            // 所以"互斥条件"在这里只能表现为**一个** binding 内部的分派。
+            // 搜索优先：搜索时选择集本来就是空的（search_changed 会清空），
+            // 反过来的顺序会让 Esc 变成"清了个空选择"而退不出搜索。
             KeyBinding {
                 keys: @keys(Escape);
-                enabled: root.renaming-id == "" && root.has-selection;
+                enabled: root.renaming-id == "" && (root.searching || root.has-selection);
                 activated => {
-                    root.clear-selection();
+                    if (root.searching) {
+                        root.search-cleared();
+                    } else {
+                        root.clear-selection();
+                    }
                 }
             }
             KeyBinding {

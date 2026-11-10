@@ -259,10 +259,27 @@ impl Controller {
     /// `load_dir` / `search_changed` 里的 `*_gen.load() != gen` 判定就把它丢掉，
     /// 走的是既有的丢结果路径。列表状态就地归一，用户不必再对着转圈等下去。
     ///
+    /// **搜索态是例外**：此时的"取消"按钮实际语义是"退出搜索"，只归一 `list-state`
+    /// 会留下 `searching == true` + 0 行，界面于是落到「没有找到匹配的文件」——
+    /// 那是"搜过、确实没有结果"的意思，与实际（用户主动取消）相反。
+    /// 所以搜索态直接复用 `clear_search()`：它会把 `searching` 置假、恢复目录行、
+    /// 按恢复后的行数重算列表状态，与搜索框旁边的"退出搜索"按钮走同一条路径。
+    ///
     /// 取消按钮只在 `show-loading`（list_state == "loading" 且当前没有任何行）时
-    /// 可见，所以实际几乎总落到 `empty`；`ready` 那一支留给"取消的同一帧里结果
+    /// 可见，所以目录态实际几乎总落到 `empty`；`ready` 那一支留给"取消的同一帧里结果
     /// 已经先到"的情形，免得把刚到手的行又藏起来。
     pub(super) fn cancel_loading(self: &Arc<Self>) {
+        // 搜索态是 UI 侧属性：只有站在 UI 线程上才读得到。读不到时按"非搜索态"处理，
+        // 保持原有的归一逻辑（宁可少切一次，也不要在后台线程上猜 UI 状态）。
+        let searching = match self.upgrade_on_ui_thread() {
+            Some(ui) => ui.get_searching(),
+            None => false,
+        };
+        if searching {
+            self.clear_search();
+            self.notice("info", "已退出搜索");
+            return;
+        }
         self.dir_gen.fetch_add(1, Ordering::SeqCst);
         self.search_gen.fetch_add(1, Ordering::SeqCst);
         let count = lock_or_recover(&self.visible_rows).len();
