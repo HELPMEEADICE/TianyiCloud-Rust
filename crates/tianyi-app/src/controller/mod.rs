@@ -383,6 +383,14 @@ impl Controller {
 
         let c = Arc::clone(&this);
         this.ui_set(move |ui| {
+            ui.on_cancel_loading(move || {
+                let c = c.clone();
+                c.cancel_loading();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
             ui.on_navigate_up(move || {
                 let c = c.clone();
                 c.navigate_up();

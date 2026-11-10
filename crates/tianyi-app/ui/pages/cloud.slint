@@ -55,6 +55,8 @@ export component CloudPage inherits Rectangle {
     callback navigate-crumb(int);
     callback navigate-up();
     callback refresh();
+    /// 取消在途加载（只丢弃结果，不新增取消网络请求的机制）
+    callback cancel-loading();
     callback upload();
     callback create-folder();
     callback search-changed(string);
@@ -752,6 +754,12 @@ export component CloudPage inherits Rectangle {
                             height: parent.height;
                             title: root.searching ? "正在搜索…" : "正在加载目录…";
                             description: root.searching ? "正在云端检索匹配的文件" : "正在从云端读取目录内容";
+                            // 加载态原来没有出口：目录读不出来时用户只能干等（或关窗口）。
+                            // 取消只递增代数让在途结果被丢弃，列表状态就地归一。
+                            cancel-text: "取消";
+                            cancel => {
+                                root.cancel-loading();
+                            }
                         }
 
                         if root.show-error: FluentErrorState {

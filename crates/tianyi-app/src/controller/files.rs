@@ -248,6 +248,23 @@ impl Controller {
         });
     }
 
+    /// 取消在途加载（加载态上的"取消"入口）
+    ///
+    /// 不新增"取消网络请求"的机制：两颗代数各加一次，在途结果回来时
+    /// `load_dir` / `search_changed` 里的 `*_gen.load() != gen` 判定就把它丢掉，
+    /// 走的是既有的丢结果路径。列表状态就地归一，用户不必再对着转圈等下去。
+    ///
+    /// 取消按钮只在 `show-loading`（list_state == "loading" 且当前没有任何行）时
+    /// 可见，所以实际几乎总落到 `empty`；`ready` 那一支留给"取消的同一帧里结果
+    /// 已经先到"的情形，免得把刚到手的行又藏起来。
+    pub(super) fn cancel_loading(self: &Arc<Self>) {
+        self.dir_gen.fetch_add(1, Ordering::SeqCst);
+        self.search_gen.fetch_add(1, Ordering::SeqCst);
+        let count = lock_or_recover(&self.visible_rows).len();
+        self.set_list_state(cancelled_list_state(count), &format!("{count} 个项目"));
+        self.notice("info", "已取消加载");
+    }
+
     pub(super) fn load_capacity(self: &Arc<Self>) {
         let gen = self.space_gen.load(Ordering::SeqCst);
         let Some(client) = self.client() else { return };
@@ -1111,6 +1128,21 @@ fn sort_label(key: i32) -> &'static str {
     }
 }
 
+/// 取消加载后的列表状态归一
+///
+/// 有已就绪的行就回到 `ready`（不把刚到手的内容被"取消"藏起来），否则 `empty`
+/// （交给空状态去说明这里没有内容）。
+///
+/// 抽成独立函数是为了能单测：`cancel_loading` 本身要碰 UI 状态与 `Arc<Controller>`，
+/// 而"归一到哪个状态"是它唯一的纯逻辑分支。
+fn cancelled_list_state(row_count: usize) -> &'static str {
+    if row_count == 0 {
+        "empty"
+    } else {
+        "ready"
+    }
+}
+
 /// 按指定列排序：文件夹始终排在文件前面，组内按列比较
 ///
 /// * 名称：忽略大小写比较，完全相同再按原始字节比较，保证顺序稳定
@@ -1318,6 +1350,19 @@ mod link_tests {
     fn open_link_rejects_non_http_url_without_touching_the_system() {
         // 非法 scheme 必须在启动任何进程之前就被拦下（这里能返回 Err 即为证明）
         assert!(open_url_in_browser("javascript:alert(1)").is_err());
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+
+    /// 取消不是"清空"，而是"把状态归一到当前真有的内容"。
+    #[test]
+    fn cancel_loading_normalizes_list_state_by_row_count() {
+        assert_eq!(cancelled_list_state(0), "empty");
+        assert_eq!(cancelled_list_state(1), "ready");
+        assert_eq!(cancelled_list_state(8), "ready");
     }
 }
 

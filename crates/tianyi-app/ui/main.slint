@@ -140,6 +140,8 @@ export component MainWindow inherits Window {
     callback clear_selection();
     callback context_requested(string, string, bool, length, length);
     callback refresh_files();
+    /// 取消云盘页在途加载（加载态上的"取消"）
+    callback cancel_loading();
     callback navigate_up();
     callback navigate_crumb(int);
     callback switch_space(string);
@@ -753,6 +755,9 @@ export component MainWindow inherits Window {
                     }
                     refresh => {
                         root.refresh_files();
+                    }
+                    cancel-loading => {
+                        root.cancel_loading();
                     }
                     upload => {
                         root.upload_files();

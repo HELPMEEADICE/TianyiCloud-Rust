@@ -35,6 +35,22 @@ export component LoginPage inherits Rectangle {
     callback do-quick-login(string);
 
     property <bool> save-account: true;
+    // 字段级错误态：TextInput 的 invalid 只表达"这次登录失败"，
+    // 用户在该字段重新输入（edited）就立刻熄灭——否则红框会一直挂着，
+    // 让人以为是自己刚打的字格式不对。
+    //
+    // 两个字段各一个开关、由 `changed login-error` 统一置位，而不是在渲染里
+    // 每次按 `login-error != ""` 重算：重算会让"正在输入"和"刚失败"两个来源
+    // 互相覆盖，红框随每次击键闪一下。分开的另一个理由：在账号框里改字不该
+    // 顺手把密码框的红框也抹掉——那正是需要继续检查的字段。
+    property <bool> user-invalid: false;
+    property <bool> pass-invalid: false;
+
+    changed login-error => {
+        root.user-invalid = root.login-error != "";
+        root.pass-invalid = root.login-error != "";
+    }
+
     // 验证码输入值（输入框本身是条件元素）
     property <string> captcha-text: "";
     // 账号与密码的输入值提升到页面级状态。
@@ -239,14 +255,22 @@ export component LoginPage inherits Rectangle {
                             icon: IconName.account;
                             clearable: true;
                             enabled: !root.login-loading;
+                            invalid: root.user-invalid;
                             text <=> root.user-text;
+                            edited => {
+                                root.user-invalid = false;
+                            }
                         }
 
                         pass-field := FluentTextField {
                             placeholder: "密码";
                             password: true;
                             enabled: !root.login-loading;
+                            invalid: root.pass-invalid;
                             text <=> root.pass-text;
+                            edited => {
+                                root.pass-invalid = false;
+                            }
                             accepted => {
                                 root.do-login(user-field.text, pass-field.text, root.captcha-text, root.save-account);
                             }
