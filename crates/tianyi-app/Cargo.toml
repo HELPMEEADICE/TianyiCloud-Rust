@@ -3,6 +3,7 @@ name = "tianyi-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }

@@ -59,6 +59,9 @@
 
 ### Fixed
 
+- **CI 全线红灯（三处独立原因）**：① `controller::dnd` 里 `handle_drag_out` 的非 Windows 分支是私有方法，父模块 `controller` 调不到（`E0624`），Linux/macOS 直接编译失败；同时 7 个只在 `cfg(windows)` 函数体里出现的 `use` 没做平台门控，非 Windows 目标逐个报 `unused_imports`（clippy 作业 `-D warnings` 全红）。② Windows 的 build script 在 MSVC 工具链下被 `STATUS_STACK_OVERFLOW` 打死——Windows 主线程栈默认 1MB，而 slint 编译器处理整棵组件树加 `.po` 打包是深度递归的，改为把编译放进 64MB 自建栈的线程里跑，栈预算不再取决于链接器写的 PE 头。③ `cargo-deny` 的许可证白名单缺 `MPL-2.0` / `NCSA` / `CDLA-Permissive-2.0` / `LicenseRef-Slint-Royalty-free-2.0`，两个工作区 crate 也没有 `license` 字段被判 `unlicensed`。
+- **依赖告警清理（audit 作业转绿）**：升级 rustls 0.23.46 / rustls-webpki 0.103.16 / hyper-rustls 0.27.10 / webpki-roots 1.0.11 / hyper 1.12.0 / tokio 1.54.1 / pulldown-cmark 0.13.6 / clipboard-win 5.4.3 / async-executor 1.14.1，消掉 9 条 advisory 与 2 条 yanked 告警；剩下 8 条（`rsa` 的 Marvin 攻击 + GUI 栈上 7 个 unmaintained 传递依赖）升级消不掉，在 `deny.toml` 里逐条写明理由后 ignore，上游修好会以 `advisory-not-detected` 提醒删除。
+
 - **单击必须一次到位（导航栏 / 右键菜单 / 按钮 / 分段控件）**：`FocusScope` 的 `focus-on-click` 默认 true，这些控件的 FocusScope 覆盖整个控件且声明在 `TouchArea` 之后（命中测试在前），按下时返回 `EventAccepted` 直接终止派发，`TouchArea` 收不到这次点击——表现为"左侧导航要点两下才切页""右键菜单点不动""按钮第一下没反应"。改为 `focus-on-click: false` + `TouchArea` 按下时显式 `fs.focus()`，点击一次即生效，键盘焦点照旧跟手。
 - **双击 / Enter 进入文件夹**：此前每次点击都整表替换 `file-list` 模型，ListView 随之重建所有行实例，Slint 的点击计数因"命中项变了"被清零（`set_click_count(0)`），`double-clicked` 永远凑不齐。现在选中态变化走就地更新（`set_row_data`），只有行集合真的变了（换目录 / 换云空间 / 搜索）才换模型；列表补上 `@keys(Return)`，Enter 打开当前唯一选中项（文件夹进入、文件预览）。
 - **重命名时 Enter / Delete / Esc 不再被列表快捷键抢走**：`KeyBinding` 在**捕获阶段**判定，匹配上就吃掉按键——把开关写在 `activated` 的 if 里已经太晚，此前在重命名框里按 Delete 会直接删掉选中文件。条件一律移到 `KeyBinding.enabled`，不适用时按键正常传给输入框（Enter 提交、Delete 删字、Esc 取消重命名）。

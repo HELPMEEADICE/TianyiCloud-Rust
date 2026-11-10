@@ -1,13 +1,19 @@
 //! 拖拽：DragDropState 对接、网盘内移动、拖出下载与清理。
-use super::files::sanitize_file_name;
 use super::*;
-use crate::app::DragOutApi;
-use crate::backend::invoke_ui;
-use slint::{ComponentHandle, SharedString};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tianyi_core::task::TransferControl;
-use tianyi_core::transfer::{self, DownloadOptions, DownloadOutcome};
+// 拖出下载只在 Windows 上有实现，下面这些符号全部只在 `cfg(windows)` 的
+// 函数体里出现；不带门控时非 Windows 目标会逐个报 unused_imports，
+// 而 CI 的 clippy 作业是 `-D warnings`，会直接红。
+#[cfg(windows)]
+use {
+    super::files::sanitize_file_name,
+    crate::app::DragOutApi,
+    crate::backend::invoke_ui,
+    slint::{ComponentHandle, SharedString},
+    std::sync::atomic::Ordering,
+    tianyi_core::task::TransferControl,
+    tianyi_core::transfer::{self, DownloadOptions, DownloadOutcome},
+};
 impl Controller {
     // ==================================================================
     // 拖拽
@@ -136,7 +142,7 @@ impl Controller {
     }
 
     #[cfg(not(windows))]
-    fn handle_drag_out(self: &Arc<Self>, _id: &str, _name: &str) {
+    pub(super) fn handle_drag_out(self: &Arc<Self>, _id: &str, _name: &str) {
         self.notice("info", t("toast.drag_out_unsupported"));
     }
 

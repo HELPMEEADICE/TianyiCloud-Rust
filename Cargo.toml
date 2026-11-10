@@ -8,6 +8,9 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+# 与仓库根 LICENSE 一致。cargo-deny 的 licenses 检查按清单里的这个字段认领
+# 工作区 crate，缺了它两个 crate 都会被判成 "unlicensed"。
+license = "GPL-3.0-only"
 # slint 1.17.1 自身声明 rust-version = 1.92（cargo metadata 实测的依赖下限），
 # 1.75 只是历史遗留的假设值，无法成立；CI 的 msrv 作业按此值校验。
 rust-version = "1.92"

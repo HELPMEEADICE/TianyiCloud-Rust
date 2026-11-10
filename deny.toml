@@ -22,10 +22,53 @@ allow = [
     "CC0-1.0",
     "Unlicense",
     "BSL-1.0",
+    # 依赖树里真实出现的四条，逐条对应到具体依赖（不是凑绿）：
+    #   dirs-sys / raw-cpuid / option-ext 等 → MPL-2.0（文件级 copyleft）
+    #   rav1e（image 的 AVIF 编码后端）  → (MIT OR Apache-2.0) AND NCSA
+    #   webpki-roots（hyper-rustls 的根证书库）→ CDLA-Permissive-2.0
+    #   slint 全家桶 → GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0
+    #                  OR LicenseRef-Slint-Software-3.0；本项目取**免版税**那一项，
+    #                  所以只放行该项，另两项不放行。
+    "MPL-2.0",
+    "NCSA",
+    "CDLA-Permissive-2.0",
+    "LicenseRef-Slint-Royalty-free-2.0",
+    # 工作区自身（tianyi-core / tianyi-app）与根 LICENSE 一致
+    "GPL-3.0-only",
 ]
 # 许可证识别置信度门槛；低于它的视为未知许可证并报错。
 confidence-threshold = 0.9
 
-# 漏洞库（RustSec）检查：全部使用 cargo-deny 默认值（默认数据库、默认 yanked 策略）。
-# 需要临时忽略某条 advisory 时再扩写本段，并写明理由。
+# 漏洞库（RustSec）检查。
+#
+# 靠升级依赖已经排掉的那批（不在这里写 ignore）：
+#   rustls 0.23.43→0.23.46、rustls-webpki 0.103.15→0.103.16、
+#   hyper-rustls 0.27.9→0.27.10、webpki-roots 1.0.9→1.0.11、
+#   hyper 1.11.1→1.12.0、tokio 1.53.1→1.54.1、pulldown-cmark 0.13.4→0.13.6
+#   —— 覆盖 RUSTSEC-2026-0285/0346/0348/0349/0381/0382/0386/0414/0433。
+#
+# 下面 ignore 的每一条都落在「升级消不掉」的位置，逐条写明理由。
+# 上游修好后 cargo-deny 会报 advisory-not-detected，把那行删掉即可（自带清场信号）。
 [advisories]
+ignore = [
+    # rsa 是本项目的直接依赖（crypto::rsa_encrypt，登录口令公钥加密）。
+    # 0.9 线无修复版本、0.10 未发布；而 Marvin 攻击针对**解密方**的时序侧信道，
+    # 这里只做 PKCS#1 v1.5 公钥加密，私钥在服务端，客户端不存在可利用面。
+    "RUSTSEC-2023-0071",
+    # 以下 7 条全是 unmaintained（维护状态告警，非漏洞），且都在 GUI 栈的传递
+    # 依赖上，只有整体替换 slint / rfd 才能消掉：
+    #   paste           ← image / rav1e / pulp（AVIF 编码）
+    #   pin-utils       ← spin_on ← slint-build
+    #   rustybuzz       ← usvg ← resvg ← i-slint-common
+    #   ttf-parser      ← fontdb / usvg ← resvg（同上）
+    #   zbus_names      ← zbus ← rfd / accesskit
+    #   zvariant        ← zbus（同上）
+    #   zvariant_derive ← zvariant（同上）
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0441",
+    "RUSTSEC-2026-0206",
+    "RUSTSEC-2026-0192",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0372",
+]
