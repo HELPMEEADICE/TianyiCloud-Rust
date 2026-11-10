@@ -18,6 +18,11 @@ export component FluentMenuItem inherits Rectangle {
     /// 菜单项必须照常可聚焦、可回车触发（见 components/activate-scope.slint）。
     /// 每个实例都显式传 true——漏传只会掉键盘可达性（鼠标仍可点），所以不做隐式默认。
     in property <bool> modal: false;
+    /// 键盘上下键当前是否停在本项上。
+    ///
+    /// 只改底色，不动几何、不加焦点环：高亮与键盘焦点是两件事（焦点一直留在菜单的
+    /// FocusScope 上，上下键只改"回车会触发哪一项"），所以不能复用焦点环那条路径。
+    in property <bool> highlighted: false;
 
     callback triggered();
 
@@ -34,9 +39,12 @@ export component FluentMenuItem inherits Rectangle {
     border-radius: Theme.radius-control;
     opacity: root.enabled ? 1.0 : 0.4;
 
+    // 高亮与悬停共用同一档底色（危险项共用 danger-soft）：两者都是"下一次点击/回车
+    // 会作用在这一项上"，用两套颜色只会让人以为菜单有两层状态。颜色全部来自令牌，
+    // 本文件不出现颜色字面量。
     background: !root.enabled ? transparent
         : ta.pressed ? Theme.pressed-bg
-        : ta.has-hover ? (root.danger ? Theme.danger-soft : Theme.control-bg-hover)
+        : (ta.has-hover || root.highlighted) ? (root.danger ? Theme.danger-soft : Theme.control-bg-hover)
         : transparent;
 
     // 菜单行此前完全没有过渡：鼠标划过是硬切。与其它可点控件统一到最快速率。

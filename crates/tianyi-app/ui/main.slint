@@ -237,6 +237,155 @@ export component MainWindow inherits Window {
     in-out property <string> context-item-id: "";
     in-out property <string> context-item-name: "";
     in-out property <bool> context-is-dir: false;
+
+    // ==================== 右键菜单的键盘导航 ====================
+    /// 上下键当前停留的菜单项序号（-1 = 没有）。
+    ///
+    /// 序号是**声明顺序上的固定常量**，不是"渲染出来的第几行"：分隔线不占序号，
+    /// 隐藏项（文件夹时不渲染"下载/提取直链"）也不占新序号，所以同一个常量在
+    /// 两种场景下始终指向同一项，`highlighted: ctx-highlight == N` 直接可比。
+    property <int> ctx-highlight: -1;
+
+    changed context-open => {
+        // 每次打开都从"无高亮"重新开始。
+        // 若默认点亮第一项，菜单一出现的像素就和改动前不同（高亮会染上底色），
+        // 而这条轨道要求"打开瞬间无视觉变化"——所以初始 -1，第一次按方向键才点亮。
+        if (root.context-open) {
+            root.ctx-highlight = -1;
+        }
+    }
+
+    /// 序号 → 该项此刻是否"可跳过"（可见且 enabled）
+    ///
+    /// 必须和下面 `ctx-layout` 里每个菜单项的 `if` / `enabled` 表达式逐条对应：
+    /// 增删菜单项时，这里、`ctx-trigger` 与那两侧的序号要一起改。
+    /// 0=打开 1=下载(仅文件) 2=重命名 3=复制 4=移到上级 5=提取直链(仅文件)
+    /// 6=全选 7=取消选择 8=删除
+    pure function ctx-item-usable(idx: int) -> bool {
+        idx == 0 || idx == 3 || idx == 6 || idx == 8 ? true
+            : idx == 1 || idx == 5 ? !root.context-is-dir
+            : idx == 2 ? root.selected-count == 1
+            : idx == 4 ? root.crumbs.length > 1
+            : idx == 7 ? root.selected-count > 0
+            : false
+    }
+
+    /// 把任意整数折回 0..8 的槽位（负数也要正确绕回，所以是 `((i mod 9) + 9) mod 9`）
+    ///
+    /// Slint 没有 `%` 运算符（只有 `Math.mod`），且 `Math.mod` 沿用 Rust 的取余语义
+    /// （负数结果为负），因此不能省掉那个 `+ 9`。
+    pure function ctx-slot(idx: int) -> int {
+        Math.mod(Math.mod(idx, 9) + 9, 9)
+    }
+
+    /// 从 start 起**向后**找第一个可用项，最多探 9 个槽位；全不可用返回 -1
+    ///
+    /// Slint 的函数体没有 while/for，所以把 9 次探测展开成三元链：啰嗦但完全可预测，
+    /// 也不需要为了"找下一项"引入模型或数组。
+    pure function ctx-scan-forward(start: int) -> int {
+        root.ctx-item-usable(root.ctx-slot(start)) ? root.ctx-slot(start)
+            : root.ctx-item-usable(root.ctx-slot(start + 1)) ? root.ctx-slot(start + 1)
+            : root.ctx-item-usable(root.ctx-slot(start + 2)) ? root.ctx-slot(start + 2)
+            : root.ctx-item-usable(root.ctx-slot(start + 3)) ? root.ctx-slot(start + 3)
+            : root.ctx-item-usable(root.ctx-slot(start + 4)) ? root.ctx-slot(start + 4)
+            : root.ctx-item-usable(root.ctx-slot(start + 5)) ? root.ctx-slot(start + 5)
+            : root.ctx-item-usable(root.ctx-slot(start + 6)) ? root.ctx-slot(start + 6)
+            : root.ctx-item-usable(root.ctx-slot(start + 7)) ? root.ctx-slot(start + 7)
+            : root.ctx-item-usable(root.ctx-slot(start + 8)) ? root.ctx-slot(start + 8)
+            : -1
+    }
+
+    /// 从 start 起**向前**找第一个可用项（上方向键用，方向必须真的反过来）
+    pure function ctx-scan-backward(start: int) -> int {
+        root.ctx-item-usable(root.ctx-slot(start)) ? root.ctx-slot(start)
+            : root.ctx-item-usable(root.ctx-slot(start - 1)) ? root.ctx-slot(start - 1)
+            : root.ctx-item-usable(root.ctx-slot(start - 2)) ? root.ctx-slot(start - 2)
+            : root.ctx-item-usable(root.ctx-slot(start - 3)) ? root.ctx-slot(start - 3)
+            : root.ctx-item-usable(root.ctx-slot(start - 4)) ? root.ctx-slot(start - 4)
+            : root.ctx-item-usable(root.ctx-slot(start - 5)) ? root.ctx-slot(start - 5)
+            : root.ctx-item-usable(root.ctx-slot(start - 6)) ? root.ctx-slot(start - 6)
+            : root.ctx-item-usable(root.ctx-slot(start - 7)) ? root.ctx-slot(start - 7)
+            : root.ctx-item-usable(root.ctx-slot(start - 8)) ? root.ctx-slot(start - 8)
+            : -1
+    }
+
+    /// ↓：下一个可用项；还没有高亮时落到第一个可用项
+    function ctx-move-down() {
+        root.ctx-highlight = root.ctx-scan-forward(root.ctx-highlight + 1);
+    }
+
+    /// ↑：上一个可用项；还没有高亮时落到最后一个可用项（WinUI 的菜单习惯）
+    function ctx-move-up() {
+        root.ctx-highlight = root.ctx-scan-backward(root.ctx-highlight <= 0 ? -1 : root.ctx-highlight - 1);
+    }
+
+    /// 回车：按高亮序号触发对应项。
+    ///
+    /// 每个分支都调用与菜单项 `triggered` **同一个**函数，避免"鼠标点"和"回车按"
+    /// 两条路径各写一份逻辑后慢慢分叉。
+    function ctx-trigger(idx: int) {
+        if (!root.ctx-item-usable(idx)) {
+            return;
+        }
+        if (idx == 0) {
+            root.ctx-open();
+        } else if (idx == 1) {
+            root.ctx-download();
+        } else if (idx == 2) {
+            root.ctx-rename();
+        } else if (idx == 3) {
+            root.ctx-copy();
+        } else if (idx == 4) {
+            root.ctx-move-to-parent();
+        } else if (idx == 5) {
+            root.ctx-link();
+        } else if (idx == 6) {
+            root.ctx-select-all();
+        } else if (idx == 7) {
+            root.ctx-clear-selection();
+        } else if (idx == 8) {
+            root.ctx-delete();
+        }
+    }
+
+    // 右键菜单的动作：鼠标点击与回车共用这一份实现
+    function ctx-open() {
+        root.context-open = false;
+        root.open_item(root.context-item-id, root.context-item-name, root.context-is-dir);
+    }
+    function ctx-download() {
+        root.context-open = false;
+        root.download_selected();
+    }
+    function ctx-rename() {
+        root.context-open = false;
+        root.rename_selected();
+    }
+    function ctx-copy() {
+        root.context-open = false;
+        root.copy_selected();
+    }
+    /// 移到上级目录（**动作**；与方向键上移高亮的 `ctx-move-up` 是两回事，故独立命名）
+    function ctx-move-to-parent() {
+        root.context-open = false;
+        root.move_selected_up();
+    }
+    function ctx-link() {
+        root.context-open = false;
+        root.link_selected();
+    }
+    function ctx-select-all() {
+        root.context-open = false;
+        root.select_all();
+    }
+    function ctx-clear-selection() {
+        root.context-open = false;
+        root.clear_selection();
+    }
+    function ctx-delete() {
+        root.context-open = false;
+        root.delete_selected();
+    }
     property <string> capacity-text: root.total-space == "" ? "" : (root.used-space + " / " + root.total-space);
     property <int> capacity-percent: Math.round(Math.min(1.0, Math.max(0.0, root.capacity-ratio)) * 100.0);
 
@@ -1210,154 +1359,189 @@ export component MainWindow inherits Window {
         border-width: 1px;
         border-color: Theme.stroke-strong;
 
-        ctx-layout := VerticalLayout {
-            padding: 6px;
-            spacing: 2px;
+        // Esc / ↑↓ / 回车的键盘层。
+        //
+        // 这一层必须是**菜单内容的祖先**：Slint 沿焦点元素的祖先链派发 key_event
+        // （i-slint-core-1.17.1 window.rs:1108-1120），做成平级兄弟时焦点一旦落到某个
+        // 菜单项（Tab 或点击都会把焦点移进去），键盘就再也回不到这层。
+        // FocusScope 不渲染，给足父级几何后布局与原来逐像素一致。
+        //
+        // 刻意不套用 components/activate-scope.slint：本层没有"激活"动作，
+        // 只有 Esc / 导航键。
+        ctx-focus := FocusScope {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
 
-            Rectangle {
-                height: 24px;
-                background: transparent;
-
-                Text {
-                    x: 8px;
-                    y: 0;
-                    width: parent.width - 16px;
-                    text: root.context-item-name;
-                    font-family: Theme.font-family;
-                    font-size: Theme.font-caption;
-                    color: Theme.text-tertiary;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
-
-            FluentMenuDivider {
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: root.context-is-dir ? IconName.folder-open : IconName.file;
-                label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
-                triggered => {
-                    root.context-open = false;
-                    root.open_item(root.context-item-id, root.context-item-name, root.context-is-dir);
-                }
-            }
-
-            if !root.context-is-dir: FluentMenuItem {
-                modal: true;
-                icon: IconName.download;
-                label: "下载到本地";
-                triggered => {
-                    root.context-open = false;
-                    root.download_selected();
-                }
-            }
-
-            if !root.context-is-dir: FluentMenuDivider {
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.rename;
-                label: "重命名";
-                shortcut: "F2";
-                enabled: root.selected-count == 1;
-                triggered => {
-                    root.context-open = false;
-                    root.rename_selected();
-                }
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.copy;
-                label: "复制到当前目录";
-                triggered => {
-                    root.context-open = false;
-                    root.copy_selected();
-                }
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.folder;
-                label: "移动到上级目录";
-                enabled: root.crumbs.length > 1;
-                triggered => {
-                    root.context-open = false;
-                    root.move_selected_up();
-                }
-            }
-
-            if !root.context-is-dir: FluentMenuItem {
-                modal: true;
-                icon: IconName.link;
-                label: "提取直链";
-                triggered => {
-                    root.context-open = false;
-                    root.link_selected();
-                }
-            }
-
-            FluentMenuDivider {
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.select-all;
-                label: "全选";
-                shortcut: "Ctrl+A";
-                triggered => {
-                    root.context-open = false;
-                    root.select_all();
-                }
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.close;
-                label: "取消选择";
-                shortcut: "Esc";
-                enabled: root.selected-count > 0;
-                triggered => {
-                    root.context-open = false;
-                    root.clear_selection();
-                }
-            }
-
-            FluentMenuDivider {
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.delete;
-                label: "删除";
-                shortcut: "Del";
-                danger: true;
-                triggered => {
-                    root.context-open = false;
-                    root.delete_selected();
-                }
-            }
-        }
-
-        // Esc 关闭：覆盖式浮层原来只有"点别处"一条退出通道，键盘用户会卡在菜单里。
-        // 这里只补 Esc——↑↓/Enter 导航需要可见的高亮态与焦点环，属于后续可访问性
-        // 任务，不在本次改动里顺手改视觉。
-        FocusScope {
             init => {
                 self.focus();
             }
-            // 这层只负责收 Esc：焦点一旦被别处拿走（例如用户 Tab 到工具栏），
-            // 剩下那一下点击不能被它当成"点我一下给你焦点"吞掉。
-            // 刻意不套用 components/activate-scope.slint：本层没有"激活"动作。
+            // 焦点一旦被别处拿走（例如用户 Tab 到工具栏），剩下那一下点击不能被它
+            // 当成"点我一下给你焦点"吞掉。
             focus-on-click: false;
 
             KeyBinding {
                 keys: @keys(Escape);
                 activated => {
                     root.context-open = false;
+                }
+            }
+
+            // —— 上下键高亮 ——
+            //
+            // 高亮是**独立于焦点**的状态（`ctx-highlight`），因为菜单项本身不移动焦点：
+            // 焦点留在这一层，上下键只改"回车会触发哪一项"，与 WinUI 菜单一致。
+            // 初始值 -1 = 没有任何一项高亮，打开菜单的瞬间外观与改动前逐像素相同；
+            // 第一次按下方向键才点亮（写进 `changed context-open` 的重置里）。
+            KeyBinding {
+                keys: @keys(DownArrow);
+                activated => {
+                    root.ctx-move-down();
+                }
+            }
+            KeyBinding {
+                keys: @keys(UpArrow);
+                activated => {
+                    root.ctx-move-up();
+                }
+            }
+            KeyBinding {
+                keys: @keys(Return);
+                activated => {
+                    root.ctx-trigger(root.ctx-highlight);
+                }
+            }
+
+            ctx-layout := VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+
+                Rectangle {
+                    height: 24px;
+                    background: transparent;
+
+                    Text {
+                        x: 8px;
+                        y: 0;
+                        width: parent.width - 16px;
+                        text: root.context-item-name;
+                        font-family: Theme.font-family;
+                        font-size: Theme.font-caption;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+
+                FluentMenuDivider {
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 0;
+                    icon: root.context-is-dir ? IconName.folder-open : IconName.file;
+                    label: root.context-is-dir ? "打开文件夹" : "预览 / 打开";
+                    triggered => {
+                        root.ctx-open();
+                    }
+                }
+
+                if !root.context-is-dir: FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 1;
+                    icon: IconName.download;
+                    label: "下载到本地";
+                    triggered => {
+                        root.ctx-download();
+                    }
+                }
+
+                if !root.context-is-dir: FluentMenuDivider {
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 2;
+                    icon: IconName.rename;
+                    label: "重命名";
+                    shortcut: "F2";
+                    enabled: root.selected-count == 1;
+                    triggered => {
+                        root.ctx-rename();
+                    }
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 3;
+                    icon: IconName.copy;
+                    label: "复制到当前目录";
+                    triggered => {
+                        root.ctx-copy();
+                    }
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 4;
+                    icon: IconName.folder;
+                    label: "移动到上级目录";
+                    enabled: root.crumbs.length > 1;
+                    triggered => {
+                        root.ctx-move-to-parent();
+                    }
+                }
+
+                if !root.context-is-dir: FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 5;
+                    icon: IconName.link;
+                    label: "提取直链";
+                    triggered => {
+                        root.ctx-link();
+                    }
+                }
+
+                FluentMenuDivider {
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 6;
+                    icon: IconName.select-all;
+                    label: "全选";
+                    shortcut: "Ctrl+A";
+                    triggered => {
+                        root.ctx-select-all();
+                    }
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 7;
+                    icon: IconName.close;
+                    label: "取消选择";
+                    shortcut: "Esc";
+                    enabled: root.selected-count > 0;
+                    triggered => {
+                        root.ctx-clear-selection();
+                    }
+                }
+
+                FluentMenuDivider {
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.ctx-highlight == 8;
+                    icon: IconName.delete;
+                    label: "删除";
+                    shortcut: "Del";
+                    danger: true;
+                    triggered => {
+                        root.ctx-delete();
+                    }
                 }
             }
         }
@@ -1426,3 +1610,4 @@ export component MainWindow inherits Window {
         }
     }
 }
+
