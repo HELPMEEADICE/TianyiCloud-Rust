@@ -246,7 +246,13 @@ export component MainWindow inherits Window {
     // 文件列表次要列分级：量的是内容区宽度，不是整窗宽度
     // （整窗宽度里有一段属于导航栏，按它算会把默认 1180px 窗口误判成四列）
     property <int> detail-level: LayoutMetrics.detail-level-of(root.content-width);
-    property <bool> account-menu-open: false;
+    /// 账号菜单是否展开。
+    ///
+    /// `in-out` 而不是私有 `property`，理由与 `context-open` 相同：它的开合有三条
+    /// 驱动路径（鼠标点击、Esc、Rust 侧的窗口失焦），`ui_tests.rs` 要像驱动右键菜单
+    /// 那样直接从 Rust 侧读写它来断言"键盘能不能关掉它、回车触发的是哪一项"。
+    /// 私有属性既写不进也读不出，那几条断言就只能退化成"渲染出来没有"这种多级推断。
+    in-out property <bool> account-menu-open: false;
     /// 命令栏「排序」浮层是否展开。
     ///
     /// 浮层本体在 `CloudPage` 里（`components/sort-menu.slint`），但**状态**必须住在窗口
@@ -409,6 +415,101 @@ export component MainWindow inherits Window {
         root.context-open = false;
         root.delete_selected();
     }
+
+    // ==================== 账号菜单的键盘导航 ====================
+    //
+    // 与上面右键菜单那一套**同构但不复用**：`ctx-*` 是 9 槽、且可用性判据是
+    // 「文件夹时隐藏下载/提链」「未选中时禁用重命名」这类 ctx 专属条件；账号菜单
+    // 只有 3 项、且没有任何条件可用项。硬套 ctx 的扫描只会在中间绕出一串永远
+    // 不可用的空槽（按一下方向键要先跳过 6 个死槽），所以这里另写一套 3 槽的。
+    /// 上下键当前停留的账号菜单项序号（-1 = 没有高亮）。
+    ///
+    /// 序号是声明顺序上的固定常量，分隔线不占槽位（与 `ctx-highlight` 同理）：
+    /// 0=设置 1=下载目录 2=退出登录。
+    property <int> account-highlight: -1;
+
+    changed account-menu-open => {
+        // 每次打开都从"无高亮"重新开始：默认点亮第一项会让菜单一出现的像素就和
+        // 没有这层键盘能力时不同（高亮会染上底色），而打开瞬间的外观必须逐像素一致。
+        if (root.account-menu-open) {
+            root.account-highlight = -1;
+        }
+    }
+
+    /// 序号 → 该项此刻是否可用
+    ///
+    /// 三项都没有 `enabled` 条件，所以目前恒为真。保留这颗判据不是为了"以后可能有用"，
+    /// 而是让 `acct-scan-*` 的形状与 `ctx-scan-*` 一致：将来某个账号项变成条件可用
+    /// （例如未登录时不显示"退出登录"）时只改这里，扫描与触发两处都不用动。
+    pure function acct-item-usable(idx: int) -> bool {
+        idx >= 0 && idx <= 2
+    }
+
+    /// 把任意整数折回 0..2 的槽位（负数也要正确绕回）
+    ///
+    /// 与 `ctx-slot` 同一个理由：Slint 只有 `Math.mod`，且取余语义沿用 Rust
+    /// （负数结果为负），所以不能省掉那个 `+ 3`。
+    pure function acct-slot(idx: int) -> int {
+        Math.mod(Math.mod(idx, 3) + 3, 3)
+    }
+
+    /// 从 start 起**向后**找第一个可用项，最多探 3 个槽位；全不可用返回 -1
+    pure function acct-scan-forward(start: int) -> int {
+        root.acct-item-usable(root.acct-slot(start)) ? root.acct-slot(start)
+            : root.acct-item-usable(root.acct-slot(start + 1)) ? root.acct-slot(start + 1)
+            : root.acct-item-usable(root.acct-slot(start + 2)) ? root.acct-slot(start + 2)
+            : -1
+    }
+
+    /// 从 start 起**向前**找第一个可用项（上方向键用，方向必须真的反过来）
+    pure function acct-scan-backward(start: int) -> int {
+        root.acct-item-usable(root.acct-slot(start)) ? root.acct-slot(start)
+            : root.acct-item-usable(root.acct-slot(start - 1)) ? root.acct-slot(start - 1)
+            : root.acct-item-usable(root.acct-slot(start - 2)) ? root.acct-slot(start - 2)
+            : -1
+    }
+
+    /// ↓：下一个可用项；还没有高亮时落到第一个可用项
+    function acct-move-down() {
+        root.account-highlight = root.acct-scan-forward(root.account-highlight + 1);
+    }
+
+    /// ↑：上一个可用项；还没有高亮时绕到最后一个可用项（与 `ctx-move-up` 一致）
+    function acct-move-up() {
+        root.account-highlight = root.acct-scan-backward(root.account-highlight <= 0 ? -1 : root.account-highlight - 1);
+    }
+
+    /// 回车：按高亮序号触发对应项。
+    ///
+    /// 每个分支都调用与菜单项 `triggered` **同一个**函数——鼠标点击与键盘回车共用
+    /// 一份实现，避免两条路径各写一份逻辑后慢慢分叉（`ctx-trigger` 同款约定）。
+    function acct-trigger(idx: int) {
+        if (!root.acct-item-usable(idx)) {
+            return;
+        }
+        if (idx == 0) {
+            root.acct-settings();
+        } else if (idx == 1) {
+            root.acct-download-dir();
+        } else if (idx == 2) {
+            root.acct-logout();
+        }
+    }
+
+    // 账号菜单的动作：鼠标点击与回车共用这一份实现
+    function acct-settings() {
+        root.account-menu-open = false;
+        root.current-page = 4;
+    }
+    function acct-download-dir() {
+        root.account-menu-open = false;
+        root.open_download_dir();
+    }
+    function acct-logout() {
+        root.account-menu-open = false;
+        root.logout();
+    }
+
     property <string> capacity-text: root.total-space == "" ? "" : (root.used-space + " / " + root.total-space);
     property <int> capacity-percent: Math.round(Math.min(1.0, Math.max(0.0, root.capacity-ratio)) * 100.0);
 
@@ -461,6 +562,29 @@ export component MainWindow inherits Window {
         // 直链行里的图标按钮）随页面一起隐藏时**不会**产生 has-hover=false，
         // 气泡会原地常驻、指向一个已经不存在的控件。清零点放在这里与页面转场并列，
         // 互不影响：一个驱动 opacity，一个只关气泡。
+        TooltipState.visible = false;
+    }
+
+    // ==================== 列表整表替换 → 收 Tooltip ====================
+    //
+    // 行实例被销毁时**不会**收到 `has-hover = false`：回调挂在行内的按钮上，行没了
+    // 就是"没人再通知"，所以指针静止不动时气泡会一直挂着、指着一行已经不存在的控件。
+    // 模型换表是此刻唯一的信号——刷新目录、重排、切换筛选、搜索结束走的都是
+    // `set_file_list` / `set_active_transfer_list` / `set_transfer_list` / `set_links`
+    // 这四个回调，一律整份换模型。
+    //
+    // 注意监听的是**模型属性本身的赋值**，不是行数据的增删：`changed` 只在模型句柄
+    // 被换掉时触发，行内字段变化（进度、选中态）不会误熄气泡。
+    changed file-list => {
+        TooltipState.visible = false;
+    }
+    changed active-transfer-list => {
+        TooltipState.visible = false;
+    }
+    changed transfer-list => {
+        TooltipState.visible = false;
+    }
+    changed links => {
         TooltipState.visible = false;
     }
 
@@ -1279,66 +1403,117 @@ export component MainWindow inherits Window {
         border-width: 1px;
         border-color: Theme.stroke-strong;
 
-        menu-layout := VerticalLayout {
-            padding: 6px;
-            spacing: 2px;
+        // 账号菜单的键盘层（Esc / ↑↓ / 回车），与右键菜单的 `ctx-focus` 同构。
+        //
+        // 这一层必须是**菜单内容的祖先**：Slint 沿焦点元素的祖先链派发 key_event
+        // （i-slint-core-1.17.1 window.rs:1108-1120），做成平级兄弟时焦点一旦落到
+        // 某个菜单项（Tab 或点击都会把焦点移进去），键盘就再也回不到这层。
+        // FocusScope 不渲染，给足父级几何后菜单的位置与尺寸逐像素不变。
+        //
+        // 刻意不套用 components/activate-scope.slint：本层没有"激活"动作，
+        // 只收 Esc / 上下键 / 回车（与 `ctx-focus` 同一个理由）。
+        account-focus := FocusScope {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
 
-            Rectangle {
-                height: 30px;
-                background: transparent;
+            init => {
+                self.focus();
+            }
+            // 焦点一旦被别处拿走（例如用户 Tab 到工具栏），剩下那一下点击不能被它
+            // 当成"点我一下给你焦点"吞掉。
+            focus-on-click: false;
 
-                HorizontalLayout {
-                    padding-left: 8px;
-                    padding-right: 8px;
-                    cross-axis-alignment: center;
+            KeyBinding {
+                keys: @keys(Escape);
+                activated => {
+                    root.account-menu-open = false;
+                }
+            }
 
-                    Text {
-                        text: root.account-name;
-                        font-family: Theme.font-family;
-                        font-size: Theme.font-body;
-                        font-weight: Theme.weight-semibold;
-                        color: Theme.text-primary;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                        overflow: elide;
+            // 上下键只改"回车会触发哪一项"（`account-highlight`），焦点始终留在这一层，
+            // 与右键菜单一致——菜单项本身不移动焦点。
+            KeyBinding {
+                keys: @keys(DownArrow);
+                activated => {
+                    root.acct-move-down();
+                }
+            }
+            KeyBinding {
+                keys: @keys(UpArrow);
+                activated => {
+                    root.acct-move-up();
+                }
+            }
+            KeyBinding {
+                keys: @keys(Return);
+                activated => {
+                    root.acct-trigger(root.account-highlight);
+                }
+            }
+
+            menu-layout := VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+
+                Rectangle {
+                    height: 30px;
+                    background: transparent;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        cross-axis-alignment: center;
+
+                        Text {
+                            text: root.account-name;
+                            font-family: Theme.font-family;
+                            font-size: Theme.font-body;
+                            font-weight: Theme.weight-semibold;
+                            color: Theme.text-primary;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
                     }
                 }
-            }
 
-            FluentMenuDivider {
-            }
-
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.settings;
-                label: @tr("设置");
-                triggered => {
-                    root.account-menu-open = false;
-                    root.current-page = 4;
+                FluentMenuDivider {
                 }
-            }
 
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.folder-open;
-                label: @tr("下载目录");
-                triggered => {
-                    root.account-menu-open = false;
-                    root.open_download_dir();
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.account-highlight == 0;
+                    icon: IconName.settings;
+                    label: @tr("设置");
+                    triggered => {
+                        root.acct-settings();
+                    }
                 }
-            }
 
-            FluentMenuDivider {
-            }
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.account-highlight == 1;
+                    icon: IconName.folder-open;
+                    label: @tr("下载目录");
+                    triggered => {
+                        root.acct-download-dir();
+                    }
+                }
 
-            FluentMenuItem {
-                modal: true;
-                icon: IconName.logout;
-                label: @tr("退出登录");
-                danger: true;
-                triggered => {
-                    root.account-menu-open = false;
-                    root.logout();
+                FluentMenuDivider {
+                }
+
+                FluentMenuItem {
+                    modal: true;
+                    highlighted: root.account-highlight == 2;
+                    icon: IconName.logout;
+                    label: @tr("退出登录");
+                    danger: true;
+                    triggered => {
+                        root.acct-logout();
+                    }
                 }
             }
         }
@@ -1616,8 +1791,22 @@ export component MainWindow inherits Window {
 
         width: Math.min(tip-layout.preferred-width, 420px);
         height: tip-layout.preferred-height;
+        /// 气泡是否还有空间显示在目标下方。
+        ///
+        /// 写入方给的 `TooltipState.y` 就是「目标下缘 + 4px 偏移」，所以"下方"就是
+        /// 直接把它当上边缘用；放不下才翻到上方（减掉自身高度、再留 8px 缝隙，
+        /// 大小与偏移对称，视觉上不会贴住目标）。
+        ///
+        /// 判据用 `preferred-height` 而不是 `self.height`：这条表达式要算的正是
+        /// "自身高度放不放得下"，而 `height` 本身绑在上面那一行——读它就是自引用。
+        /// 声明在这里（而不是窗口根部）是因为它要用 `tip-layout`，而 `if` 分支里的
+        /// 元素 id 在分支外不可见（Slint 的条件实例化规则）。
+        property <bool> tip-below: TooltipState.y + tip-layout.preferred-height + 4px <= root.height;
         x: Math.max(4px, Math.min(TooltipState.x, root.width - self.width - 4px));
-        y: Math.min(TooltipState.y, root.height - self.height - 4px);
+        // 两个分支都带 `Math.max(4px, …)` 下界：翻上去之后 y 变成「锚点 − 高度 − 8」，
+        // 锚点接近窗口上缘时它可以是负数，缺了钳位气泡会被窗口上缘裁掉半截。
+        y: self.tip-below ? Math.max(4px, TooltipState.y)
+            : Math.max(4px, TooltipState.y - tip-layout.preferred-height - 8px);
         border-radius: Theme.radius-control;
         background: Theme.tooltip-bg;
         border-width: 1px;

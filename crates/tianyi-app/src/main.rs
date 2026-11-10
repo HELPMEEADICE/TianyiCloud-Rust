@@ -80,8 +80,25 @@ fn center_window(ui: &slint::Weak<MainWindow>) {
     });
 }
 
-/// 注册 winit 窗口事件钩子，处理系统拖拽文件进入（上传）
-fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState) {
+/// 窗口失去焦点时收掉所有浮层。
+///
+/// 为什么必须在这里收：浮层的熄灭信号全部来自"指针离开控件"（`has-hover = false`）
+/// 或"用户按 Esc"，而 `Focused(false)` 之后这两件事都不会再发生——指针可能仍停在
+/// 原处、键盘事件已经去了别的窗口。于是 Tooltip / 账号菜单 / 右键菜单 / 排序浮层会
+/// 原样挂在屏幕上，切回来时看到的是"上一次会话"的浮层，且它们算在
+/// `modals-blocking` 里，背景控件还会一起退出 Tab 序列。
+///
+/// 抽成独立函数的理由是可单测：`on_winit_window_event` 只有真窗口才会被调用，
+/// 无窗口的 `ui_tests` 够不着；这个函数的全部行为只是一串 `set_*`，可以直接断言。
+fn close_overlays_on_focus_loss(ui: &MainWindow) {
+    ui.global::<crate::app::TooltipState>().set_visible(false);
+    ui.set_account_menu_open(false);
+    ui.set_context_open(false);
+    ui.set_sort_menu_open(false);
+}
+
+/// 注册 winit 窗口事件钩子：系统拖拽文件进入（上传）、键盘/鼠标模式、失焦收浮层
+fn install_window_events(ui: &slint::Weak<MainWindow>, state: &'static DragDropState) {
     use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
 
     let Some(app) = ui.upgrade() else { return };
@@ -119,6 +136,13 @@ fn install_drag_drop(ui: &slint::Weak<MainWindow>, state: &'static DragDropState
             } => {
                 if let Some(app) = ui.upgrade() {
                     app.global::<crate::app::InputMode>().set_keyboard(false);
+                }
+            }
+            // 窗口失焦（Alt+Tab 切走、点到别的程序）：浮层的熄灭信号全都失效了
+            // ——指针没有离开控件、键盘事件也不再进这个窗口，必须主动收一遍。
+            winit::event::WindowEvent::Focused(false) => {
+                if let Some(app) = ui.upgrade() {
+                    close_overlays_on_focus_loss(&app);
                 }
             }
             winit::event::WindowEvent::HoveredFile(_) => {
@@ -211,9 +235,9 @@ fn main() -> anyhow::Result<()> {
     let backend = Arc::new(Backend::new(ui_handle.clone()));
     let controller = controller::Controller::new(ui_handle.clone(), backend);
 
-    // 注册系统拖拽文件进入（上传）钩子
+    // 注册窗口事件钩子：系统拖拽文件进入（上传）、键盘/鼠标模式、失焦收浮层
     let drag_state: &'static DragDropState = Box::leak(Box::new(DragDropState::new()));
-    install_drag_drop(&ui_handle, drag_state);
+    install_window_events(&ui_handle, drag_state);
     controller.set_drag_state(drag_state);
 
     // 后台任务（会话保活）

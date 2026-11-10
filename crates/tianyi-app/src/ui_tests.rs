@@ -126,9 +126,18 @@ fn settle() {
     slint::platform::update_timers_and_animations();
 }
 
+/// 按 slint 元素 id 取元素；查不到返回 None
+///
+/// 与 `by_id` 分开是因为有一类断言要区分"元素在那里但位置不对"与"元素整个被移出
+/// 窗口、测试后端根本查不到"——后者在 `by_id` 里会变成一句没有信息量的 `不存在`，
+/// 而它恰恰是缺陷本身（气泡被顶出可视区）的另一种表现。
+fn maybe_by_id(ui: &crate::app::MainWindow, id: &str) -> Option<ElementHandle> {
+    ElementQuery::from_root(ui).match_id(id).find_first()
+}
+
 /// 按 slint 元素 id 取元素
 fn by_id(ui: &crate::app::MainWindow, id: &str) -> ElementHandle {
-    match ElementQuery::from_root(ui).match_id(id).find_first() {
+    match maybe_by_id(ui, id) {
         Some(element) => element,
         None => panic!("元素 id={id} 不存在"),
     }
@@ -2264,5 +2273,346 @@ fn check_language_switch_retranslates_ui() {
         "运行时切语失败 {} 项：\n{}",
         failures.len(),
         failures.join("\n")
+    );
+}
+
+// ==================== I. 第四轮 W2：浮层几何与熄灯（D-14 / D-15 / D-16 / D-17） ====================
+
+/// 构造一条传输任务数据（断言只需要"非空的一份模型"）
+fn transfer_entry(id: i32, name: &str) -> crate::app::TransferEntry {
+    crate::app::TransferEntry {
+        id,
+        name: SharedString::from(name),
+        direction: SharedString::from("download"),
+        size_text: SharedString::from("5.0 MB"),
+        progress: 0.42,
+        status: SharedString::from("running"),
+        status_text: SharedString::from("下载中"),
+        speed: SharedString::from("120 KB/s"),
+        detail: SharedString::from("1.2 MB / 5.0 MB"),
+        error: SharedString::default(),
+    }
+}
+
+/// 推进 mock 时间越过 Tooltip 的显示延迟（`tip-delay` = 450ms），并让入场淡入落定
+///
+/// 不能用 `settle()`：它只推 300ms，`tip-delay` 还没到点，气泡元素不会被实例化
+/// （`if TooltipState.visible && root.tip-shown && …` 整个分支都不存在），
+/// 后面按 id 取元素会直接 panic。
+/// 分两小步推而不是一次推到底：淡入的 1ms 定时器要等元素**被创建之后**才注册，
+/// 一步推满会让"创建 → 定时器 → 动画"少跑一帧。不 sleep、不读墙钟。
+fn settle_tooltip() {
+    settle();
+    for _ in 0..2 {
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(240));
+        slint::platform::update_timers_and_animations();
+    }
+}
+
+/// T11（守 D-14）底部附近的控件：气泡必须翻到目标**上方**，且完整落在窗口内。
+///
+/// 缺陷：`y` 之前只有 `Math.min(TooltipState.y, root.height - self.height - 4px)`
+/// 一条单边钳位——它保证气泡不越出下缘，但既不翻转、也没有 `Math.max` 下界。
+/// 状态栏的传输胶囊、列表最后一行这类目标的气泡会被顶到窗口下缘、压住目标本身。
+///
+/// 判别量是**气泡下边缘在锚点之上**。注意"下边缘 ≤ 窗口高 − 4px"单独**没有**判别力：
+/// 单边 `Math.min` 恰好把下边缘钳在 `窗口高 − 4px`（实测 756 = 760 − 4），两种写法
+/// 都能通过；只有"翻上去"这件事能区分它们（修好是 732，回退是 756，锚点在 740）。
+#[test]
+fn check_tooltip_flips_above_near_bottom() {
+    let mut failures: Vec<String> = Vec::new();
+    let (width, height) = WIDE;
+
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    settle();
+
+    let tooltip = ui.global::<crate::app::TooltipState>();
+    tooltip.set_text(SharedString::from("3 个传输任务正在运行"));
+    tooltip.set_x(width / 2.0);
+    // 写入方给的 y 是「目标下缘 + 偏移」，这里模拟窗口底部 20px 处的控件（传输胶囊）
+    let anchor_y = height - 20.0;
+    tooltip.set_y(anchor_y);
+    tooltip.set_visible(true);
+    settle_tooltip();
+
+    // 气泡可能整个被移出可视区（那正是这条缺陷的另一种表现），所以"查不到"必须算
+    // 一条明确失败，而不是在 `by_id` 里 panic 成一句没有判别力的"元素不存在"。
+    match maybe_by_id(&ui, "MainWindow::tooltip") {
+        Some(bubble) => {
+            let pos = bubble.absolute_position();
+            let size = bubble.size();
+            let bubble_bottom = bottom(&bubble);
+            println!(
+                "T11 锚点 y={anchor_y:.1}（窗口 {width:.0}x{height:.0}）: \
+                 气泡=({:.1},{:.1}) {:.1}x{:.1} 下边缘={bubble_bottom:.1}",
+                pos.x, pos.y, size.width, size.height,
+            );
+            expect(&mut failures, size.width > 1.0 && size.height > 1.0, || {
+                format!(
+                    "T11: 气泡尺寸异常 {:.1}x{:.1} —— 450ms 延迟之后气泡没有被实例化",
+                    size.width, size.height
+                )
+            });
+            expect(
+                &mut failures,
+                pos.y >= 4.0 - 0.5 && bubble_bottom <= height - 4.0 + 0.5,
+                || {
+                    format!(
+                        "T11: D-14 回退 —— 气泡上下边缘 ({:.1} … {bubble_bottom:.1}) 没有完整落在\
+                         窗口内（窗口高 {height:.0}，两侧各需留 4px）",
+                        pos.y,
+                    )
+                },
+            );
+            expect(&mut failures, bubble_bottom <= anchor_y - 4.0, || {
+                format!(
+                    "T11: D-14 回退 —— 气泡下边缘 {bubble_bottom:.1} 没有翻到锚点 {anchor_y:.1} 之上\
+                     （差 {:.1}px：锚点下方只剩 {:.1}px，放不下 {:.1}px 高的气泡）—— \
+                     tooltip 的 y 又退回单边 Math.min 了",
+                    bubble_bottom - anchor_y,
+                    height - anchor_y,
+                    size.height,
+                )
+            });
+        }
+        None => failures.push(format!(
+            "T11: D-14 回退 —— 450ms 延迟之后按 id 查不到气泡元素（TooltipState.visible={}，\
+             文本长度 {}）",
+            tooltip.get_visible(),
+            tooltip.get_text().len()
+        )),
+    }
+
+    // 子场景：钳位下界。窗口在气泡点亮之后被缩小、写点留下的是旧锚点（甚至为负），
+    // 两个分支都必须有 `Math.max(4px, …)`，否则气泡上边缘会跟着锚点跑到窗口外被裁掉半截。
+    tooltip.set_y(-40.0);
+    settle();
+    let stuck_top = maybe_by_id(&ui, "MainWindow::tooltip").map(|e| e.absolute_position().y);
+    println!("T11b 锚点 y=-40: 气泡上边缘={stuck_top:?}（期望 Some(4)）");
+    expect(
+        &mut failures,
+        stuck_top.is_some_and(|top| top >= 4.0 - 0.5),
+        || {
+            format!(
+                "T11b: D-14 回退 —— 锚点为负时气泡上边缘实测 {stuck_top:?}（期望 Some(4)；\
+                 None 表示整个气泡被移出窗口、测试后端查不到）—— y 缺 Math.max 下界"
+            )
+        },
+    );
+
+    assert!(
+        failures.is_empty(),
+        "T11 Tooltip 翻转失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// T12（守 D-15）整表替换模型必须收掉 Tooltip。
+///
+/// 缺陷：熄灯点只有「切页」与「四张列表的 viewport-y 变化」。刷新目录 / 重排 /
+/// 切换筛选 / 搜索结束走的都是**整份换模型**：行实例被销毁，行内按钮收不到
+/// `has-hover = false`，气泡于是挂着、指向一行已经不存在的控件。
+///
+/// 回退什么会红：删掉 `main.slint` 里 `changed file-list` 那一段。
+#[test]
+fn check_tooltip_clears_on_model_change() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+    ui.set_file_list(two_row_model(None));
+    settle();
+
+    let tooltip = ui.global::<crate::app::TooltipState>();
+    // 先确认"点亮"这条路径本身有效，否则下面的断言可能只是一次空转的绿灯
+    tooltip.set_text(SharedString::from("文件夹B"));
+    tooltip.set_visible(true);
+    settle();
+    let lit = tooltip.get_visible();
+    println!("T12 点亮后: TooltipState.visible={lit}");
+    expect(&mut failures, lit, || {
+        "T12: 前置条件失败 —— TooltipState.visible 写不进 true".to_string()
+    });
+
+    // 换一份模型（id / 选中态都不同），等同"刷新目录拿到了新的一份"
+    ui.set_file_list(two_row_model(Some("2")));
+    settle();
+    let after_files = tooltip.get_visible();
+    println!("T12 换 file-list 之后: TooltipState.visible={after_files}");
+    expect(&mut failures, !after_files, || {
+        "T12: D-15 回退 —— 换过 file-list 之后 TooltipState.visible 仍是 true，\
+         气泡会挂在已经被销毁的行上"
+            .to_string()
+    });
+
+    // 传输列表：同一个缺陷的第二条路径（传输面板刷新同样是整表替换）
+    tooltip.set_visible(true);
+    settle();
+    let relit = tooltip.get_visible();
+    expect(&mut failures, relit, || {
+        "T12: 前置条件失败 —— 第二次点亮失败（active-transfer-list 那截无从判断）".to_string()
+    });
+    ui.set_active_transfer_list(ModelRc::new(VecModel::from(vec![transfer_entry(
+        1,
+        "传输样本",
+    )])));
+    settle();
+    let after_transfers = tooltip.get_visible();
+    println!("T12 换 active-transfer-list 之后: TooltipState.visible={after_transfers}");
+    expect(&mut failures, !after_transfers, || {
+        "T12: D-15 回退 —— 换过 active-transfer-list 之后 TooltipState.visible 仍是 true"
+            .to_string()
+    });
+
+    assert!(
+        failures.is_empty(),
+        "T12 换表收 Tooltip 失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// T13（守 D-16）账号菜单必须能用键盘闭合与触发。
+///
+/// 缺陷：账号菜单只有一层"点外部关闭"的透明遮罩，没有键盘层——Esc 关不掉、↑↓ 不移动，
+/// 而它和右键菜单同为模态浮层（都计入 `modals-blocking`），键盘能力不该不一致。
+///
+/// 判据一律落在**行为**上（`current-page` / 回调），不读高亮序号：序号是实现细节，
+/// 断言它等于把 `acct-slot` 的算法抄一遍，实现一改断言就废。
+///
+/// 回退什么会红：删掉账号菜单 FocusScope 里的 `@keys(Escape)` KeyBinding。
+#[test]
+fn check_account_menu_keyboard_closure() {
+    let mut failures: Vec<String> = Vec::new();
+
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    ui.set_current_page(0);
+    let hits: Hits = Rc::new(RefCell::new(Vec::new()));
+    ui.on_open_download_dir(record(&hits, "open-download-dir"));
+    settle();
+
+    // ---- 第一截：Esc 必须关得掉 ----
+    ui.set_account_menu_open(true);
+    settle();
+    let opened = ui.get_account_menu_open();
+    press_key(&ui, '\u{1b}');
+    let closed = ui.get_account_menu_open();
+    println!("T13 Esc: 打开后={opened} 按 Esc 后={closed}（期望 true/false）");
+    expect(&mut failures, opened && !closed, || {
+        format!(
+            "T13: D-16 回退 —— 账号菜单 Esc 关不掉（打开后={opened}，按 Esc 后={closed}）—— \
+             键盘层没接到 Esc，或者 FocusScope 不是菜单内容的祖先（焦点落进菜单项后回不去）"
+        )
+    });
+
+    // ---- 第二截：↓ 一次落到「设置」，回车触发并关菜单 ----
+    ui.set_current_page(0);
+    ui.set_account_menu_open(true);
+    settle();
+    press_key(&ui, '\u{f701}');
+    press_key(&ui, '\n');
+    let page = ui.get_current_page();
+    let still_open = ui.get_account_menu_open();
+    println!("T13 ↓+Return: current-page={page} account-menu-open={still_open}（期望 4 / false）");
+    expect(&mut failures, page == 4 && !still_open, || {
+        format!(
+            "T13: D-16 回退 —— ↓ 之后回车没有触发「设置」\
+             （current-page={page}，菜单={still_open}；期望 4 / false）"
+        )
+    });
+
+    // ---- 第三截：↓↓ 落到「下载目录」，走的是它自己的动作 ----
+    // 这一截是第二截的对照组：证明高亮真的**移动**了，而不是永远停在第一项。
+    // 键盘与鼠标共用 `acct-*` 那一份实现，所以"移动了"必须能从行为上看出来。
+    ui.set_current_page(0);
+    hits.borrow_mut().clear();
+    ui.set_account_menu_open(true);
+    settle();
+    press_key(&ui, '\u{f701}');
+    press_key(&ui, '\u{f701}');
+    press_key(&ui, '\n');
+    let fired = hit_list(&hits);
+    let page_down2 = ui.get_current_page();
+    let open_down2 = ui.get_account_menu_open();
+    println!(
+        "T13 ↓↓+Return: 回调={fired:?} current-page={page_down2} open={open_down2}\
+         （期望 [open-download-dir] / 0 / false）"
+    );
+    expect(
+        &mut failures,
+        fired == vec!["open-download-dir".to_string()] && page_down2 == 0 && !open_down2,
+        || {
+            format!(
+                "T13: D-16 回退 —— ↓↓ 之后回车实测 回调={fired:?} / current-page={page_down2} / \
+                 open={open_down2}（期望 [\"open-download-dir\"] / 0 / false）—— \
+                 高亮没有真的换到第二项，或键盘与鼠标走了两条不同的实现"
+            )
+        },
+    );
+
+    assert!(
+        failures.is_empty(),
+        "T13 账号菜单键盘失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// T14（守 D-17）窗口失焦必须收掉全部四个浮层。
+///
+/// 缺陷：`install_window_events`（原名 `install_drag_drop`）只处理拖放与修饰键/按键，
+/// 没有 `Focused(false)` 分支。切到别的程序再回来，Tooltip / 账号菜单 / 右键菜单 /
+/// 排序浮层都还挂在屏幕上；而且它们算在 `modals-blocking` 里，背景控件会一起退出
+/// Tab 序列，看起来像是整个界面"卡住"了。
+///
+/// 这条不需要窗口事件：`close_overlays_on_focus_loss` 的全部行为就是一串 `set_*`，
+/// 直接调它即可（winit 的事件回调只有真窗口才会被调用，无窗口测试够不着）。
+#[test]
+fn close_overlays_on_focus_loss_clears_every_overlay() {
+    let ui = boot(WIDE);
+    ui.set_logged_in(true);
+    prepare_context_menu(&ui);
+    settle();
+
+    let tooltip = ui.global::<crate::app::TooltipState>();
+    tooltip.set_text(SharedString::from("刷新 (F5)"));
+    tooltip.set_visible(true);
+    ui.set_account_menu_open(true);
+    ui.set_context_open(true);
+    ui.set_sort_menu_open(true);
+    settle();
+
+    let before = (
+        tooltip.get_visible(),
+        ui.get_account_menu_open(),
+        ui.get_context_open(),
+        ui.get_sort_menu_open(),
+    );
+    // 前置：四个都得真的置真，否则"全为假"可能只是因为本来就全是假
+    assert_eq!(
+        before,
+        (true, true, true, true),
+        "T14 前置条件失败：四个浮层置不真（实测 {before:?}）"
+    );
+
+    crate::close_overlays_on_focus_loss(&ui);
+    settle();
+
+    let after = (
+        tooltip.get_visible(),
+        ui.get_account_menu_open(),
+        ui.get_context_open(),
+        ui.get_sort_menu_open(),
+    );
+    println!("T14 失焦前={before:?} 失焦后={after:?}（期望全 true → 全 false）");
+    assert_eq!(
+        after,
+        (false, false, false, false),
+        "T14: D-17 回退 —— 窗口失焦之后仍有浮层常驻（实测 {after:?}，\
+         顺序为 Tooltip / 账号菜单 / 右键菜单 / 排序浮层）"
     );
 }
