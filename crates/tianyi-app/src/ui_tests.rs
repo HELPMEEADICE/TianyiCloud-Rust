@@ -2626,6 +2626,8 @@ const ULTRA_WIDE: (f32, f32) = (1920.0, 1080.0);
 const MAIN_SLINT: &str = include_str!("../ui/main.slint");
 /// `ui/components/dialog.slint` 源码：同上
 const DIALOG_SLINT: &str = include_str!("../ui/components/dialog.slint");
+/// `ui/components/sort-menu.slint` 源码：第六个浮层（排序下拉），W6 收口时补的投影
+const SORT_MENU_SLINT: &str = include_str!("../ui/components/sort-menu.slint");
 
 /// 云盘页限宽列（`pages/cloud.slint` 的 `workspace-column`）
 fn workspace_column(ui: &crate::app::MainWindow) -> ElementHandle {
@@ -2677,6 +2679,90 @@ fn expect_elevated(failures: &mut Vec<String>, source: &str, tag: &str, anchor: 
             ));
         }
     }
+}
+
+/// 去掉 `//` 行注释后的源码
+///
+/// 规则式断言要数令牌的出现次数，而注释里提到令牌名是常态（D-18 的说明就写在投影
+/// 三行上方）。这不是假想的风险，是实测踩到的：第一次给 `sort-menu.slint` 写注释时
+/// 顺手写了 `Theme.flyout-bg` 与 `Theme.shadow-blur`，计数立刻从 1/1 变成 2/2——
+/// **注释能凭空补上一条投影**，那这条规则就等于没有。
+///
+/// 只按 `//` 切是够的：本仓 `ui/**` 的 `.slint` 里没有把 `//` 写进字符串字面量的情形
+/// （`@tr` 文案与文案里的路径都不带）。真要出现，那一行会被截断，计数只会偏小——
+/// 偏小让规则更容易红，不会制造假绿。
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 递归收集 `crates/tianyi-app/ui/**` 下的 `.slint` 源码（**跳过 `ui/dev/`**：图标总览
+/// 是 `examples/icon_sheet` 的自检素材，不进产品界面），返回 `(相对路径, 去注释源码)`，
+/// 按路径排序，好让失败信息里的文件顺序稳定。
+fn slint_sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().and_then(|n| n.to_str()) == Some("dev") {
+                    continue;
+                }
+                walk(&path, root, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("slint") {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+                    out.push((rel, strip_line_comments(&text)));
+                }
+            }
+        }
+    }
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
+    let mut out = Vec::new();
+    walk(&root, &root, &mut out);
+    out.sort();
+    out
+}
+
+/// 从 slint 生成的代码里收集所有 `<id>_shadow_<行号>` 字段名（去重）
+///
+/// 为什么不是数 `sp::BoxShadow`：生成代码把它写成 `sp :: r#BoxShadow`（带空格与
+/// raw identifier），按 `sp::BoxShadow` 去数恒为 0——实测过。真正一格一投影的证据是
+/// 字段名本身：`drop-shadow-*` 由 `passes/lower_shadows.rs` 落成一个原生项，item 树里
+/// 就多一个 `<id>_shadow_<行号>`。每个浮层恰好一个，所以"字段个数"就是"浮层投影个数"。
+fn shadow_fields(code: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let mut idx = 0;
+    while let Some(pos) = code[idx..].find("_shadow_") {
+        let at = idx + pos;
+        let start = code[..at]
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let mut end = at + "_shadow_".len();
+        while code.as_bytes().get(end).is_some_and(u8::is_ascii_digit) {
+            end += 1;
+        }
+        if end > at + "_shadow_".len() {
+            out.insert(code[start..end].to_string());
+        }
+        idx = at + "_shadow_".len();
+    }
+    out
 }
 
 /// J1（守 D-19）云盘页的工作区列必须限宽、居中，且默认窗口零变化。
@@ -2877,20 +2963,27 @@ fn check_detail_level_uses_capped_width() {
     );
 }
 
-/// J3（守 D-18）五处浮层必须声明投影，且几何全部引令牌。
+/// J3（守 D-18）六处浮层必须声明投影、几何全部引令牌，且**新增浮层漏投影必须能被抓到**。
 ///
 /// 缺陷（D-18）：`Theme.shadow` 零引用——对话框卡片、账号菜单、右键菜单、Toast、Tooltip
 /// 全都没有投影，`screenshots/after/16-dialog.png` 里对话框就是贴在浅色遮罩上的一块纯白，
-/// Fluent 的 elevation 语义整体丢失。
+/// Fluent 的 elevation 语义整体丢失。修的时候只覆盖了这五处，第六个浮层（排序下拉
+/// `components/sort-menu.slint`）漏在外面——**而当时的断言是「五处逐个查」的枚举式，
+/// 枚举之外的东西它一个都抓不到**，所以这次漏网一路绿到人工复核才被发现。
 ///
 /// **这是弱断言，但它守的东西是可复核的**：测试后端（`i-slint-backend-testing`）只暴露
 /// 几何与可访问性，读不到 `drop-shadow-*` 的取值；`BoxShadow` 又是**原生项而不是元素**，
 /// `ElementQuery` 根本看不见它（实测 `match_inherits("BoxShadow")` 恒为 0 个）。所以这条
-/// 断言拆成两截：
-///  1. **源码结构**：五个浮层块里各有一整套投影声明，取值全部引 `Theme`，没有字面量；
-///  2. **编译产物**：`<id>_shadow_<行号>` 这个 `BoxShadow` 字段必须真的出现在 slint 生成的
+/// 断言拆成三截：
+///  1. **源码结构（闭集）**：六处浮层块里各有一整套投影声明，取值全部引 `Theme`，没有字面量；
+///  2. **源码规则（规模无关）**：凡引用 `Theme.flyout-bg` 的文件，`Theme.shadow-blur`
+///     的出现次数不得少于它，且全仓差额恰为 1（唯一例外 Tooltip）。这一截是这次补的，
+///     它把断言从"枚举已知浮层"升级成"约束所有浮层"，代价见 `strip_line_comments` 与
+///     规则块里的注释（文本计数、非解析；不走 flyout-bg 的新浮层靠差额那一条兜）；
+///  3. **编译产物**：`<id>_shadow_<行号>` 这个 `BoxShadow` 字段必须真的出现在 slint 生成的
 ///     代码里（`drop-shadow-*` 是语法糖，由编译器 `passes/lower_shadows.rs` 落成原生项，
-///     插在那个元素下面的 item 树里）。源码能证明"写了"，产物能证明"真的进了 item 树"。
+///     插在那个元素下面的 item 树里），且这样的字段总数 ≥ 6。源码能证明"写了"，
+///     产物能证明"真的进了 item 树"。
 ///
 /// **像素级判别在这条渲染路径上不存在**：`ui_preview` 走的软件渲染器把 `draw_box_shadow`
 /// 留成了空实现（`i-slint-renderer-software-1.17.1/lib.rs:3088-3096` 的 `// TODO`），所以
@@ -2921,13 +3014,56 @@ fn check_flyout_has_elevation() {
         (MAIN_SLINT, "右键菜单", "ctx := Rectangle {"),
         (MAIN_SLINT, "Tooltip", "tooltip := Rectangle {"),
         (DIALOG_SLINT, "对话框卡片", "card := Rectangle {"),
+        (SORT_MENU_SLINT, "排序浮层", "flyout := Rectangle {"),
     ] {
         expect_elevated(&mut failures, source, tag, anchor);
     }
 
-    // 第二截：编译产物里必须真的长出 `BoxShadow` 原生项。
+    // 第二截：**规则式**断言——枚举之外的东西，靠这条守。
+    //
+    // 「逐个查已知浮层」抓不到第 6 个：`components/sort-menu.slint` 就是这么漏掉的
+    // （排序浮层一直是 flyout-bg + 零投影，J3 一路绿）。升级成规则式要用一个事实：
+    // **每个浮层面板都以 `Theme.flyout-bg` 作底色**——唯一例外是 Tooltip，它用
+    // `Theme.tooltip-bg`（气泡要"深色底 + 白字"，本来就不是浮层那套色阶）。
+    // 于是「某文件里引用 flyout-bg 的次数」是该文件里浮层个数的下界，
+    // 「引用 shadow-blur 的次数」是投影个数的下界，前者不得超过后者。
+    //
+    // 代价（写清以免误判）：这是**文本计数**，不是解析。同一文件里写两处 flyout-bg
+    // 却共用一个投影写法会被抓到（正确）；新增一个**不走 flyout-bg** 的浮层它帮不上忙，
+    // 那靠下面那条"全局差额"兜——差额一旦不是 1 就会红。
+    let sources = slint_sources();
+    let mut total_bg = 0usize;
+    let mut total_blur = 0usize;
+    for (path, text) in &sources {
+        let bg = text.matches("Theme.flyout-bg").count();
+        let blur = text.matches("Theme.shadow-blur").count();
+        total_bg += bg;
+        total_blur += blur;
+        if bg > 0 || blur > 0 {
+            println!("J3 规则: ui/{path} flyout-bg={bg} shadow-blur={blur}");
+        }
+        if bg > blur {
+            failures.push(format!(
+                "J3: D-18 回退 —— `ui/{path}` 里有 {bg} 处 `Theme.flyout-bg` 却只有 {blur} 处 \
+                 `Theme.shadow-blur`：凡用 flyout-bg 作底色的浮层都必须带投影。这条是规则式\
+                 断言，枚举不到的新浮层就靠它抓"
+            ));
+        }
+    }
+    // 全仓差额：`shadow-blur` 应恰比 `flyout-bg` 多 1（那个 1 是 Tooltip）。
+    // 差额变小 = 有浮层漏了投影；差额变大 = 有投影没走 flyout-bg（或 Tooltip 之外又多
+    // 了一个特例）——两种都该被人看一眼，所以在这里停下。
+    expect(&mut failures, total_blur == total_bg + 1, || {
+        format!(
+            "J3: D-18 回退 —— 全仓 `Theme.shadow-blur` {total_blur} 处 / `Theme.flyout-bg` \
+             {total_bg} 处，差额应为 1（唯一例外：Tooltip 的底色是 `Theme.tooltip-bg`）。\
+             差额变小通常是新增浮层漏了投影，变大通常是新增投影没走 flyout-bg"
+        )
+    });
+
+    // 第三截：编译产物里必须真的长出 `BoxShadow` 原生项。
     // 读不到产物（例如有人只搬走了 target/）时打印一行跳过，不把它算成缺陷——
-    // 这一截的职责是"加固第一截"，不是成为新的脆弱点。
+    // 这一截的职责是"加固前两截"，不是成为新的脆弱点。
     let generated = std::path::Path::new(env!("OUT_DIR")).join("main.rs");
     match std::fs::read_to_string(&generated) {
         Err(err) => println!(
@@ -2935,7 +3071,7 @@ fn check_flyout_has_elevation() {
             generated.display()
         ),
         Ok(code) => {
-            for id in ["toast", "menu", "ctx", "tooltip", "card"] {
+            for id in ["toast", "menu", "ctx", "tooltip", "card", "flyout"] {
                 let field = format!("{id}_shadow_");
                 let hit = code.contains(&field);
                 println!(
@@ -2949,6 +3085,18 @@ fn check_flyout_has_elevation() {
                     )
                 });
             }
+
+            // 规模无关的下界：投影字段个数不得少于 6（五个浮层 + 排序下拉）。
+            // 不写死等号：以后再加浮层只会更多，规则不该因此变红。
+            let fields = shadow_fields(&code);
+            println!("J3 编译产物: 投影字段 {} 个 {fields:?}", fields.len());
+            expect(&mut failures, fields.len() >= 6, || {
+                format!(
+                    "J3: D-18 回退 —— 编译产物里只有 {} 个 `<id>_shadow_<行号>` 字段（应 ≥ 6：\
+                     对话框 / 账号菜单 / 右键菜单 / Toast / Tooltip / 排序下拉）：{fields:?}",
+                    fields.len()
+                )
+            });
         }
     }
 

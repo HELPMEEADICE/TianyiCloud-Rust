@@ -42,7 +42,7 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 - 云盘页工作区限宽 `Theme.workspace-max-width`（1360px）并居中：1920 宽窗口下文件行不再被拉成一条线。上限必须 ≥ `LayoutMetrics.detail-level-of` 的最高档门槛 1300px，否则「类型」列永远不可达（`detail-level` 按限宽后的宽度判定）
 - 排序入口与窗口宽度无关：命令栏「排序」下拉（名称 / 大小 / 修改时间，右侧显示当前列的方向箭头），窄窗口下也能按修改时间排序；宽档点击列头排序照旧
 - 浮层生命周期统一：Tooltip 在底部目标处翻到目标上方并钳在窗口内、整表换模型（刷新 / 重排 / 换筛选）时熄灭；账号菜单支持 Esc 关闭与 ↑↓ + Enter 触发；窗口失焦时 Tooltip / 账号菜单 / 右键菜单 / 排序浮层一起收掉（它们都算 `modals-blocking`，挂着不收会让背景控件一直退出 Tab 序列）
-- 对话框、账号菜单、右键菜单、Toast、Tooltip 五处浮层统一带 `Theme.shadow` 投影（blur 16px / offset-y 4px）
+- 对话框、账号菜单、右键菜单、Toast、Tooltip、命令栏排序下拉六处浮层统一带 `Theme.shadow` 投影（blur 16px / offset-y 4px）；投影的回归断言是**规则式**的（凡用 `Theme.flyout-bg` 作底色的浮层都必须带投影），新增浮层漏配会直接红灯，不依赖"记住把新浮层加进断言名单"
 - 可展开的传输抽屉（默认收起，状态栏有实时任务计数）、统一 InfoBar 状态反馈、轻量 Tooltip 浮层
 - 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。

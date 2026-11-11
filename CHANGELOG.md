@@ -36,7 +36,7 @@
 - **文案抽取脚本**：`tools/i18n-extract.ps1` 从 `.slint` 抽 msgid（跳过 `ui/dev/`、正确解 `\"`），`-Count` 输出总数/去重数，`-Skeleton <lang>` 生成 `.po` 骨架。
 - **全局速度限制**：设置页「传输 → 速度限制」五档（不限速 / 1 / 5 / 10 / 20 MB/s），写入 `config.json` 的 `speed_limit`（字节/秒，0 = 不限）。上传与下载共用**一个**令牌桶（两路并发时总量仍受限于该值），只对**新启动**的任务生效——在跑的任务持有启动时那个桶。手改成非预设值（如 3 MB/s）时五段一个都不亮、行内小字写出真实速率，不会显示与实际不符的选中项。
 - **命令栏排序入口**：新增「排序」下拉（`ui/components/sort-menu.slint`），名称 / 大小 / 修改时间三项，右侧显示当前列的方向箭头。此前 `sort-changed` 只有三个列头调用点，而「修改时间」列头在 `detail-level >= 2` 里——默认 1180px 窗口（内容区 932px）根本没有按修改时间排序的入口。
-- **浮层投影**：对话框卡片、账号菜单、右键菜单、Toast、Tooltip 五处统一声明 `drop-shadow-*`，几何全部引 `Theme.shadow` / `shadow-blur`（16px）/ `shadow-offset-y`（4px）。`Theme.shadow` 此前零引用，五处浮层在浅色遮罩上是一块没有层次的纯白。
+- **浮层投影**：对话框卡片、账号菜单、右键菜单、Toast、Tooltip 五处统一声明 `drop-shadow-*`，几何全部引 `Theme.shadow` / `shadow-blur`（16px）/ `shadow-offset-y`（4px）。`Theme.shadow` 此前零引用，五处浮层在浅色遮罩上是一块没有层次的纯白。**第六处（命令栏排序下拉）在 W6 收口时补上**：它一直漏着，而当时的断言是「五处逐个查」的枚举式，枚举之外一个都抓不到——补投影的同时把断言升级成规则式（凡引用 `Theme.flyout-bg` 的 `.slint` 文件，`Theme.shadow-blur` 出现次数不得少于它，且全仓差额恒为 1），新增浮层漏配会直接红灯。
 - **视觉回归工具**：`tools/visual-diff.ps1` 逐通道比对两组基线（输出每张图的差异像素数、差异包围盒与 identical/noise/changed 判定，`-BeforeRev <ref>` 直接与历史版本里的基线比，存在 changed 时退出码 1）；`tools/ui-preview.ps1` 一条命令重采 29 张基线并在结束时给出比对命令。两者零第三方依赖，只用 `System.Drawing` + `LockBits`，不再依赖「本机恰好装了 numpy / Pillow」。
 
 ### Changed

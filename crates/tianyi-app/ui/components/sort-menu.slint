@@ -88,6 +88,13 @@ export component SortMenu inherits Rectangle {
         background: Theme.flyout-bg;
         border-width: 1px;
         border-color: Theme.stroke-strong;
+        // 浮层投影（D-18）：与前五处浮层（对话框 / 账号菜单 / 右键菜单 / Toast / Tooltip）
+        // 同款。本块一直是「第六个浮层」却漏了投影——J3 当时是「五处逐个查」的枚举式断言，
+        // 枚举之外的东西它一个都抓不到。W6 收口时补上这三行，同时把 J3 升级成规则式：
+        // 凡引用 `Theme.flyout-bg` 的文件，`Theme.shadow-blur` 的出现次数不得少于它。
+        drop-shadow-color: Theme.shadow;
+        drop-shadow-blur: Theme.shadow-blur;
+        drop-shadow-offset-y: Theme.shadow-offset-y;
 
         // 三条排序项，顺序与表头列序一致。
         // `modal: true`：浮层在场时背景控件已由 `ModalsApi.blocking` 挡在 Tab 序列外，

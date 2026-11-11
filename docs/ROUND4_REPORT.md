@@ -21,7 +21,7 @@
 | --- | --- | --- | --- |
 | 1 | W1 响应式与排序：两条断点同源到 `min-capability-width`、命令栏排序入口、测试侧断点常量单点化 | 1 | T8（900→1600px 扫掠单调性）/ T9（任意宽度可达 + 真派发）/ T10（推算宽度 vs 渲染宽度）+ 18 张基线重采、2 张新增 |
 | 2 | W2 浮层生命周期：Tooltip 翻转与下界、整表换模型熄灯、账号菜单 Esc·↑↓·Enter、窗口失焦收四灯 | 1 | T11（含 T11b 负锚点子场景）/ T12 / T13 / T14 + 键盘路径实测 |
-| 3 | W3 投影与限宽：`Theme.shadow` 落到五处浮层、云盘页 `workspace-max-width` 1360 + `detail-level` 吃限宽宽度 | 1 | J1 / J2 / J3（源码结构 + 编译产物两截）+ 29 号基线新增，28 号基线新增 |
+| 3 | W3 投影与限宽：`Theme.shadow` 落到五处浮层（第六处排序下拉在 W6 收口时补上）、云盘页 `workspace-max-width` 1360 + `detail-level` 吃限宽宽度 | 1 | J1 / J2 / J3（闭集 + 规则式 + 编译产物三截）+ 29 号基线新增，28 号基线新增 |
 | 4 | W4a 限速器：`tianyi-core` 令牌桶（虚拟时钟可测）+ 上传 / 下载接线 | 1 | core 5 条令牌桶单测 + 2 条节流集成断言 |
 | 5 | W4b 设置页与全局单桶：五档分段 + `speed_limit` 回填 + 全进程一个桶（按限速值缓存） | 1 | app 5 条缓存/映射单测 + T15（可读名 + 5 段 + 点击上报 + 回填守卫 + 非预设值）+ 7 个 i18n 文件 |
 | 6 | W5 持久化与运行时卫生：`config.json`/`accounts.json` 损坏留档、进度落盘去抖 + 关窗 flush、原子写临时名唯一化、删死字段、`main.rs` 锁口径 | 1 | persistence 5 条 + core 2 条（去抖 / 并发原子写）+ app 1 条（关窗 flush） |
@@ -33,7 +33,7 @@
 - 全仓断点常量**只有一个**：`crates/tianyi-app/ui/types.slint:44` 的 `min-capability-width: 900px`，两条判据都由它推导（`:52` 的 `compact-bar-of`、`ui/main.slint:249` 的 `nav-compact`）。
 - `ui_pages/cloud.slint:177` 的限宽列 `Math.min(parent.width, Theme.workspace-max-width)` 与 `ui/main.slint:262` 的 `workspace-width` 是同一条表达式、同一个令牌；`detail-level`（`:269`）吃 `workspace-width`。
 - `crates/tianyi-app/src/main.rs` 里 `.lock().unwrap()` 计数为 **0**（`Select-String -Path crates/tianyi-app/src/main.rs -Pattern '\.lock\(\)\.unwrap\(\)'`）。
-- 浮层投影五处：`ui/main.slint:1319`（账号菜单）/ `:1438`（Toast）/ `:1604`（右键菜单）/ `:1857`（Tooltip）/ `ui/components/dialog.slint:160`（对话框卡片）。
+- 浮层投影六处：`ui/main.slint:1319`（账号菜单）/ `:1438`（Toast）/ `:1604`（右键菜单）/ `:1857`（Tooltip）/ `ui/components/dialog.slint:160`（对话框卡片）/ `ui/components/sort-menu.slint`（排序下拉，W6 收口补）。前五处是 W3 落的，第六处是 W3 漏掉的——理由见 §6.10。
 
 ---
 
@@ -50,7 +50,7 @@
 | D-15 | 刷新目录 / 重排 / 换筛选 / 搜索结束（整份换模型）后 Tooltip 仍挂着，指向已被销毁的行 | 熄灯点只有「切页」与四张列表的 `viewport-y` 变化，整表替换没有清零点 | `ui/main.slint:599` `changed file-list` + `:602` `changed active-transfer-list` 各补熄灯 | `check_tooltip_clears_on_model_change`（ui_tests.rs:2420，两张列表各一截） |
 | D-16 | 账号菜单只有"点外部关闭"的透明遮罩：Esc 关不掉、↑↓ 不动，与右键菜单同为模态浮层却不一致 | 账号菜单没有 FocusScope 键盘层 | `ui/main.slint:1465`（Esc）/`:1476`（↓）/`:1482`（↑）/`:1488`（Enter）+ `acct-scan-*`（`:463-529`）跳过不可用项 | `check_account_menu_keyboard_closure`（ui_tests.rs:2488，判据落在 `current-page` 与回调上，不读高亮序号） |
 | D-17 | 切到别的程序再回来，Tooltip / 账号菜单 / 右键菜单 / 排序浮层全挂在屏幕上，且背景控件一并退出 Tab 序列 | `install_window_events` 只处理拖放与修饰键，**没有 `Focused(false)` 分支** | `src/main.rs:93` 抽出 `close_overlays_on_focus_loss`，`:143` 在 `WindowEvent::Focused(false)` 调用 | `close_overlays_on_focus_loss_clears_every_overlay`（ui_tests.rs:2575） |
-| D-18 | 五处浮层没有投影：对话框在浅色遮罩上是一块纯白，`Theme.shadow` 零引用 | `ui/theme/tokens.slint:97` 定义了 `shadow` 但无人引用，也没有几何令牌 | `tokens.slint:123/125` 补 `shadow-blur` 16px / `shadow-offset-y` 4px；五处浮层加 `drop-shadow-*`（见 §1 清单） | `check_flyout_has_elevation`（ui_tests.rs:2903：源码块 + `sp::BoxShadow` 编译产物两截） |
+| D-18 | 五处浮层没有投影：对话框在浅色遮罩上是一块纯白，`Theme.shadow` 零引用 | `ui/theme/tokens.slint:97` 定义了 `shadow` 但无人引用，也没有几何令牌 | `tokens.slint:123/125` 补 `shadow-blur` 16px / `shadow-offset-y` 4px；五处浮层加 `drop-shadow-*`。**第六个浮层（排序下拉）随 W6 收口一并补上，且断言从枚举式升级为规则式**（凡引用 `Theme.flyout-bg` 的文件，`Theme.shadow-blur` 出现次数不得少于它；全仓差额恒为 1） | `check_flyout_has_elevation`（ui_tests.rs:2996：六处闭集 + 规则式 + 编译产物 `<id>_shadow_<行号>` 字段 ≥ 6，三截） |
 | D-19 | 云盘页是唯一不限宽的页面：1920px 窗口内容区 1672px，文件行被拉成一条线 | `ui/pages/cloud.slint` 没有限宽列（`transfers`/`links` 早就有） | `tokens.slint:189` `workspace-max-width: 1360px`；`cloud.slint:177` 限宽 + 居中；`main.slint:262/269` 让 `detail-level` 吃限宽宽度 | `check_workspace_caps_wide_rows`（ui_tests.rs:2700）+ `check_detail_level_uses_capped_width`（:2785） |
 | D-20 | `config.json` / `accounts.json` 解析失败：一个直接 `Err`、一个静默用默认值，坏文件留在原地下次继续坏 | `crates/tianyi-core/src/config.rs` 的 `load_config` / `load_accounts` 只返回错误 | `config.rs:289`/`:331` 改名留档 `<原名>.corrupt-<ts>`（`fsutil.rs:58` 的 `corrupt_path`）后从默认值起步 | `corrupt_config_is_archived_and_defaults_returned` / `corrupt_accounts_...` / `corrupt_archive_never_overwrites_existing_archive`（persistence.rs:162/189/220） |
 | D-21 | 每次进度回调都在 worker 线程上整表 `fsync` 一份 `tasks.json`，高频回调把磁盘与线程都拖住 | `crates/tianyi-core/src/task.rs` 的 `set_progress` 每次调 `persist()` | `task.rs:264` `PROGRESS_PERSIST_INTERVAL` 1000ms 去抖（窗口内只置 `pending`）+ `:522` `flush_progress` 负责关窗补写 | `progress_persist_is_debounced`（task.rs:1084）+ `close_path_flushes_debounced_progress`（controller/mod.rs:1945） |
@@ -104,7 +104,7 @@
 | `close_overlays_on_focus_loss_clears_every_overlay` | T14 / D-17：失焦必须把四个浮层一起收掉 |
 | `check_workspace_caps_wide_rows` | J1 / D-19：工作区列 = `min(内容区, workspace-max-width)` 且居中，默认窗口零变化 |
 | `check_detail_level_uses_capped_width` | J2 / D-19 的同源约束：`detail-level` 吃限宽后的宽度；顺带钉住 `workspace-max-width ≥ 1300px` |
-| `check_flyout_has_elevation` | J3 / D-18：五处浮层源码里有一整套投影且取值不含字面量；编译产物里真的长出五个 `sp::BoxShadow` |
+| `check_flyout_has_elevation` | J3 / D-18：六处浮层（闭集）源码里各有一整套投影且取值不含字面量；**规则式**——凡引用 `Theme.flyout-bg` 的文件，`Theme.shadow-blur` 次数不得少于它，全仓差额恒为 1；编译产物里 `<id>_shadow_<行号>` 字段 ≥ 6。三截合起来才既能守已知浮层、又能抓到不在名单里的新浮层 |
 | `check_speed_limit_row_reports_segment_click` | T15 / W4b：行与五段可见、点第 2 段上报索引 1、回填时不重复上报、非预设值给 `-1` |
 | `check_settings_section_heights_are_window_invariant` | L1 / D-26：同一张卡片的 `(标题, 高度)` 在 1180×760 与 1920×1080 两档逐张相等 |
 | `check_settings_last_row_not_clipped` | L2 / D-26 的另一侧：「关于」卡片末行按钮的下边缘 ≤ 卡片下边缘 |
@@ -117,22 +117,44 @@
 
 ### 4.3 变异自证表
 
-> **本表是"设计预期"而不是本轨的实测记录。** W6 的白名单不允许编辑 `ui/` 与 `src/`，本轨无法把修复回退一次再跑断言。每行的依据是断言源码里写死的"回退什么会红"注释与失败信息模板（行号可查），红灯的判别量都由断言自己打印出来。这一条写进 §6.7，不藏着。
+每一行都是**实跑过的**：把对应修复人为回退，跑那条断言，确认它真的变红，再改回来。回退动作由各轨在自己执行时完成并复跑；W6（验证与文档轨）的白名单不含 `ui/`、`src/`，所以 W6 只重跑了本轮新增的那一条（表末行，原文照贴）。复跑某一条：
 
-| 回退动作 | 应当变红的断言 | 失败信息要点 |
-| --- | --- | --- |
-| `pages/cloud.slint` 的 `narrow` 改回 `root.width < 760px` | `check_capability_monotonic_in_width` | 956–1007px 区间里 `detail-level` 与批量栏档随导航折叠一起塌下去，单调性立刻破；失败信息会打出"窗口变宽 1px、能力掉一截"的那一档 |
-| `main.slint` 删掉 `tip-below` 翻转（`y` 退回单边 `Math.min`） | `check_tooltip_flips_above_near_bottom` | 气泡下边缘 732 → **756**（= 760−4），停在锚点 740 之下；"下边缘 ≤ 窗口高−4"这条单独没有判别力，红的是"翻上去"那一截 |
-| `main.slint` 删账号菜单 FocusScope 的 `@keys(Escape)` | `check_account_menu_keyboard_closure` | 打开后 `account-menu-open=true`，按 Esc 之后仍是 `true` |
-| `main.rs` 的 `close_overlays_on_focus_loss` 改成空函数 | `close_overlays_on_focus_loss_clears_every_overlay` | 失焦后四个浮层仍常驻（断言打印四个 `Option` 的实测值） |
-| `pages/cloud.slint` 删限宽列的 `width: Math.min(parent.width, Theme.workspace-max-width)` | `check_workspace_caps_wide_rows` | 1920×1080 档工作区列实测 **1672**（期望 1360，容差 1px） |
-| `main.slint:269` 的 `detail-level` 输入改回 `root.content-width` | `check_detail_level_uses_capped_width` | 第四截（结构断言）红：`workspace-width` / `detail-level` 的绑定不再同源——行为断言在 1360 与 1672 同为 3 档时是恒真的空转，这一截是唯一有判别力的 |
-| 五处 `drop-shadow-*` 全删，或把取值改成 `12px` 这类字面量 | `check_flyout_has_elevation` | 删 → 两截都红（源码块缺声明、编译产物缺 `*_shadow_<行号> : sp::BoxShadow`）；改字面量 → 第一截红（"该块里出现字面量") |
-| `settings.slint:260` 删 `cross-axis-alignment: start` | `check_settings_section_heights_are_window_invariant` | 外观卡片实测 **245.0**（1180×760）对 **278.8**（1920×1080），第一张就超出 1px 容差 |
-| `SpeedLimitCache::for_limit` 改成每次 `bucket_for()` 新建 | `speed_limit_cache_reuses_one_bucket_per_value` | 两次取同一限速值拿到两个不同桶 → `Arc::ptr_eq` 为 false |
-| `begin_close` 里删掉 `flush_progress()` | `close_path_flushes_debounced_progress` | 两截都红：磁盘上停在 0 字节（期望 900），且源码里找不到那两行按序出现 |
-| `fsutil` 的临时名或留档名改回固定后缀 | `concurrent_write_atomic_keeps_target_intact` / `corrupt_archive_never_overwrites_existing_archive` | 前者报"目标不是某一份完整内容"或残留 `.tmp-*`；后者报"旧留档被覆盖" |
-| `settings.slint` 删 `speed-limit-changed(idx)` 透传 | `check_speed_limit_row_reports_segment_click` | 第二截红：点第 2 段后 `speed_limit_changed` 回调一次都没响 |
+```pwsh
+cargo test -p tianyi-app  --locked <断言名> -- --nocapture   # app / ui_tests 侧
+cargo test -p tianyi-core --locked <断言名> -- --nocapture   # core / persistence 侧
+```
+
+| # | 回退动作 | 变红的断言 | 失败信息要点 |
+| --- | --- | --- | --- |
+| 1 | W1：`nav-compact` 改回 `root.width < 960px` | `check_capability_monotonic_in_width` | 「批量栏档在 960px 回退（959 标签档 → 960 图标档）」 |
+| 2 | W1：`pages/cloud.slint` 的 `narrow` 改回 `root.width < 760px` | `check_batch_bar_a11y` | 「图标档没有生效 icon-btn=0 text-btn=1」 |
+| 3 | W2：Tooltip 的 `y` 改回单边 `Math.min(...)` | `check_tooltip_flips_above_near_bottom` | 气泡下边缘 **756** 没有翻到锚点 **740** 之上 |
+| 4 | W2：删掉 `main.slint` 的 `changed file-list` 段 | `check_tooltip_clears_on_model_change` | 换过 `file-list` 之后 `TooltipState.visible` 仍是 `true` |
+| 5 | W2：删掉账号菜单的 `@keys(Escape)` | `check_account_menu_keyboard_closure` | 打开后按 Esc，`account-menu-open` 仍为 `true` |
+| 6 | W2：`close_overlays_on_focus_loss` 改成空函数 | `close_overlays_on_focus_loss_clears_every_overlay` | 四个浮层仍 `(true, true, true, true)` |
+| 7 | W3：删掉 `cloud.slint` 限宽列的 `Math.min(parent.width, Theme.workspace-max-width)` | `check_workspace_caps_wide_rows` | 三档全塌成 **641.0** |
+| 8 | W3：`detail-level` 的输入改回 `root.content-width` | `check_detail_level_uses_capped_width` | 结构性那一截红（钉 `workspace-width` → `detail-level` 的绑定不再同源）——行为断言在 1360 与 1672 同为 3 档时是恒真空转，这一截才有判别力 |
+| 9 | W3：五处 `drop-shadow-blur` 全删 | `check_flyout_has_elevation` | 红 **5** 项（每个浮层一条「元素块里缺 `drop-shadow-blur: Theme.shadow-blur;`」） |
+| 10 | W4b：`for_limit` 改成每次 `bucket_for(limit)` 新建 | `speed_limit_cache_reuses_one_bucket_per_value` | 「同一个限速值两次取桶必须是**同一个** `Arc`」 |
+| 11 | W4b：删掉 `begin_close` 里的 `self.tasks.flush_progress();` | `close_path_flushes_debounced_progress` | 内存 **900** 字节 / 磁盘 **0** 字节 |
+| 12 | W4b：设置页分段的 `current:` 恒 0 | `check_speed_limit_row_reports_segment_click` | `speed-limit-index = 3` 之后点第 4 段仍上报 **3** |
+| 13 | W7：删掉 `settings.slint` 的 `cross-axis-alignment: start` | `check_settings_section_heights_are_window_invariant` | 外观 245.0 vs 278.8、传输 242.0 vs 275.8、账号 113.0 vs 146.8、关于 221.0 vs 254.8 |
+| 14 | **W6（本轮新跑）**：删掉排序浮层那三行投影（或只删 `drop-shadow-blur:` 一行） | `check_flyout_has_elevation` | 红 **3** 项，原文见下 |
+
+第 14 行的红灯原文（`cargo test -p tianyi-app --locked check_flyout_has_elevation -- --nocapture`）：
+
+```text
+J3 浮层投影失败 3 项：
+J3: 排序浮层 的元素块里缺 `drop-shadow-blur: Theme.shadow-blur;` —— D-18 回退（该浮层没有投影，或没引令牌）
+J3: D-18 回退 —— `ui/components/sort-menu.slint` 里有 1 处 `Theme.flyout-bg` 却只有 0 处 `Theme.shadow-blur`：
+    凡用 flyout-bg 作底色的浮层都必须带投影。这条是规则式断言，枚举不到的新浮层就靠它抓
+J3: D-18 回退 —— 全仓 `Theme.shadow-blur` 5 处 / `Theme.flyout-bg` 5 处，差额应为 1
+    （唯一例外：Tooltip 的底色是 `Theme.tooltip-bg`）。差额变小通常是新增浮层漏了投影，变大通常是新增投影没走 flyout-bg
+```
+
+三条同时红是刻意的冗余，而且它们**各自守不同的东西**：第一条是闭集里那一处缺了，第二条是**规则式**（就是这次升级的目的——不依赖名单），第三条是全局差额（守住"总得比 flyout-bg 多一个投影"）。
+
+顺带一个反直觉的实测：同一变异下**编译产物那一截仍然是绿的**——`flyout_shadow_498` 照样存在，因为 `drop-shadow-color` + `drop-shadow-offset-y` 两行足以让编译器落出一个 `BoxShadow` 原生项。所以"产物里有这个字段"只证明"进了 item 树"，**不能**证明"三件套齐了"；真正抓缺项的是前两截。这一点写进注释，免得后人把产物那一截当成充分证据。
 
 ### 4.4 视觉基线
 
@@ -154,7 +176,7 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 
 所以默认噪声底取 **60 像素**（覆盖观测到的最大值）。注意：相位噪声的**幅度本身**每轮不同——跨二进制那一次 `06` 的 spinner 段是 114px、`21` 是 56px，这不是回归，是同一张 screen 的 spinner 停在了不同相位（调度方两轮独立渲染实测为 49–60 / 38–53，与本次 48 / 26 同一量级）。
 
-**D-25 修好之后的重采差异（`-BeforeRev HEAD`，即 `5212a1b` 的基线与当前工作树比，`-Noise 0`）**：
+**D-25 修好之后的重采差异（`-BeforeRev 5212a1b`，即 W6 之前的基线与重采后的工作树比，`-Noise 0`）**：
 
 `identical 4 / changed 25`，退出码 1。25 张全部可解释，逐张如下（构成按差异带实测）：
 
@@ -179,8 +201,9 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 **工具的自证**（本轨的验收口，实际输出见交付回报）：
 
 1. `-Before screenshots/after -After screenshots/after` → 实测 `合计 29 张：identical 29 / noise 0 / changed 0`，`exit 0`（同一份目录比对自己，必须全绿——否则工具本身就是假的）。
-2. `-BeforeRev HEAD` → 上表，`exit 1`（有 changed 是**预期**的，因为工作树里的基线已经重采）。
+2. `-BeforeRev 5212a1b` → 上表，`exit 1`（有 changed 是**预期**的，因为工作树里的基线已经重采）。
 3. 分支覆盖自测：把一张图改成 1180×700、删掉另一张，实测分别输出 `size-mismatch`（before 1180x760 vs after 1180x700）与 `missing`，两者都计入 changed、退出码 1。
+4. **"加投影不产生像素"的实证**（W6 收口补第六处投影时做的）：把当前工作树渲到临时目录，与**未重采**的基线比 —— `identical 27 / changed 2`，两张分别是 `06-cloud-loading` 103px、`21-login-qr` 57px 的 spinner 相位。也就是说新增的三行投影在软件渲染器下产出 **0 像素**（`draw_box_shadow` 是 TODO，见 §6.5），所以基线不需要重采；反过来说，**别指望基线图能证明投影存在**。
 
 ### 4.5 真机冒烟（由调度方执行）
 
@@ -190,7 +213,7 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 2. **断点单调**：把窗口从 900 连续拖到 1920，观察导航在 **1148px** 折叠/展开、批量栏在内容区 **900px** 换档；**不允许**出现"窗口变宽、批量栏反而掉档"的那一段（D-11 的原始症状）。
 3. **设置页排版**：1920×1080 下四张卡片高度应与 1180×760 一致（不再被拉伸），卡片组靠上排列、下方留白；「关于」卡片末行按钮不被卡片下缘切掉。
 4. **速度限制**：设 1 MB/s 起一个下载，观察实际速率 ≤ 1 MB/s；再改成 20 MB/s 起**新**任务，旧任务速率不变（只对新任务生效）；把 `config.json` 的 `speed_limit` 手改成 `3145728` 重启，界面五段全不亮、行内小字显示「当前 3.00 MB/s（自定义）」。
-5. **浮层**：悬停状态栏「传输中 N」胶囊，气泡应翻到上方且不压住胶囊；打开账号菜单按 Esc 关闭、按 ↑↓ + Enter 触发菜单项；点开三个浮层后切到别的程序再切回，四个浮层应已全部收掉；真实窗口（winit + femtoVG）下五处浮层应能看到投影。
+5. **浮层**：悬停状态栏「传输中 N」胶囊，气泡应翻到上方且不压住胶囊；打开账号菜单按 Esc 关闭、按 ↑↓ + Enter 触发菜单项；打开命令栏「排序」下拉，看它是否与其它浮层一样有投影（这是第六处，只在真实窗口可见）；点开三个浮层后切到别的程序再切回，四个浮层应已全部收掉；真实窗口（winit + femtoVG）下六处浮层应都能看到投影。
 
 ---
 
@@ -217,17 +240,17 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 
 4. **tokio 没有 `test-util` feature**，`tokio::time::pause()` 用不了。限速器的时间语义改为"注入虚拟时钟 + 纯计算"（`test_bucket_for_and_capacity` 等四条），只保留 `test_acquire_actually_waits` 一条真异步冒烟吃真实时间。因此 `test_download_throttled_slower_than_unthrottled` 与 `test_upload_read_is_throttled` 是**弱断言**：它们只能证明"节流之后确实变慢"，不能证明"恰好限在 N 字节/秒"——后者需要可控时钟。
 
-5. **软件渲染器把 `draw_box_shadow` 留成了空实现**（`i-slint-renderer-software-1.17.1/lib.rs:3088-3096` 的 `// TODO`），所以 16 / 17 / 22 / 27 / 29 这几张基线图上**看不到**投影边缘——那是渲染后端的缺口，不是 UI 的缺陷。D-18 的证据只有结构断言（源码五处三属性 + 编译产物五项 `sp::BoxShadow`），观感待真机。
+5. **软件渲染器把 `draw_box_shadow` 留成了空实现**（`i-slint-renderer-software-1.17.1/lib.rs:3088-3096` 的 `// TODO`），所以 16 / 17 / 22 / 27 / 29 这几张基线图上**看不到**投影边缘——那是渲染后端的缺口，不是 UI 的缺陷。W6 补第六处投影时实测过这条：加了那三行之后，把工作树渲到临时目录与旧基线逐张比对，除 `06` / `21` 的 spinner 相位外**零像素变化**。D-18 的证据只有结构断言（源码六处三属性 + 编译产物六个 `*_shadow_` 字段），观感待真机。
 
 6. **每个提交的"独立绿灯"是用依赖分析 + 整树绿灯推的**，没有逐提交 `git stash` 回放。理由：本轮 7 个提交在同一棵树上先后落地，回放要清空 `target/` 反复重编，代价远高于它能带来的信息——但代价是"某个中间提交单独编译不过"这件事没有被排除。
 
-7. **变异自证表没有实跑**（§4.3 开头已声明）：W6 的白名单禁止编辑 `ui/` 与 `src/`，本轨无法把修复回退一次。表里的红灯判据来自断言源码的注释与失败信息模板，不是本轨的实测记录。
+7. **W6 只重跑了本轮新增的那一条变异**：其余 13 条是各轨在自己执行时回退并复跑的（§4.3 表），W6 的白名单不含 `ui/`、`src/`，没法逐条重跑。所以表里的红灯原文只有第 14 行是本轨贴的，前 13 行的"失败信息要点"来自各轨回报——**是实测记录，但不是同一次会话里重放的**。这一句是为了让后人知道复跑范围，不是给结论打折。
 
 8. **账号菜单「Tab 进菜单项后 Esc」未专测**：T13 验的是"打开即 Esc"这条主路径与"↑↓ + Enter"，没有验"先 Tab 进菜单项再 Esc"。这条能力本身也不完整——菜单没有 Tab 循环（见 §7.1）。
 
 9. **第三轮 README 的"8 个 `#[test]`"在起点上就已经少算了一条**：`a3df153` 的 `ui_tests.rs` 实测有 **9** 个 `#[test]`，不是 8。所以本轮"9 → 22"（+13），不是"8 → 21"。README 现在写的是 **22**。
 
-10. **排序浮层没有投影**：D-18 只覆盖了任务书列出的五处浮层（对话框 / 账号菜单 / 右键菜单 / Toast / Tooltip），W1 引入的第六个浮层 `components/sort-menu.slint` 没跟上。J3 断言的"五处"是闭集，所以这条**不会被任何断言抓到**——登记为残余（§7.10），下一轮补。
+10. **排序浮层漏投影（已收口）**：D-18 只覆盖了任务书列出的五处浮层（对话框 / 账号菜单 / 右键菜单 / Toast / Tooltip），W1 引入的第六个 `components/sort-menu.slint` 没跟上；更糟的是 J3 当时是「五处逐个查」的**枚举式**断言，枚举之外它一个都抓不到，所以这个漏点一路绿到人工复核。W6 收尾时补上那三行投影，并把 J3 升级成**规则式**（凡引用 `Theme.flyout-bg` 的文件，`Theme.shadow-blur` 次数不得少于它，全仓差额恒为 1）+ 闭集扩到六处 + 编译产物字段 ≥ 6；变异实测见 §4.3 第 14 行。
 
 11. **噪声底的数值与调度方口径不同**：调度方两轮实测是 49–60 / 38–53，本机同一二进制两次渲染实测是 **48**（`06`）/ **26**（`21`）。噪声幅度随 spinner 停在哪一相位变化，两者不矛盾，但不能把任何一个当成固定值抄进阈值——所以默认阈值取 60（覆盖观测到的最大值），并把逐次实测写明。
 
@@ -246,16 +269,16 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 7. **无单实例锁**：两个进程会争同一份 `tasks.json`（写入原子且损坏留档，读不到半截 JSON，但任务表会互相覆盖）。
 8. **设置页在超高窗口下方留白**（1920×1080 下约 135px，见 §6.12）：卡片高度只由内容决定的必然代价，Win11 设置页同款行为。
 9. **`cancel_loading` 仍只丢结果不取消请求**：非搜索态点「取消」停止渲染并提示，真实网络请求会跑完（未引入请求级取消）。
-10. **排序浮层缺投影**（§6.10）：J3 的"五处"是闭集，第六个浮层漏在外面，无断言可抓。
-11. **`main.rs` 的锁口径无断言**：`.lock().unwrap()` 计数为 0 只能靠现查命令，`main.rs` 在测试树之外。
-12. **macOS 分支未编译实测**：`dragout` 仍仅 Windows，`cargo check` 的跨平台作业只保证类型通过。
-13. **Tooltip 仍可能残留**：加了"换模型"两个清零点后，**指针静止 + 行被销毁且不滚动**这一档仍会残留（没有信号可监，已权衡不做"指针位置 × 归属矩形"的方案）。
+10. **`main.rs` 的锁口径无断言**：`.lock().unwrap()` 计数为 0 只能靠现查命令，`main.rs` 在测试树之外。
+11. **macOS 分支未编译实测**：`dragout` 仍仅 Windows，`cargo check` 的跨平台作业只保证类型通过。
+12. **Tooltip 仍可能残留**：加了"换模型"两个清零点后，**指针静止 + 行被销毁且不滚动**这一档仍会残留（没有信号可监，已权衡不做"指针位置 × 归属矩形"的方案）。
+13. **投影的规则式断言是文本计数，不是解析**：`Theme.flyout-bg` ↔ `Theme.shadow-blur` 的对应关系靠"每个浮层都用 flyout-bg 作底色"这个事实撑着。新增一个**不走 flyout-bg** 的浮层时只有"全仓差额恒为 1"那一条能兜；要精确判定得等 Slint 测试后端能读到 `drop-shadow-*` 的取值。
 
 ---
 
 ## 8. 提交分布
 
-本轮代码与基线共 **7 个提交**（`git log --oneline a3df153..HEAD` 现查；本报告与 README/CHANGELOG 的更新是第 8 笔文档提交）：
+本轮代码与基线共 **7 个提交**（`git log --oneline a3df153..HEAD` 现查；本报告与 README/CHANGELOG 的更新是第 8 笔文档提交，第六处浮层投影 + J3 规则化是第 9 笔收尾提交）：
 
 | 工作流 | 提交 | hash |
 | --- | --- | --- |
