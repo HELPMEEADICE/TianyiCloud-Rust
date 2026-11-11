@@ -329,10 +329,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_status_text(SharedString::from("8 个项目"));
     ui.set_sort_key(0);
     ui.set_sort_asc(true);
-    ui.set_transfer_list(ModelRc::new(VecModel::from(demo_transfers())));
-    ui.set_active_transfer_list(ModelRc::new(VecModel::from(demo_transfers())));
-    ui.set_active_transfers(3);
-    ui.set_finished_transfers(1);
+    // 传输任务的三处计数与两张列表，全部由 `demo_transfers()` 推导。
+    //
+    // 演示数据也必须自洽，否则基线图上的矛盾数字会被当成真 bug：这里曾经写死
+    // `active_transfers = 3` / `finished_transfers = 1`，「进行中的传输」抽屉却装的是
+    // **全部四条**任务（含已完成与失败），而场景 9 的状态栏文案又另写死一句
+    // 「1 个任务进行中」——同一批基线图上并排出现三个互相矛盾的数字，复查的人只能
+    // 靠记忆区分"哪个是假的"。
+    //
+    // 口径与控制器保持一致（`controller/transfers.rs`：`active_count` = Pending |
+    // Running | Paused，finished = Completed，Failed 既不算进行中也不算已结束）。
+    // 现在改演示数据只需要改 `demo_transfers()` 一处。
+    let is_active = |s: &str| matches!(s, "pending" | "running" | "paused");
+    let demo_rows = demo_transfers();
+    let active_rows: Vec<TransferEntry> = demo_rows
+        .iter()
+        .filter(|t| is_active(t.status.as_str()))
+        .cloned()
+        .collect();
+    let active_count = active_rows.len() as i32;
+    let finished_count = demo_rows
+        .iter()
+        .filter(|t| t.status.as_str() == "completed")
+        .count() as i32;
+    ui.set_transfer_list(ModelRc::new(VecModel::from(demo_rows)));
+    ui.set_active_transfer_list(ModelRc::new(VecModel::from(active_rows)));
+    ui.set_active_transfers(active_count);
+    ui.set_finished_transfers(finished_count);
 
     // ---------------- 1. 个人云（浅色，含数据） ----------------
     ui.set_current_page(0);
@@ -388,7 +411,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ---------------- 9. 传输任务 ----------------
     ui.set_searching(false);
     ui.set_current_page(2);
-    ui.set_status_text(SharedString::from("1 个任务进行中"));
+    // 文案跟随计数（`active_count` 由演示数据算出来）：写死一句文案就会与导航徽章、
+    // 页面页脚「进行中 N」各说一套，而那三处本来就该是同一个数。
+    ui.set_status_text(SharedString::from(format!("{active_count} 个任务进行中")));
     shoot(&ui, &window, &out, "09-transfers", 1180, 760)?;
 
     // ---------------- 10. 传输任务（深色） ----------------

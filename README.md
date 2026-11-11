@@ -26,6 +26,7 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 - **暂停 / 继续 / 取消**：协作式检查点实现，暂停时任务在检查点挂起（保留 HTTP 会话与 multipart 会话），继续时原地恢复，不是“假暂停”，也不等同于取消
 - **任务状态机**：Pending / Running / Paused / Canceled / Completed / Failed，非法转换被拒绝；进程重启后 `Running` 自动降级为 `Paused`（不假装仍在传输）
 - **任务持久化**：`tasks.json` 与旧版本格式双向兼容，历史任务在传输页可见
+- **全局速度限制**：设置页「传输 → 速度限制」五档（不限速 / 1 / 5 / 10 / 20 MB/s），写入 `config.json` 的 `speed_limit`（**字节/秒**，0 = 不限）。上传与下载共用**一个**令牌桶（不是每个任务一个，否则设 1 MB/s、两路并发实际能跑 2 MB/s）。只对**新启动**的任务生效，在跑的任务沿用启动时那个桶；手改成非预设值（例如 3 MB/s）时五段一个都不亮、行内小字写出真实速率，不会显示与实际不符的选中项
 - **拖拽上传**：从资源管理器把文件/文件夹拖入窗口，自动上传到当前目录；文件夹递归建目录；批次去重不会重复入队
 - **网盘内拖拽移动**：按住拖拽文件到目标文件夹行松开
 - **拖出下载**（Windows）：Shift/Alt + 拖动文件行，先把云端文件取到临时目录再交给系统拖放
@@ -37,7 +38,11 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 ### 界面
 - WinUI 3 / Fluent Design 2 视觉：中性色分层表面、单一强调色、4px 圆角体系、4px 间距栅格
 - 浅色 / 深色 / 跟随系统三态主题，跟随系统时轮询系统偏好并实时切换
-- 可折叠 NavigationView（窗口 < 960px 自动收窄为图标栏，折叠态有 Tooltip；断点由 `ui/types.slint` 的 `LayoutMetrics.nav-compact-of` 单点定义）
+- 可折叠 NavigationView（窗口 < **1148px** 自动收窄为 56px 图标栏，折叠态有 Tooltip；断点是算出来的而不是调出来的：`Theme.nav-width` 248 + `LayoutMetrics.min-capability-width` 900 = 1148，只有「展开的导航栏」挤完还剩 900px 内容区才值得展开。批量栏的图标档判据同源，按**内容区** < 900px 触发，所以窗口 900–955px 走图标档——窗口更宽时能力不会反而更少）
+- 云盘页工作区限宽 `Theme.workspace-max-width`（1360px）并居中：1920 宽窗口下文件行不再被拉成一条线。上限必须 ≥ `LayoutMetrics.detail-level-of` 的最高档门槛 1300px，否则「类型」列永远不可达（`detail-level` 按限宽后的宽度判定）
+- 排序入口与窗口宽度无关：命令栏「排序」下拉（名称 / 大小 / 修改时间，右侧显示当前列的方向箭头），窄窗口下也能按修改时间排序；宽档点击列头排序照旧
+- 浮层生命周期统一：Tooltip 在底部目标处翻到目标上方并钳在窗口内、整表换模型（刷新 / 重排 / 换筛选）时熄灭；账号菜单支持 Esc 关闭与 ↑↓ + Enter 触发；窗口失焦时 Tooltip / 账号菜单 / 右键菜单 / 排序浮层一起收掉（它们都算 `modals-blocking`，挂着不收会让背景控件一直退出 Tab 序列）
+- 对话框、账号菜单、右键菜单、Toast、Tooltip 五处浮层统一带 `Theme.shadow` 投影（blur 16px / offset-y 4px）
 - 可展开的传输抽屉（默认收起，状态栏有实时任务计数）、统一 InfoBar 状态反馈、轻量 Tooltip 浮层
 - 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
@@ -110,12 +115,20 @@ cargo build --release
 
 ## 测试与门禁
 
-- **单元测试**：`cargo test --workspace`，当前 **126 条**（app 61 / core 62 / 集成 3）。其中 UI 层有
-  **8 个 `#[test]`** 基于 Slint 测试后端（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局几何、
-  控件可访问语义与键盘交互：1 个聚合的几何断言 + 7 条独立断言（批量栏可读名、登录输入跨模式留存、
-  Toast 不压状态栏、模态焦点闭包、选中行视口跟随、切页收起 Tooltip、方向键移动选择）。
+- **单元测试**：`cargo test --workspace`，当前 **175 条**（app 90 / i18n 4 / core 73 / persistence 8；
+  后两组是集成测试：`crates/tianyi-app/tests/i18n_catalog.rs` 与 `crates/tianyi-core/tests/persistence.rs`）。
+  其中 UI 层有
+  **22 个 `#[test]`** 基于 Slint 测试后端（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局几何、
+  控件可访问语义与键盘交互：1 个聚合的几何断言 + 21 条独立断言，失败时测试名本身就是结论。
+  第四轮新增 13 条，守的是断点单调性、排序可达性、断点常量单点化、Tooltip 翻转/换模型熄灯、
+  账号菜单键盘闭合、失焦收浮层、工作区限宽、`detail-level` 吃限宽宽度、浮层投影、速度限制行、
+  设置页卡片高度与末行不裁切。
   测试后端用线程局部哨兵而非进程级初始化，多个 `#[test]` 因此可以并行。
-- **视觉基线**：`screenshots/after/` 共 **25 张**，由 `examples/ui_preview.rs` 采集，逐通道比对（`docs/ROUND3_REPORT.md` §4）。
+- **视觉基线**：`screenshots/after/` 共 **29 张**，由 `examples/ui_preview.rs` 采集（`pwsh tools/ui-preview.ps1`
+  一条命令重采，默认写到该目录）。比对用 `pwsh tools/visual-diff.ps1 -Before <dir> -After <dir> [-Noise 60]`，
+  或 `-BeforeRev HEAD` 直接与上一个提交里的基线比；逐通道统计差异像素数并给包围盒，
+  存在 changed 时退出码 1。默认噪声底 60 像素：只有 `06-cloud-loading` 与 `21-login-qr` 的 spinner
+  相位会抖（同一二进制两次渲染实测 48 / 26 像素），其余 27 张逐字节相同。
 - **代码门禁**：`cargo fmt --all -- --check` 与 `cargo clippy --workspace --all-targets --locked -- -D warnings`
   在 CI 中都是硬门禁（`ci` 汇总作业会因此失败）；`cargo check --workspace --all-targets` 覆盖三平台。
 - **本机（MSYS2 ucrt64）跑 clippy**：本机没有 rustup/`link.exe`，`cargo clippy` 会转发到 msvc 工具链而失败，
@@ -145,9 +158,12 @@ cargo build --release
 ## 配置与数据存储
 
 应用数据保存在系统配置目录下的 `tianyi-cloud-rust/`：
-- `config.json` — 全局配置（下载目录、并发数、主题、减少动画）
-- `accounts.json` — 多账号及 token（自动刷新）
-- `tasks.json` — 传输任务与进度（断点续传恢复；与旧版本格式兼容）
+- `config.json` — 全局配置（下载目录、并发数、主题、减少动画、界面语言、速度限制 `speed_limit`（字节/秒，0 = 不限））
+- `accounts.json` — 多账号及 token（自动刷新；**token 明文落盘**，见「已知限制」）
+- `tasks.json` — 传输任务与进度（断点续传恢复；与旧版本格式兼容；写入去抖，关窗时强制 flush）
+
+配置文件损坏不会静默丢数据：`config.json` / `accounts.json` / `tasks.json` 解析失败时改名留档为
+`<原名>.corrupt-<时间戳>`（同秒多次则 `-1`…`-9`，再撞则覆盖 `-9`），再从默认值起步。
 
 ## API 签名说明
 
@@ -161,9 +177,13 @@ cargo build --release
 
 - **分享链接**：客户端只实现了“解析文件下载直链”，没有实现分享链接的创建/管理接口，因此导航项与页面命名为“下载直链”，不展示与能力不符的功能。
 - **多选**：支持单选、Ctrl+单击逐项多选、Shift+单击范围选择与 Ctrl+A 全选（选中集合以控制器为唯一事实来源）。
-- **键盘可达性**：按钮、图标按钮、导航项、菜单项、复选框、开关、分段控件均可 Tab 聚焦，Space/Enter 触发，且只在键盘操作时显示焦点环；文件列表支持 ↑↓ / Home / End / PageUp / PageDown 移动选择、Shift 扩选（选中行自动滚入视口），以及 F2/Delete/F5/Alt+←/Ctrl+A/Ctrl+F/Esc；对话框打开时背景控件退出 Tab 序列、Tab 在对话框内循环；右键菜单可 ↑↓ 高亮 + Enter 触发；搜索态可按 Esc 退出。**仍未覆盖**：账号菜单没有 Tab 循环、右键菜单按 Tab 仍可能先跳到文件列表（键盘路径实际是方向键 + Enter）、传输行与直链行内部按钮的 Tab 顺序未验证，且**未做真实读屏软件（NVDA / 讲述人）实测**——a11y 断言读的是 accesskit 暴露的同一层，不等价于实测（见 `docs/ROUND3_REPORT.md` §7）。
+- **键盘可达性**：按钮、图标按钮、导航项、菜单项、复选框、开关、分段控件均可 Tab 聚焦，Space/Enter 触发，且只在键盘操作时显示焦点环；文件列表支持 ↑↓ / Home / End / PageUp / PageDown 移动选择、Shift 扩选（选中行自动滚入视口），以及 F2/Delete/F5/Alt+←/Ctrl+A/Ctrl+F/Esc；对话框打开时背景控件退出 Tab 序列、Tab 在对话框内循环；右键菜单可 ↑↓ 高亮 + Enter 触发；搜索态可按 Esc 退出。账号菜单可用 Esc 关闭、↑↓ 移动高亮 + Enter 触发，窗口失焦时四个浮层一起收掉。**仍未覆盖**：账号菜单没有 Tab 循环、右键菜单按 Tab 仍可能先跳到文件列表（键盘路径实际是方向键 + Enter）、传输行与直链行内部按钮的 Tab 顺序未验证，且**未做真实读屏软件（NVDA / 讲述人）实测**——a11y 断言读的是 accesskit 暴露的同一层，不等价于实测（见 `docs/ROUND4_REPORT.md` §6）。
 - **Tooltip 残留**：归属键已唯一化，并加了「切页」与「四个 `ListView` 的 `viewport-y` 变化」两个清零点；但指针静止、行被销毁且不滚动时仍可能残留（没有信号可监，已权衡不做「指针位置 × 归属矩形」的复杂方案）。
-- **960px 断点跳变**：窗口 959→960 时导航从折叠变为展开，内容区宽度反而从 903px 降到 712px，于是 960–1007 区间比 959px 更窄（工具栏丢失标签）。本轮未改断点——改它会连带作废 `detail-level` 的三档断言，属单独一轮的响应式重标定。
+- **设置页超高窗口下方留白**：卡片高度只由内容决定（不再被视口拉伸），代价是 1920×1080 下卡片组下方留一块背景——`pages/settings.slint` 注释里的实测口径是内容盒 1008px、四张卡片合计 873px，余量约 135px。Win11 设置页同样是「列表靠上、不拉伸」，这是修「卡片被纵向拉伸」的必然代价，不是漏排。
+- **速度限制只对新任务生效**：在跑的传输持有启动时那个令牌桶，换档不会让在途任务突然变快或变慢；拖出下载（`dnd.rs`）走 `DownloadOptions::default()`，不受速度限制约束。
+- **`accounts.json` 里的 token 明文落盘**：未接系统密钥链（Windows DPAPI / macOS Keychain 需要平台分支）。
+- **无单实例锁**：同时开两个进程会争同一份 `tasks.json`——写入是原子的且损坏会留档，读不到半截 JSON，但两个进程的任务表会互相覆盖。
+- **`cancel_loading` 只丢结果不取消请求**：非搜索态点「取消」会停止渲染并提示「已取消加载」，真实网络请求仍会跑完（本轮不引入请求级取消）。
 - **配置降级未实跑**：配置目录不可写时退到 `%TEMP%\tianyi-cloud-fallback`，日志随之同源；但 Windows 上 `dirs::config_dir()` 走 `SHGetKnownFolderPath`、不读 `APPDATA` 环境变量，无法强制触发该分支，目前只有单测 + 代码链覆盖。
 - **Mica / Acrylic**：未引入 Windows App SDK，窗口背景为纯色（Mica 需平台 API 且跨平台不可用），保留系统原生标题栏以保证拖动/贴边/双击最大化/DPI 缩放在所有场景可靠。
 - **拖出下载**仅 Windows 实现；Linux/macOS 上会在状态栏提示不支持。

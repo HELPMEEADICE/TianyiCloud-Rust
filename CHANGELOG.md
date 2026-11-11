@@ -34,6 +34,10 @@
 - **四语国际化（简中 / 繁中 / 英 / 日）**：界面文案与运行时文案各一套词表——`.slint` 的 `@tr` 走编译期打包的 `lang/<lang>/LC_MESSAGES/tianyi-app.po`（msgid = 简中原文，简中即翻译表索引 0，故无 `zh-Hans` 目录），控制器 `format!` 拼出来的状态栏/提示条/任务状态走 `i18n/rs/<lang>.json`（键 → 简中原文，缺词按「当前语种 → 简中 → 键名」回退）。设置页「外观 → 语言」即时切换、无需重启，选择写入 `config.json` 的 `language` 字段；「自动」模式按系统 locale 解析（繁体优先，其它语言回退英文）。详见 `docs/I18N.md`。
 - **i18n 目录完整性回归测试**：新增 `crates/tianyi-app/tests/i18n_catalog.rs`，扫描 `ui/**/*.slint` 的 `@tr` 与三份 `.po`、四份运行时词表做互校（全覆盖 / 双向无多余 / 键集与占位符一致 / `lang/` 目录卫生）。漏翻此前只会静默回退成中文，现在直接红灯。
 - **文案抽取脚本**：`tools/i18n-extract.ps1` 从 `.slint` 抽 msgid（跳过 `ui/dev/`、正确解 `\"`），`-Count` 输出总数/去重数，`-Skeleton <lang>` 生成 `.po` 骨架。
+- **全局速度限制**：设置页「传输 → 速度限制」五档（不限速 / 1 / 5 / 10 / 20 MB/s），写入 `config.json` 的 `speed_limit`（字节/秒，0 = 不限）。上传与下载共用**一个**令牌桶（两路并发时总量仍受限于该值），只对**新启动**的任务生效——在跑的任务持有启动时那个桶。手改成非预设值（如 3 MB/s）时五段一个都不亮、行内小字写出真实速率，不会显示与实际不符的选中项。
+- **命令栏排序入口**：新增「排序」下拉（`ui/components/sort-menu.slint`），名称 / 大小 / 修改时间三项，右侧显示当前列的方向箭头。此前 `sort-changed` 只有三个列头调用点，而「修改时间」列头在 `detail-level >= 2` 里——默认 1180px 窗口（内容区 932px）根本没有按修改时间排序的入口。
+- **浮层投影**：对话框卡片、账号菜单、右键菜单、Toast、Tooltip 五处统一声明 `drop-shadow-*`，几何全部引 `Theme.shadow` / `shadow-blur`（16px）/ `shadow-offset-y`（4px）。`Theme.shadow` 此前零引用，五处浮层在浅色遮罩上是一块没有层次的纯白。
+- **视觉回归工具**：`tools/visual-diff.ps1` 逐通道比对两组基线（输出每张图的差异像素数、差异包围盒与 identical/noise/changed 判定，`-BeforeRev <ref>` 直接与历史版本里的基线比，存在 changed 时退出码 1）；`tools/ui-preview.ps1` 一条命令重采 29 张基线并在结束时给出比对命令。两者零第三方依赖，只用 `System.Drawing` + `LockBits`，不再依赖「本机恰好装了 numpy / Pillow」。
 
 ### Changed
 
@@ -56,6 +60,14 @@
 - **导航折叠断点单点化**：断点收敛到 `ui/types.slint` 的 `LayoutMetrics.nav-compact-of`，README 与代码统一为 **960px**（此前 README 写 1040px，与代码不符）。
 - **UI 测试后端改为线程局部哨兵**：从进程级 `init_integration_test_with_mock_time()`（含 proxy，第二个测试线程必然 `AlreadySet` panic）改为线程局部哨兵 + `init_no_event_loop()`，多个 `#[test]` 才可能真正并行。
 - **`config.json` 结构版本升到 v2**：新增 `language` 字段（默认 `auto`），缺 `version` 的历史配置按迁移链逐级升级到 v2，字段兼容由 `#[serde(default)]` 兜底，**不需要手动删配置**；读到比当前更高的版本号只记 warn 并按现有结构尽力解析。
+- **导航断点从 960px 改为 1148px**，而且不再是拍出来的数字：`Theme.nav-width`（248）+ `LayoutMetrics.min-capability-width`（900）。批量栏图标档的判据与它同源（内容区 < 900px），于是 `(导航档, detail-level, 批量栏档)` 关于整窗宽度单调不减——修之前整窗 960px 时导航展开吃掉 248px，内容区从 903px 掉到 712px，窗口比 959px 宽、能力反而更少。批量栏图标档的可达区间随之由 960–1007px 改为 **900–955px**。
+- **测试侧的断点常量单点化**：`ui_tests.rs` 不再自带 `NAV_WIDTH` / `NAV_WIDTH_COMPACT` / `NAV_COMPACT_BREAKPOINT` 副本，内容区宽度由 `Theme` 与 `LayoutMetrics` 推算，并与渲染出来的导航栏实测宽度互校——副本最坏的后果不是报错，而是 UI 改了断点后断言跑在错坐标上照样通过。
+- **云盘页工作区限宽 1360px 并居中**（`Theme.workspace-max-width`）：1920 宽窗口的内容区 1672px 不再把文件行拉成一条线。`detail-level` 改为吃**限宽之后**的宽度，因此上限必须 ≥ `detail-level-of` 的最高档门槛 1300px，否则「类型」列永远不可达。
+- **设置页卡片高度只由内容决定**：内容列的 `HorizontalLayout` 交叉轴对齐改为 `start`，纵向余量全部还给 `ScrollView`。此前 1920×1080 下每张卡片被均摊 +33.8px（卡片内部大块空白），反方向则把卡片压扁。
+- **进度落盘改为去抖**：`set_progress` 不再每次都在 worker 线程上整表 `fsync`（1 秒窗口内最多写一次），关窗时由 `flush_progress` 强制补写最后一段。中断最坏丢一个窗口的进度，换来高频进度回调不再反复重写整份 `tasks.json`。
+- **原子写的临时文件名唯一化**：`<name>.tmp` 改为 `<name>.tmp-<pid>-<序号>`，两个线程同时写同一路径不再互相覆盖；留档名同秒多次则 `-1`…`-9`，再撞复用 `-9`（不无限加后缀）。
+- **`config.json` / `accounts.json` 损坏不再静默**：解析失败时改名留档为 `<原名>.corrupt-<时间戳>`，再从默认值起步，坏文件留在原地可捞回。
+- **删除死字段 `AccountConfig.password`**：从未被读取，却写进每一份 `accounts.json`；旧文件里带这个字段仍能正常加载。
 
 ### Fixed
 
@@ -97,6 +109,15 @@
 - **加载态接上「取消」入口**：`cancel_loading` 打通，加载中可以退出，不再只能等请求自己返回。
 - **搜索态补 Esc 出口**：搜索中按 Esc 可退出；搜索中点击「取消」委托 `clear_search()`，不再落到误导性的「没有找到匹配的文件」。
 - **状态栏胶囊等回归断言的假绿修正**：见 `docs/ROUND3_REPORT.md` §5，`b181cd7` 提交信息里「22 张逐像素相同」的结论已由 numpy 重算推翻（实为 20 张相同 + 2 张 spinner 相位噪声）。
+- **窗口更宽、能力反而更窄（D-11）**：导航折叠按「整窗 < 960px」、批量栏退化按「内容区 < 760px」两条不同源的判据各自为政，960–1007px 区间里导航展开、批量栏掉档，工具栏标签与状态栏容量文字一起消失。两条判据现在都由 `LayoutMetrics.min-capability-width` 推导，图标档区间变为 900–955px。
+- **窄窗口无法按修改时间排序（D-12）**：排序入口只挂在列头上，「修改时间」列头在窄档根本不在元素树里。改由命令栏下拉提供与窗口宽度无关的入口，浮层开着时计入 `modals-blocking`。
+- **Tooltip 只有单边钳制（D-14）**：底部目标的 `y` 只有 `Math.min(窗口高 − 自身高 − 4px)` 一条钳位，气泡被顶在窗口下缘、压住目标本身。改为放不下就翻到目标上方，并补 `Math.max(4px, …)` 下界。
+- **整表换模型时 Tooltip 不熄灯（D-15）**：刷新目录 / 重排 / 换筛选 / 搜索结束走的是整份换模型，行实例被销毁、行内按钮收不到 `has-hover = false`，气泡挂在已经不存在的控件上。`changed file-list` 与 `changed active-transfer-list` 各补一个清零点。
+- **账号菜单没有键盘层（D-16）**：此前只有一层「点外部关闭」的透明遮罩，Esc 关不掉、↑↓ 不移动，而它与右键菜单同为模态浮层。补 Esc 关闭、↑↓ 移动高亮（跳过不可用项）、Enter 触发。
+- **窗口失焦不收藏浮层（D-17）**：`Focused(false)` 之后「指针离开」与「按 Esc」都不会再发生，Tooltip / 账号菜单 / 右键菜单 / 排序浮层原样挂在屏幕上；它们算在 `modals-blocking` 里，背景控件还会一起退出 Tab 序列。失焦时四个浮层一起收掉。
+- **云盘页是唯一不限宽的页面（D-19）**：1920 宽窗口的内容区 1672px 把文件行拉成一条线。改为限宽 1360px 并居中，且 `detail-level` 吃限宽后的宽度。
+- **`main.rs` 里 5 处 `.lock().unwrap()`**：拖放状态锁中毒会直接 panic 掉事件回调，改为 `lock_or_recover`，与 core / controller 侧口径一致。
+- **演示数据自相矛盾（D-25）**：`examples/ui_preview.rs` 写死 `active_transfers = 3`、「进行中的传输」抽屉装的却是全部四条任务（含已完成与失败）、状态栏文案又另写死「1 个任务进行中」，同一批基线图上并排出现三个互相矛盾的数字。改为三处全部由 `demo_transfers()` 推导，口径与控制器一致（active = Pending | Running | Paused，finished = Completed）。
 
 ## [0.1.0]
 

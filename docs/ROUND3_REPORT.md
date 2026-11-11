@@ -1,5 +1,7 @@
 # 第三轮优化报告
 
+> 第四轮已把导航断点从 960px 改为 1148px、测试数从 126 增至 175、基线从 25 张增至 29 张，最新口径见 docs/ROUND4_REPORT.md。
+
 > 基线 `78d90d2` → 本轮代码终点 `e955f52`（**25 个提交**）；再加两条文档提交，本轮全区间共 **27 个提交**。
 > `git diff --shortstat 78d90d2..e955f52` = **40 files changed, 2644 insertions(+), 498 deletions(-)**。
 > 含文档提交的全区间规模请现查 `git diff --shortstat 78d90d2..HEAD`——**这里刻意不写死**：
