@@ -238,6 +238,26 @@ export component SettingsPage inherits Rectangle {
 
             HorizontalLayout {
                 alignment: center;
+                // 内容列不参与**纵向**弹性分配（D-26）。这一行决定了四张卡片的高度只由内容
+                // 决定，而不是由视口高度决定。
+                //
+                // 弹性分配发生在两层，缺一不可：
+                //  1. `ScrollView` 的内容盒会被拉到「至少和视口一样高」（内容比视口矮时）；
+                //  2. `HorizontalLayout` 的交叉轴对齐默认 `stretch`，于是这一列被撑成内容盒
+                //     的高度（实测 1920×1080 下是 1008px，而卡片按内容只需要 873px）；
+                //  3. 列里的 `VerticalLayout`（`alignment` 默认 `stretch`）再把这 135px 余量
+                //     均摊给四张卡片（`i-slint-core/layout.rs::solve_box_layout` →
+                //     `adjust_items`），每张 +33.8px，卡片内部于是多出大块空白，反方向
+                //     （内容比视口高）又会把卡片压扁、末行被卡片下缘切掉。
+                // 改成 `start` 后这一列只拿自己的首选高度，纵向余量与溢出全部还给 ScrollView：
+                // 矮窗口照旧滚动，高窗口在卡片下方留一块背景（Win11 设置页同样如此，列表
+                // 靠上排列、不拉伸）。
+                //
+                // 为什么不是给四个 `SettingsSection` 加 `vertical-stretch: 0`：盒布局在
+                // **所有**子项 stretch 都为 0 时会退化成「把余量平均分给每个可增长项」
+                // （`adjust_items` 里 `total_stretch <= 0` 的兜底分支），实测那四行一句
+                // 都没起作用，卡片照旧各自 +33.8px。
+                cross-axis-alignment: start;
 
                 VerticalLayout {
                     // 用页面根宽度而不是 parent.width：ScrollView 的视口宽度由内容宽度驱动，

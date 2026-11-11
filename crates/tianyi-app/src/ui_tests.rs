@@ -3152,3 +3152,205 @@ fn check_speed_limit_row_reports_segment_click() {
         failures.join("\n")
     );
 }
+
+// ==================== L. 第四轮 W7：设置页卡片高度只由内容决定（D-26） ====================
+
+/// 桌面档：1920×1080。视口比内容高，D-26 只在这一档暴露。
+const DESKTOP: (f32, f32) = (1920.0, 1080.0);
+
+/// 设置页的四张分组卡片（`SettingsSection`），按文档顺序：外观 / 传输 / 账号 / 关于
+///
+/// 按组件类型名查而不是按标题查：卡片本身没有可读名称（它就是一个背景矩形），
+/// 标题是卡片里的第一行 `Text`。两者的对应关系由元素树的文档顺序保证。
+fn settings_sections(ui: &crate::app::MainWindow) -> Vec<ElementHandle> {
+    ElementQuery::from_root(ui)
+        .match_inherits("SettingsSection")
+        .find_all()
+}
+
+/// 卡片标题：卡片内最靠上的那个 `Text`（版式里标题就是第一行）
+///
+/// 只用来给人眼看的实测表/失败信息加上名字，不参与断言：内容被滚出视口时
+/// `ScrollView` 会连带把屏外元素从查询结果里去掉，标题此时查不到、退化成空串。
+fn section_title(section: &ElementHandle) -> String {
+    section
+        .query_descendants()
+        .match_inherits("Text")
+        .find_all()
+        .into_iter()
+        .min_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+        .map(|title| label_of(&title))
+        .unwrap_or_default()
+}
+
+/// 某一档窗口下、设置页四张卡片的 `(标题, 高度)`（按文档顺序）
+fn settings_section_heights(size: (f32, f32)) -> Vec<(String, f32)> {
+    let ui = boot(size);
+    ui.set_logged_in(true);
+    ui.set_current_page(4);
+    settle();
+
+    let sections = settings_sections(&ui);
+    println!(
+        "L 设置页窗口 {:.0}×{:.0}：卡片 {} 张",
+        size.0,
+        size.1,
+        sections.len()
+    );
+    sections
+        .iter()
+        .map(|section| {
+            let height = section.size().height;
+            let title = section_title(section);
+            println!(
+                "L   「{title}」y={:.1} 高={:.1}",
+                section.absolute_position().y,
+                height
+            );
+            (title, height)
+        })
+        .collect()
+}
+
+/// L1（守 D-26）同一张分组卡片的高度必须与窗口高度无关。
+///
+/// 缺陷：`ScrollView` 的内容盒会被拉到「至少和视口一样高」，而内容列外面的
+/// `HorizontalLayout` 交叉轴对齐默认是 `stretch`，于是这一列被撑成内容盒的高度；
+/// 列里的 `VerticalLayout`（`alignment` 默认 `stretch`）再把多出来的高度均摊给
+/// 四张卡片 —— 卡片高度于是跟着窗口高度走：1920×1080 下每张比内容高 33.8px
+/// （卡片内部出现大块空白），反方向则把卡片压扁、末行被卡片下缘切掉
+/// （那一侧由 `check_settings_last_row_not_clipped` 守）。
+///
+/// 判别量是**跨窗口高度的高度不变量**：两档的列宽都是 880px
+/// （`Theme.settings-max-width` 都已生效），内容不因宽度重排，卡片高度必须逐张相等。
+/// 回退什么会红：删掉 `pages/settings.slint` 里那一行 `cross-axis-alignment: start`
+/// → 外观卡片实测 245.0（1180×760）对 278.8（1920×1080），第一张就超出 1px 容差。
+#[test]
+fn check_settings_section_heights_are_window_invariant() {
+    let mut failures: Vec<String> = Vec::new();
+    let default = settings_section_heights(WIDE);
+    let desktop = settings_section_heights(DESKTOP);
+
+    for (size, heights) in [(WIDE, &default), (DESKTOP, &desktop)] {
+        expect(&mut failures, heights.len() == 4, || {
+            format!(
+                "L1: {:.0}×{:.0} 下设置页只查到 {} 张分组卡片（期望 4）—— 少一张，\
+                 下面的逐张对比就失去意义了",
+                size.0,
+                size.1,
+                heights.len()
+            )
+        });
+    }
+
+    for (index, (left, right)) in default.iter().zip(desktop.iter()).enumerate() {
+        let (title_left, height_left) = left;
+        let (title_right, height_right) = right;
+        expect(&mut failures, title_left == title_right, || {
+            format!(
+                "L1: 第 {} 张卡片在两档下标题对不上（1180×760 是「{title_left}」、\
+                 1920×1080 是「{title_right}」）—— 卡片顺序变了，逐张比高度没有意义",
+                index + 1
+            )
+        });
+        expect(
+            &mut failures,
+            (height_left - height_right).abs() <= 1.0,
+            || {
+                format!(
+                    "L1: 「{title_left}」卡片的高度跟着窗口高度变了：1180×760 实测 \
+                 {height_left:.1}px、1920×1080 实测 {height_right:.1}px（容差 1px）—— \
+                 卡片参与了纵向弹性分配，而它的高度本该只由内容决定"
+                )
+            },
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "L1 卡片高度跨窗口不变量失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// L2（守 D-26 的另一侧）「关于」卡片最后一行必须完整落在卡片内，不许被卡片下缘切掉。
+///
+/// 断言落在两个几何量的大小关系上：末行「打开」按钮的下边缘 ≤ 所属卡片的绝对下边缘。
+/// `ElementQuery` 没有 `parent()`，卡片归属用元素树反查：取设置页里最靠下的那张卡片
+/// （文档顺序里它也是最后一张，即「关于」），再取卡片内 label 为「打开」且最靠下的
+/// 按钮 —— 设置页里两个 `PathRow` 各有一个「打开」按钮（配置目录 / 日志目录），
+/// 最靠下的那个就是末行。末尾那条「按钮必须在卡片顶端之下」是为了证明反查到的
+/// 确实是这张卡片里的按钮，而不是别处的同名按钮。
+///
+/// 已知边界（写在这里以免误判）：测试后端的字体度量固定、内容盒永远不矮于首选高度，
+/// 所以「卡片被压扁」这一侧在这条通道上复现不出来 —— 实测 1920×1080 修复前后都是
+/// 绿。它是真实窗口那个症状（按钮被卡片下缘切掉一条）的守门员；D-26 的判别量是
+/// L1 的跨窗口高度不变量。
+#[test]
+fn check_settings_last_row_not_clipped() {
+    let mut failures: Vec<String> = Vec::new();
+    let ui = boot(DESKTOP);
+    ui.set_logged_in(true);
+    ui.set_current_page(4);
+    settle();
+
+    let sections = settings_sections(&ui);
+    let about = match sections
+        .iter()
+        .max_by(|a, b| a.absolute_position().y.total_cmp(&b.absolute_position().y))
+    {
+        Some(section) => section.clone(),
+        None => panic!("L2: 设置页一张分组卡片都没查到"),
+    };
+
+    let card_top = about.absolute_position().y;
+    let card_bottom = bottom(&about);
+    let card_title = section_title(&about);
+    println!(
+        "L2 末张卡片「{card_title}」: y={card_top:.1} 高={:.1} 下缘={card_bottom:.1}",
+        about.size().height
+    );
+
+    let button = about
+        .query_descendants()
+        .match_inherits("FluentButton")
+        .find_all()
+        .into_iter()
+        .filter(|element| label_of(element) == "打开")
+        .max_by(|a, b| bottom(a).total_cmp(&bottom(b)));
+    let button = match button {
+        Some(button) => button,
+        None => panic!(
+            "L2: 末张卡片「{card_title}」里查不到 label 为「打开」的按钮 —— \
+             末行没渲染出来，或行内操作按钮改了文案"
+        ),
+    };
+
+    let button_top = button.absolute_position().y;
+    let button_bottom = bottom(&button);
+    println!(
+        "L2 「打开」按钮: y={button_top:.1} 高={:.1} 下缘={button_bottom:.1}",
+        button.size().height
+    );
+
+    expect(&mut failures, button_top >= card_top, || {
+        format!(
+            "L2: 反查到的「打开」按钮 y={button_top:.1} 在卡片顶端 {card_top:.1} 之上 —— \
+             它不是「{card_title}」卡片里的那一个，下面的断言不成立"
+        )
+    });
+    expect(&mut failures, button_bottom <= card_bottom + 1.0, || {
+        format!(
+            "L2: 「{card_title}」卡片最后一行越出了卡片下缘：按钮下缘 {button_bottom:.1}px > \
+             卡片下缘 {card_bottom:.1}px（容差 1px）—— 卡片被压得比内容矮，末行被裁掉了"
+        )
+    });
+
+    assert!(
+        failures.is_empty(),
+        "L2 设置页末行裁剪失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
