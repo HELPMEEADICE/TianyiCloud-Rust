@@ -49,5 +49,9 @@ fn main() {
         }
     }
 
+    if purge_shell {
+        cleaned += netuse::purge_shell_traces();
+    }
+
     println!("完成：清理 {cleaned} 项");
 }

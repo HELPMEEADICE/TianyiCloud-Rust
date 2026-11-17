@@ -149,6 +149,74 @@ pub fn unc_from_dos_target(target: &str) -> String {
     }
 }
 
+/// 清理注册表/快捷方式里其它可能残留「网络驱动器」的位置（best-effort）
+///
+/// 不同 Windows 版本与挂载方式会把映射记在不同地方，逐个清比猜一个可靠：
+/// * HKCU\Network\<盘符>：持久化映射（net use /persistent 写这里）；
+/// * %APPDATA%\Microsoft\Windows\Network Shortcuts\*.lnk：「此电脑 → 网络位置」的快捷方式；
+/// * Explorer\Map Network Drive MRU：映射对话框的历史记录。
+pub fn purge_shell_traces() -> usize {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS};
+    use winreg::RegKey;
+    let mut removed = 0usize;
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+
+    if let Ok(net) = hkcu.open_subkey_with_flags("Network", KEY_ALL_ACCESS) {
+        let names: Vec<String> = net.enum_keys().filter_map(|k| k.ok()).collect();
+        for name in names {
+            if hkcu.delete_subkey_all(format!("Network\\{name}")).is_ok() {
+                log::info!("删除持久化映射 HKCU\\Network\\{name}");
+                removed += 1;
+            }
+        }
+    }
+
+    if let Some(appdata) = dirs::data_dir() {
+        let dir = appdata
+            .join("Microsoft")
+            .join("Windows")
+            .join("Network Shortcuts");
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                let path = e.path();
+                let is_lnk = path
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("lnk"))
+                    == Some(true);
+                if is_lnk {
+                    let name = path.file_name().map(|n| n.to_string_lossy().to_string());
+                    if std::fs::remove_file(&path).is_ok() {
+                        log::info!("删除网络位置快捷方式 {:?}", name);
+                        removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(mru) = hkcu.open_subkey_with_flags(
+        r"Software\Microsoft\Windows\CurrentVersion\Explorer\Map Network Drive MRU",
+        KEY_ALL_ACCESS,
+    ) {
+        let names: Vec<String> = mru
+            .enum_values()
+            .filter_map(|v| v.ok())
+            .map(|(n, _)| n)
+            .collect();
+        for name in names {
+            if name.eq_ignore_ascii_case("MRUList") {
+                continue;
+            }
+            if mru.delete_value(&name).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+
+    removed
+}
+
 /// 挂载前清扫上一次同名残留（进程被强杀后的典型情况）
 ///
 /// 不清的后果很具体：同名 UNC 卷已存在 → FspFileSystemCreate 返回 ERROR_FILE_EXISTS
