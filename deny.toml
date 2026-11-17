@@ -71,4 +71,8 @@ ignore = [
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0370",
     "RUSTSEC-2026-0372",
+    # chrono 0.4.45 被标为 unmaintained（同为维护状态告警，非漏洞）。
+    # 它是 slint（i-slint-core）与本项目 core 的共同依赖，0.4 线没有替代版本可升，
+    # 只能等上游换掉；命令行侧的时区/时间处理已只依赖 chrono 的稳定子集。
+    "RUSTSEC-2026-0543",
 ]
