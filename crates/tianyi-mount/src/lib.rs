@@ -52,7 +52,7 @@ pub mod stats;
 #[cfg(windows)]
 pub mod win;
 
-#[cfg(all(unix, feature = "fuse"))]
+#[cfg(all(target_os = "linux", feature = "fuse"))]
 pub mod fuse_linux;
 
 pub use error::{Error, Result};

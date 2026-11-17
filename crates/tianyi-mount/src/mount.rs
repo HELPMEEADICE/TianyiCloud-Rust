@@ -499,17 +499,29 @@ pub fn mount(fs: Arc<CloudFs>, options: MountOptions) -> Result<MountHandle> {
         Ok(MountHandle::new(fs, platform, options, backend))
     }
 
-    #[cfg(all(unix, feature = "fuse"))]
+    #[cfg(target_os = "linux")]
     {
-        let (platform, backend) = crate::fuse_linux::start(fs.clone(), &options, &target)?;
-        Ok(MountHandle::new(fs, platform, options, backend))
+        #[cfg(feature = "fuse")]
+        {
+            let (platform, backend) = crate::fuse_linux::start(fs.clone(), &options, &target)?;
+            Ok(MountHandle::new(fs, platform, options, backend))
+        }
+        #[cfg(not(feature = "fuse"))]
+        {
+            let _ = (fs, options, target);
+            Err(Error::Other(
+                "本构建没有编译 Linux FUSE 后端（缺少 fuse feature）".into(),
+            ))
+        }
     }
 
-    #[cfg(all(unix, not(feature = "fuse")))]
+    // 既不是 Windows 也不是 Linux（例如 macOS）：明确说明没有实现，
+    // 而不是让编译器在 cfg 剥离后报一个看不懂的"缺少返回值"。
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (fs, options, target);
         Err(Error::Other(
-            "本构建没有编译 Linux FUSE 后端（缺少 fuse feature）".into(),
+            "本平台（macOS 等）没有实现文件系统挂载，目前只支持 Windows 与 Linux".into(),
         ))
     }
 }

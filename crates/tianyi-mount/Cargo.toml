@@ -46,7 +46,13 @@ winreg = "0.52"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Linux 只读挂载。fuser 是唯一成熟的无守护进程 FUSE 绑定；
 # 只在 Linux 目标上解析，Windows 构建的依赖树里看不到它。
-fuser = { version = "0.15", optional = true }
+#
+# default-features = false：关掉 fuser 默认的 libfuse 链接（开着的话 build script 会跑
+# pkg-config 去找 libfuse3/fuse2，找不到就直接编译失败）。关掉之后走 fuser 自带的纯 Rust
+# 挂载实现（mount(2) + fusermount3），构建期不需要任何 C 依赖或 SDK，运行期需要 fuse3
+# 包提供的 fusermount3（或者以 root 运行）。这与 Windows 侧「不依赖 WinFsp SDK、只依赖
+# 运行时」的取舍一致。
+fuser = { version = "0.15", optional = true, default-features = false }
 
 [features]
 default = []
