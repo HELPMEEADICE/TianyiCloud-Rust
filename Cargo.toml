@@ -5,6 +5,7 @@ members = [
     "crates/tianyi-app",
     "crates/tianyi-gui",
     "crates/tianyi-cli",
+    "crates/tianyi-mount",
 ]
 
 [workspace.package]
