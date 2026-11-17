@@ -3,6 +3,10 @@
 使用 **Rust + Slint** 开发的天翼云盘第三方桌面客户端，界面按 Windows 11 / Fluent Design 2 的视觉与交互规范重做。
 API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `189pc` 驱动。
 
+除了桌面界面，同一个可执行文件还提供一套 **Headless 命令行**（`tianyi-app -c ...`）：可在没有
+DISPLAY / Wayland / 桌面会话的 Linux 服务器、SSH 终端与 Docker 容器里运行，并为脚本和 AI Agent
+提供稳定的 JSON 协议。用法、协议与退出码见 [docs/CLI.md](docs/CLI.md)。
+
 ## 功能特性
 
 ### 登录
@@ -47,13 +51,33 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 - 零自绘图标：全部图标来自微软官方 Fluent UI System Icons（MIT）的原始 SVG，
   编译期嵌入、以 alpha 蒙版随主题着色，任意 DPI 清晰；默认 Regular、选中态 Filled。
   详见 [docs/ICON_SYSTEM_MIGRATION.md](docs/ICON_SYSTEM_MIGRATION.md) 与
-  `crates/tianyi-app/ui/assets/icons/SOURCES.md`
+  `crates/tianyi-gui/ui/assets/icons/SOURCES.md`
 - 动效统一走 `Theme.motion-*` 令牌（90 / 180 / 240ms）：浮层入场、页面切换淡入、传输抽屉展开、
   状态切换淡入与控件状态过渡；「减少动画」开关会把全部动效时长归零。
   配方与取舍见 [docs/MOTION_REPORT.md](docs/MOTION_REPORT.md)
 - 支持“减少动画”，关闭全部过渡动画
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
 - **四语自适应**：简体中文 / 繁體中文 / English / 日本語；首次启动按系统语言自动选择（其它语言回退英文），设置页「外观 → 语言」可即时切换、无需重启，选择写入 `config.json`。两套词表的分工、切语链路与新增文案/语种的步骤见 [docs/I18N.md](docs/I18N.md)
+
+### 命令行 / Headless
+
+- **同一个可执行文件，两种模式**：不带参数打开图形界面；`-c` 进入命令行，并且在**任何图形后端
+  初始化之前**就完成模式判定（纯 CLI 构建里那些代码根本不存在）
+- **纯 CLI 构建**：`--no-default-features --features cli` 的依赖树里没有 slint / winit / rfd /
+  arboard，可在最小化 Linux 镜像与无桌面环境里运行
+- **完整命令集**：账号（密码 / 二维码登录、多账号、切换）、文件（ls / info / search / mkdir /
+  rename / mv / cp / rm / link / quota / 空间切换）、传输（upload / download / tasks /
+  task pause|resume|cancel|remove）
+- **交互式 Shell**：`tianyi-app -c` 在终端里进入 REPL，带云端工作目录（`cd` / `pwd`）、
+  命令历史与命令名补全
+- **机器可读输出**：`--json` 输出固定信封 `{success,data,error}`，stdout 只有结果、日志与进度
+  一律走 stderr；`--jsonl` 提供「一行请求一行响应」的常驻会话
+- **稳定错误码与退出码**：参数 2 / 认证 3 / 网络 4 / 远端 5 / 本地 IO 6 / 中断 7 / 不存在 8 /
+  忙碌 9，错误码字符串同样是契约
+- **与 GUI 共用一切**：同一份 config.json / accounts.json / tasks.json；配置与账号写入改成
+  **读-改-写 + 跨进程文件锁**，任务表按「我动过的以我为准」合并，两个前端互不覆盖
+- **不伪造后台能力**：CLI 传输是前台传输，`--no-wait` 只把任务登记进 `tasks.json`，
+  绝不在退出时声称「任务仍在后台运行」。断点续传（`.part` 合法前缀）是真的
 
 ## 技术栈
 
@@ -63,62 +87,82 @@ API 实现移植自 [OpenList](https://github.com/OpenListTeam/OpenList) 的 `18
 | `tokio` + `reqwest` | 异步 HTTP 与运行时 |
 | `rsa` / `aes` / `hmac` / `md-5` / `sha1` | 天翼云盘签名与加密（AES-ECB、HMAC-SHA1、RSA PKCS1v15） |
 | `image` / `qrcode` | 图片解码与二维码渲染 |
-| `rfd` | 文件选择 / 确认对话框 |
+| `rfd` | 文件选择 / 确认对话框（仅 GUI） |
+| `clap` / `rustyline` / `rpassword` | CLI 参数解析、交互式行编辑与隐藏密码输入（仅 CLI） |
 
 ## 项目结构
 
 ```
 crates/
-├── tianyi-core/               # 纯 Rust 核心库（无 UI 依赖）
+├── tianyi-core/               # 纯 Rust 核心库（无 UI、无图形依赖，GUI/CLI 共用）
 │   └── src/
 │       ├── api.rs             # 登录（密码/二维码）、会话刷新
 │       ├── client.rs          # 签名请求、文件列表/操作、批量任务、下载链接
+│       ├── service.rs         # 共享服务：账号选择、会话失效自动刷新、路径→id 解析、云盘操作
+│       ├── cloudpath.rs       # 云端路径解析（. / .. / 中文 / 空格）与本地文件名消毒
+│       ├── job.rs             # 一次上传/下载作业的执行体（GUI 与 CLI 共用）
+│       ├── store.rs           # 配置存储：主目录→临时目录→内存态降级链、读-改-写
+│       ├── flock.rs           # 跨进程排他文件锁（std 原生，零依赖）
 │       ├── crypto.rs          # 签名/AES/RSA/MD5/分片大小计算
 │       ├── transfer.rs        # 上传（秒传/分片）、下载（定长分片 + 协作式检查点）
-│       ├── task.rs            # 任务状态机、TransferControl（暂停/继续/取消）、持久化
+│       ├── task.rs            # 任务状态机、TransferControl、跨进程合并式持久化
 │       ├── torrent.rs         # CAS torrent 生成与解析（bencode）
 │       ├── theme.rs           # 系统深色偏好探测（Windows/macOS/Linux）
 │       ├── models.rs          # API 数据结构
 │       ├── config.rs          # 账号/配置持久化（%APPDATA%/tianyi-cloud-rust）
 │       └── file.rs            # 文件类型识别、容量/时间/进度格式化
-└── tianyi-app/                # Slint 桌面 UI
-    ├── examples/              # ui_preview（界面截图）、icon_sheet（图标总览）
-    ├── ui/
-    │   ├── main.slint         # 主窗口：路由、导航、抽屉、右键菜单、Tooltip 浮层
-    │   ├── types.slint        # 共享数据结构与全局状态（DragOutApi / TooltipState）
-    │   ├── theme/
-    │   │   ├── tokens.slint   # 设计令牌（颜色/圆角/间距/字号/图标尺寸/动效）
-    │   │   └── icons.slint    # 图标注册表（IconName 枚举 + IconAssets + Icon 组件）
-    │   ├── assets/icons/      # 微软官方 Fluent SVG（112 个）+ LICENSE + SOURCES.md
-    │   ├── dev/               # icon-sheet.slint：图标总览（自检用，不进主界面）
-    │   ├── components/        # 按钮、输入框、进度条、导航项、文件行、传输行、InfoBar、空状态…
-    │   └── pages/             # login / cloud / transfers / links / settings
-    └── src/
-        ├── controller.rs      # UI 事件 ↔ 核心库桥接（含暂停/继续链路、请求乱序丢弃）
-        ├── backend.rs         # tokio 运行时调度
-        ├── dragout.rs         # Windows 拖出下载（COM DoDragDrop）
-        └── main.rs            # 事件循环、拖入钩子、UI 定时器
+├── tianyi-gui/                # Slint 桌面 UI（带 slint / winit / rfd / arboard）
+│   ├── examples/              # ui_preview（界面截图）、icon_sheet（图标总览）
+│   ├── ui/                    # 组件树、设计令牌、Fluent 图标、页面
+│   ├── lang/                  # 编译期打包的 .po（tianyi-gui.po）
+│   └── src/                   # controller / backend / dragout / ui_tests / lib.rs（run）
+├── tianyi-cli/                # Headless 命令行（clap + rustyline，无图形依赖）
+│   └── src/
+│       ├── args.rs            # 类型化参数（clap derive）
+│       ├── context.rs         # 配置、会话、输出模式、交互策略
+│       ├── output.rs          # stdout/stderr 分工、JSON 信封
+│       ├── error.rs           # 稳定错误码与退出码
+│       ├── cmd/               # account / files / transfer 三组命令
+│       ├── repl.rs            # 交互式 Shell 与 NDJSON 会话
+│       ├── notify.rs          # 验证码落盘、终端二维码
+│       └── interrupt.rs       # Ctrl+C：先暂停再取消
+└── tianyi-app/                # 启动器：先决定模式，再转交 GUI / CLI
+    ├── src/main.rs            # 模式判定（不加载任何图形后端）
+    └── tests/cli_e2e.rs       # 端到端测试：真实二进制 + 临时配置目录
 ```
 
 ## 构建与运行
 
 ```bash
+# 默认构建（GUI + CLI，同一个可执行文件）
 cargo build --release
-./target/release/tianyi-app.exe
+./target/release/tianyi-app.exe        # 打开图形界面
+./target/release/tianyi-app.exe -c status   # 命令行模式
+
+# 纯 CLI / Headless 构建（依赖树里没有 slint / winit / rfd / arboard）
+cargo build --release -p tianyi-app --no-default-features --features cli
+
+# 纯 GUI 构建（不带命令行）
+cargo build --release -p tianyi-app --no-default-features --features gui
 ```
 
-开发模式：`cargo run -p tianyi-app`
+开发模式：`cargo run -p tianyi-app`（GUI）、`cargo run -p tianyi-app -- -c status`（CLI）。
 
 仓库根目录的 `rust-toolchain.toml` 固定了 `channel = "stable"`，并声明 `rustfmt` / `clippy` 两个组件
 （MSRV 在 `Cargo.toml` 的 `rust-version` 里单独声明，CI 的 `msrv` 作业按它校验）；
 `cargo` 在该目录下会自动使用这份工具链清单，无需手动 `rustup default`。
 
+命令行用法、JSON 协议、退出码、SSH / Docker / ARM64 示例与 Agent 调用示例统一在
+[docs/CLI.md](docs/CLI.md)。
+
 ## 测试与门禁
 
-- **单元测试**：`cargo test --workspace`，当前 **175 条**（app 90 / i18n 4 / core 73 / persistence 8；
-  后两组是集成测试：`crates/tianyi-app/tests/i18n_catalog.rs` 与 `crates/tianyi-core/tests/persistence.rs`）。
+- **单元测试**：`cargo test --workspace`，当前 **276 条**——core 96 / gui 87 / cli 65 /
+  app 启动器 5 / 集成测试 15（`tianyi-gui/tests/i18n_catalog.rs` 4、`tianyi-core/tests/persistence.rs` 8、
+  `tianyi-app/tests/cli_e2e.rs` 3 组共 11 条端到端用例）。CLI 层新增的 65 条覆盖参数解析、
+  路径与分页、JSON 信封形状、错误码映射、表格对齐、NDJSON 请求解析、Ctrl+C 语义与配置读-改-写。
   其中 UI 层有
-  **22 个 `#[test]`** 基于 Slint 测试后端（`crates/tianyi-app/src/ui_tests.rs`），在无窗口环境下校验布局几何、
+  **22 个 `#[test]`** 基于 Slint 测试后端（`crates/tianyi-gui/src/ui_tests.rs`），在无窗口环境下校验布局几何、
   控件可访问语义与键盘交互：1 个聚合的几何断言 + 21 条独立断言，失败时测试名本身就是结论。
   第四轮新增 13 条，守的是断点单调性、排序可达性、断点常量单点化、Tooltip 翻转/换模型熄灯、
   账号菜单键盘闭合、失焦收浮层、工作区限宽、`detail-level` 吃限宽宽度、浮层投影、速度限制行、
@@ -134,6 +178,10 @@ cargo build --release
 - **本机（MSYS2 ucrt64）跑 clippy**：本机没有 rustup/`link.exe`，`cargo clippy` 会转发到 msvc 工具链而失败，
   用等价替代 `pwsh tools/clippy.ps1`（本质是 `RUSTC_WORKSPACE_WRAPPER=clippy-driver` + `cargo check`），
   详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **Headless 门禁**：`cli-headless` 作业在**不安装任何 GUI 系统库**的 runner 上编译
+  `-p tianyi-app --no-default-features --features cli`（x86_64 与 aarch64），并用 `cargo tree` 断言
+  依赖树里没有 slint / winit / rfd / arboard，最后在无 DISPLAY 环境下跑一次 `-c --json status` 校验协议；
+  `cli-e2e` 作业在同样没有 GUI 库的环境里跑 `cargo test -p tianyi-app --no-default-features --features cli`。
 - **只出报告、不拦门禁**的两个 CI 作业：`audit`（`cargo-deny` 依赖漏洞/许可证）与 `coverage`
   （`cargo-llvm-cov` 行覆盖率摘要）。它们是 `continue-on-error` 且不在 `ci` 汇总作业的 `needs` 里。
 
@@ -141,8 +189,8 @@ cargo build --release
 
 | 工作流 | 触发 | 内容 |
 |---|---|---|
-| `ci.yml` | push 到 `main`、PR、手动 | `cargo fmt --check`、`cargo clippy -D warnings`、三平台 `cargo check`、`cargo test` |
-| `build.yml` | 发布 Release、手动触发 | 三平台 × 双架构打包，产物见下表 |
+| `ci.yml` | push 到 `main`、PR、手动 | `cargo fmt --check`、`cargo clippy -D warnings`、三平台 `cargo check`、`cargo test`，以及纯 CLI 构建 / 依赖树断言 / CLI 端到端测试 |
+| `build.yml` | 发布 Release、手动触发 | 三平台 × 双架构打包（Windows zip/msi、macOS dmg、Linux AppImage），并额外产出 **Linux x86_64 / arm64 的 CLI-only 产物**（`tianyi-cli-<version>-<arch>.tar.gz`） |
 
 | 平台 | 目标三元组 | 产物 |
 |---|---|---|
@@ -182,7 +230,9 @@ cargo build --release
 - **设置页超高窗口下方留白**：卡片高度只由内容决定（不再被视口拉伸），代价是 1920×1080 下卡片组下方留一块背景——`pages/settings.slint` 注释里的实测口径是内容盒 1008px、四张卡片合计 873px，余量约 135px。Win11 设置页同样是「列表靠上、不拉伸」，这是修「卡片被纵向拉伸」的必然代价，不是漏排。
 - **速度限制只对新任务生效**：在跑的传输持有启动时那个令牌桶，换档不会让在途任务突然变快或变慢；拖出下载（`dnd.rs`）走 `DownloadOptions::default()`，不受速度限制约束。
 - **`accounts.json` 里的 token 明文落盘**：未接系统密钥链（Windows DPAPI / macOS Keychain 需要平台分支）。
-- **无单实例锁**：同时开两个进程会争同一份 `tasks.json`——写入是原子的且损坏会留档，读不到半截 JSON，但两个进程的任务表会互相覆盖。
+- **多进程共写任务表是「按任务合并」而不是完全互斥**：GUI 与 CLI 同时改同一份 `tasks.json` 时，
+  写入前会抢 `tasks.json.lock` 排他锁、并做「我动过的任务以我为准、我没动过的以磁盘为准」的合并，
+  因此不会互相顶掉对方的进度或删除结果；但两个进程改**同一条**任务时仍然是后写者赢。需要严格互斥时请只在一个前端里操作传输。
 - **`cancel_loading` 只丢结果不取消请求**：非搜索态点「取消」会停止渲染并提示「已取消加载」，真实网络请求仍会跑完（本轮不引入请求级取消）。
 - **配置降级未实跑**：配置目录不可写时退到 `%TEMP%\tianyi-cloud-fallback`，日志随之同源；但 Windows 上 `dirs::config_dir()` 走 `SHGetKnownFolderPath`、不读 `APPDATA` 环境变量，无法强制触发该分支，目前只有单测 + 代码链覆盖。
 - **Mica / Acrylic**：未引入 Windows App SDK，窗口背景为纯色（Mica 需平台 API 且跨平台不可用），保留系统原生标题栏以保证拖动/贴边/双击最大化/DPI 缩放在所有场景可靠。
@@ -199,5 +249,5 @@ GPLv3
 
 第三方资源：
 - 应用内全部 UI 图标来自 [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons)，
-  许可证 MIT，原文见 `crates/tianyi-app/ui/assets/icons/LICENSE`；
+  许可证 MIT，原文见 `crates/tianyi-gui/ui/assets/icons/LICENSE`；
   逐图标来源与上游提交号见同目录 `SOURCES.md`。

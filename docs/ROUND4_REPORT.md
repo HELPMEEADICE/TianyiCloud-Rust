@@ -30,9 +30,9 @@
 
 配套的代码事实（可现查）：
 
-- 全仓断点常量**只有一个**：`crates/tianyi-app/ui/types.slint:44` 的 `min-capability-width: 900px`，两条判据都由它推导（`:52` 的 `compact-bar-of`、`ui/main.slint:249` 的 `nav-compact`）。
+- 全仓断点常量**只有一个**：`crates/tianyi-gui/ui/types.slint:44` 的 `min-capability-width: 900px`，两条判据都由它推导（`:52` 的 `compact-bar-of`、`ui/main.slint:249` 的 `nav-compact`）。
 - `ui_pages/cloud.slint:177` 的限宽列 `Math.min(parent.width, Theme.workspace-max-width)` 与 `ui/main.slint:262` 的 `workspace-width` 是同一条表达式、同一个令牌；`detail-level`（`:269`）吃 `workspace-width`。
-- `crates/tianyi-app/src/main.rs` 里 `.lock().unwrap()` 计数为 **0**（`Select-String -Path crates/tianyi-app/src/main.rs -Pattern '\.lock\(\)\.unwrap\(\)'`）。
+- `crates/tianyi-gui/src/main.rs` 里 `.lock().unwrap()` 计数为 **0**（`Select-String -Path crates/tianyi-gui/src/main.rs -Pattern '\.lock\(\)\.unwrap\(\)'`）。
 - 浮层投影六处：`ui/main.slint:1319`（账号菜单）/ `:1438`（Toast）/ `:1604`（右键菜单）/ `:1857`（Tooltip）/ `ui/components/dialog.slint:160`（对话框卡片）/ `ui/components/sort-menu.slint`（排序下拉，W6 收口补）。前五处是 W3 落的，第六处是 W3 漏掉的——理由见 §6.10。
 
 ---
@@ -85,7 +85,7 @@
 
 ### 4.2 新增断言清单（142 → 175，共 33 条）
 
-**app +19**（`crates/tianyi-app/src/`）
+**app +19**（`crates/tianyi-gui/src/`）
 
 | 断言 | 守什么 |
 | --- | --- |
@@ -234,9 +234,9 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 
 1. **D-26 的描述被我自己纠正过一次**：我最初写成"末行被裁"，实为**卡片被撑高、末行仍在卡内**。W7 用可复现的 PNG 实测纠正（1920×1080 下每张 +33.8px、卡内出现大块空白；"被裁"只在内容比视口高时才是主要症状，且软件渲染通道复现不出来）。判别量因此改为「同一卡片跨高度等高」（L1），而 L2「末行不裁切」被明确标注为守门员——它在测试后端的固定字体度量下**修复前后都是绿**。
 
-2. **W1 编辑 9 个文件，超出预算 8**。原因是我按白名单条目数算，漏算了三份 `.po`（`lang/{en,ja,zh-Hant}` 各一份——新增的排序项与断点文案要同步进翻译表）。算术上：白名单里 `ui/**` 与 `src/**` 条目 5 个，加 `lang/*/.../tianyi-app.po` 3 个，加 `examples/ui_preview.rs` 1 个 = 9。
+2. **W1 编辑 9 个文件，超出预算 8**。原因是我按白名单条目数算，漏算了三份 `.po`（`lang/{en,ja,zh-Hant}` 各一份——新增的排序项与断点文案要同步进翻译表）。算术上：白名单里 `ui/**` 与 `src/**` 条目 5 个，加 `lang/*/.../tianyi-gui.po` 3 个，加 `examples/ui_preview.rs` 1 个 = 9。
 
-3. **W4b 编辑 14 个文件，超出上限 11**，且**算术上不可减**：7 个代码文件（`controller/{mod,ratelimit,session,transfers}.rs`、`ui/main.slint`、`ui/pages/settings.slint`、`src/ui_tests.rs`）+ 7 个 i18n 文件（`i18n/rs/*.json` 四份 + `lang/*/LC_MESSAGES/tianyi-app.po` 三份）。少一份 `.po` 就是一条漏翻，`i18n_catalog` 会直接红灯。
+3. **W4b 编辑 14 个文件，超出上限 11**，且**算术上不可减**：7 个代码文件（`controller/{mod,ratelimit,session,transfers}.rs`、`ui/main.slint`、`ui/pages/settings.slint`、`src/ui_tests.rs`）+ 7 个 i18n 文件（`i18n/rs/*.json` 四份 + `lang/*/LC_MESSAGES/tianyi-gui.po` 三份）。少一份 `.po` 就是一条漏翻，`i18n_catalog` 会直接红灯。
 
 4. **tokio 没有 `test-util` feature**，`tokio::time::pause()` 用不了。限速器的时间语义改为"注入虚拟时钟 + 纯计算"（`test_bucket_for_and_capacity` 等四条），只保留 `test_acquire_actually_waits` 一条真异步冒烟吃真实时间。因此 `test_download_throttled_slower_than_unthrottled` 与 `test_upload_read_is_throttled` 是**弱断言**：它们只能证明"节流之后确实变慢"，不能证明"恰好限在 N 字节/秒"——后者需要可控时钟。
 
@@ -292,6 +292,6 @@ pwsh tools/visual-diff.ps1 -BeforeRev HEAD                   # 与上一个提�
 
 按类型：`fix` 4 / `feat` 3（`git log --format=%s a3df153..HEAD` 按前缀可复核）。
 
-文件分布（7 个提交口径，现查 `git diff --name-only a3df153..HEAD`）：共 **51** 个文件 = 非 PNG **29** + PNG **22**。非 PNG 的归属：`crates/tianyi-app/ui/**` 7、`crates/tianyi-app/src/**` 6、`crates/tianyi-core/**` 8（含 `tests/persistence.rs`）、`i18n/**` + `lang/**` 7、`examples/ui_preview.rs` 1。PNG 22 张里 4 张新增（`26`、`27`、`28`、`29`），其余 18 张因断点/限宽/投影/设置页/速度限制/D-25 各自的视觉变化被重采。
+文件分布（7 个提交口径，现查 `git diff --name-only a3df153..HEAD`）：共 **51** 个文件 = 非 PNG **29** + PNG **22**。非 PNG 的归属：`crates/tianyi-gui/ui/**` 7、`crates/tianyi-gui/src/**` 6、`crates/tianyi-core/**` 8（含 `tests/persistence.rs`）、`i18n/**` + `lang/**` 7、`examples/ui_preview.rs` 1。PNG 22 张里 4 张新增（`26`、`27`、`28`、`29`），其余 18 张因断点/限宽/投影/设置页/速度限制/D-25 各自的视觉变化被重采。
 
 未 push、未 amend、未 rebase；本轨**一次 git 写操作都没有执行**（`git log` / `git show` / `git diff` / `git ls-tree` / `git cat-file` 这类只读命令除外），提交由调度方做。

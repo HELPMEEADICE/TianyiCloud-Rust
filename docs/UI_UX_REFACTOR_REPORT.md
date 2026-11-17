@@ -277,7 +277,7 @@ Slint 的 `TouchArea` 点击事件不带修饰键。用 winit `ModifiersChanged`
   得到"内容被裁切/疑似错位"的假象——本报告早期就踩过这个坑，最终以物理尺寸 `PrintWindow` 为准。
 * 除登录页外，其余页面未在真机上逐页截图（需要真实账号登录）；它们由软件渲染器覆盖。
 
-新增回归测试（`crates/tianyi-app/src/controller.rs::tests`）：
+新增回归测试（`crates/tianyi-gui/src/controller.rs::tests`）：
 
 * `sort_files_keeps_folders_first_and_orders_by_key`：三列排序 + 文件夹恒在前 + 双向；
 * `sort_files_puts_unknown_time_last_in_both_directions`：空时间恒排最后；
@@ -334,12 +334,12 @@ edbe425 refactor(app): 选择模型/列表状态机/排序与危险操作确认
 
 ```powershell
 # 重构后
-cargo run -p tianyi-app --example ui_preview -- screenshots/after
+cargo run -p tianyi-gui --example ui_preview -- screenshots/after
 
 # 重构前（在旧提交的 worktree 中执行，渲染器按旧属性接口填写演示数据）
 git worktree add ..\tianyi-before 628826d
 # 将旧接口版本的 examples/ui_preview.rs 放入该 worktree 后：
-cargo run -p tianyi-app --example ui_preview -- <repo>/screenshots/before
+cargo run -p tianyi-gui --example ui_preview -- <repo>/screenshots/before
 ```
 
 ### 重构前 `screenshots/before/`（12 张）

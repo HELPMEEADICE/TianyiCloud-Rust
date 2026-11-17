@@ -13,7 +13,7 @@
 
 ### 根因（不是 badge 尺寸写小，也不是图标画错）
 
-`crates/tianyi-app/ui/components/nav-item.slint` 原实现：
+`crates/tianyi-gui/ui/components/nav-item.slint` 原实现：
 
 ```slint
 if !root.compact && root.badge > 0: Rectangle {
@@ -65,7 +65,7 @@ Slint 里**非布局子元素**的 `width` 默认不是「按内容收缩」，�
 | 许可证 | MIT（`Copyright (c) 2020 Microsoft Corporation`） |
 | 画布 | 24×24（1 个图标使用官方 20×20，见下） |
 | 实际入库文件 | **112 个 SVG**（56 个语义 × Regular/Filled），合计 **95.5 KB** |
-| 位置 | `crates/tianyi-app/ui/assets/icons/` |
+| 位置 | `crates/tianyi-gui/ui/assets/icons/` |
 
 只从上游取应用真正用到的图标（没有把整个图标仓库拷进来），并保留官方原始文件名，
 便于任何一行 `@image-url` 都能直接对回上游路径。
@@ -118,7 +118,7 @@ sign_out_24          200  ← 退出登录
 | 浅色 | `weather_sunny` | 深色 | `weather_moon` |
 | 二维码 | `qr_code` | | |
 
-逐图标映射（含文件名与画布尺寸）见 `crates/tianyi-app/ui/assets/icons/SOURCES.md`。
+逐图标映射（含文件名与画布尺寸）见 `crates/tianyi-gui/ui/assets/icons/SOURCES.md`。
 
 ---
 
@@ -197,8 +197,8 @@ Regular/Filled 画布一致，切换选中态**不会改变尺寸或位置**。
 
 ## 5. 许可证处理
 
-* `crates/tianyi-app/ui/assets/icons/LICENSE`：上游 MIT 原文（Microsoft Corporation）。
-* `crates/tianyi-app/ui/assets/icons/SOURCES.md`：上游仓库、引用分支、解析到的提交号、
+* `crates/tianyi-gui/ui/assets/icons/LICENSE`：上游 MIT 原文（Microsoft Corporation）。
+* `crates/tianyi-gui/ui/assets/icons/SOURCES.md`：上游仓库、引用分支、解析到的提交号、
   抓取时间、逐图标「语义 → 上游文件名 → 画布 → Regular/Filled 文件名」映射表，
   以及 `colorize` 的说明。
 * 仓库根目录原有 `LICENSE`（项目自身）未被修改；图标资源与项目代码许可证分离存放。
