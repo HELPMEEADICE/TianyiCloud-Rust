@@ -10,6 +10,7 @@
 
 mod dnd;
 mod files;
+mod mount;
 mod ratelimit;
 mod session;
 mod transfers;
@@ -19,6 +20,7 @@ use self::dnd::MovedFile;
 #[cfg(test)]
 pub(crate) use self::files::apply_entries;
 use self::files::PendingConfirm;
+use self::mount::MountState;
 use self::session::{degrade_message, ConfigStore};
 use self::transfers::TransferSnapshot;
 use crate::app::{DirectLink, DragOutApi, FileEntry, MainWindow, Theme};
@@ -212,6 +214,10 @@ pub struct Controller {
     /// 去重与代际状态：只在 UI 线程上读写，`Arc` 只为了跨闭包共享
     notice_slot: Arc<Mutex<NoticeSlot>>,
 
+    // ---------------- 云盘挂载 ----------------
+    /// 挂载页的会话内状态（唯一事实来源；页面属性全部由它推来）
+    mount: Mutex<MountState>,
+
     // ---------------- 拖拽 ----------------
     drag_state: Mutex<Option<&'static crate::DragDropState>>,
     #[cfg(windows)]
@@ -270,6 +276,7 @@ impl Controller {
             links: Mutex::new(Vec::new()),
             theme_mode: Mutex::new(theme_mode),
             notice_slot: Arc::new(Mutex::new(NoticeSlot::default())),
+            mount: Mutex::new(MountState::default()),
             drag_state: Mutex::new(None),
             #[cfg(windows)]
             drag_out_busy: AtomicBool::new(false),
@@ -277,6 +284,9 @@ impl Controller {
         Self::bind_ui(Arc::clone(&c));
         c.refresh_saved_accounts();
         c.initial_sync();
+        // 挂载页：默认盘符 / 后端探测 / 1 秒刷新链。放在 initial_sync 之后是因为
+        // 它要先读回语言设置（initial_sync 里已经按当前语种推过一轮挂载页文案）。
+        c.init_mount();
         // 降级必须让用户看见（放在 initial_sync 之后，避免被"空提示"覆盖）
         if let Some(d) = degraded {
             c.notice("warning", degrade_message(&d));
@@ -327,6 +337,8 @@ impl Controller {
         // 必须由这里重推；分段索引也一并在里面回填。
         self.sync_speed_limit_to_ui();
         self.refresh_transfers();
+        // 挂载页的文案与状态文字都是 Rust 侧查表拼出来的，切语言必须重推
+        self.push_mount_page();
     }
 
     // ==================================================================
@@ -866,6 +878,71 @@ impl Controller {
             });
         });
 
+        // ---------------- 云盘挂载 ----------------
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_space_changed(move |idx| {
+                let c = c.clone();
+                c.set_mount_space(idx);
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_point_changed(move |point| {
+                let c = c.clone();
+                c.set_mount_point(point.to_string());
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_targets_refresh(move || {
+                let c = c.clone();
+                c.refresh_mount_targets();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_request(move || {
+                let c = c.clone();
+                c.request_mount();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_unmount_request(move || {
+                let c = c.clone();
+                c.request_unmount();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_open_mount_point(move || {
+                let c = c.clone();
+                c.open_mount_point();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_error_clear(move || {
+                let c = c.clone();
+                c.clear_mount_error();
+            });
+        });
+
+        let c = Arc::clone(&this);
+        this.ui_set(move |ui| {
+            ui.on_mount_page_opened(move || {
+                let c = c.clone();
+                c.mount_page_opened();
+            });
+        });
+
         // ---------------- 关窗 ----------------
         // 用户点 × 时不再"直接把传输 future 丢掉"：先取消在途传输、把任务状态归一化
         // 并落盘，再让窗口关闭。这条路径上**绝不等**传输 future 结束（那会把关窗卡住
@@ -875,6 +952,9 @@ impl Controller {
             let weak = ui.as_weak();
             ui.window().on_close_requested(move || {
                 c.begin_close();
+                // 挂载点必须在关窗时卸载：句柄搬进后台线程做（UI 线程不等待卸载，
+                // 见 controller/mount.rs 的 shutdown_mount）
+                c.shutdown_mount();
                 // 显式 hide：即便某个平台不按 CloseRequested 的返回值收窗口，也能关掉
                 if let Some(win) = weak.upgrade() {
                     let _ = win.window().hide();

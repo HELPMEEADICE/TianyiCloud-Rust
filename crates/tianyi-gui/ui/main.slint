@@ -26,6 +26,7 @@ import { CloudPage } from "pages/cloud.slint";
 import { TransfersPage } from "pages/transfers.slint";
 import { LinksPage, DirectLink } from "pages/links.slint";
 import { SettingsPage } from "pages/settings.slint";
+import { DriveRow, MountPage, MountTexts } from "pages/mount.slint";
 
 // 把 UI 侧全局对象再导出一次，便于 Rust 侧通过 include_modules 访问
 //
@@ -131,6 +132,44 @@ export component MainWindow inherits Window {
     /// 日志目录（= 配置目录下的 logs/）：设置页「关于」分组里的只读路径行
     in property <string> log-dir: "";
 
+    // ==================== 云盘挂载（第 5 页） ====================
+    //
+    // 这一页的属性全部由控制器推来：文案来自 i18n 词表（挂载页不用 @tr，见
+    // pages/mount.slint 文件头），数值来自 MountStatus 的采样。
+    /// 页面静态文案（一批同时到达，漏填字段编译不过）
+    in property <MountTexts> mount-texts;
+    /// 后台线程正在挂载 / 卸载
+    in property <bool> mounting: false;
+    in property <bool> unmounting: false;
+    /// 已经挂上（卸载按钮与「在资源管理器中打开」的可用条件）
+    in property <bool> mount-active: false;
+    /// 0 = 个人云，1 = 家庭云（in-out：与页面双向，控制器也会回填）
+    in-out property <int> mount-space-index: 0;
+    /// 挂载点（Windows 上是盘符）：可编辑，双向 —— 用户输入直接写回控制器读取的属性
+    in-out property <string> mount-point: "";
+    in property <string> mount-point-desc: "";
+    in property <string> mount-point-placeholder: "";
+    /// 可用盘符栅格（每行一组，控制器按固定列数切好）
+    in property <[DriveRow]> mount-letter-rows: [];
+    /// 当前平台是否用盘符挂载（Windows）
+    in property <bool> mount-drive-mode: true;
+    /// 只读 / 零磁盘文件缓存：读真实状态，不是写死文案
+    in property <bool> mount-read-only: true;
+    in property <bool> mount-zero-cache: true;
+    /// 平台挂载后端是否可用（不可用时挂载按钮禁用 + 显示安装指引）
+    in property <bool> mount-backend-ok: true;
+    in property <string> mount-backend-text: "";
+    in property <string> mount-backend-detail: "";
+    in property <string> mount-state-text: "";
+    in property <string> mount-speed-text: "";
+    in property <string> mount-traffic-text: "";
+    in property <string> mount-requests-text: "";
+    in property <string> mount-errors-text: "";
+    in property <string> mount-cached-dirs-text: "";
+    in property <string> mount-unc-text: "";
+    /// 本次会话内要显示的错误（挂载/卸载失败、last_error），用户可清除
+    in property <string> mount-error-text: "";
+
     // ==================== 提示与拖拽 ====================
     in property <string> notice-text: "";
     in property <string> notice-kind: "info";
@@ -223,6 +262,17 @@ export component MainWindow inherits Window {
     callback open_log_dir();
     callback copy_text(string);
     callback logout();
+
+    // ==================== 云盘挂载 ====================
+    callback mount_space_changed(int);
+    callback mount_point_changed(string);
+    callback mount_targets_refresh();
+    callback mount_request();
+    callback unmount_request();
+    callback open_mount_point();
+    callback mount_error_clear();
+    /// 进入挂载页（current-page 切到第 5 页时触发）：控制器在那里重新探测后端
+    callback mount_page_opened();
 
     // ==================== 确认对话框 ====================
     callback dialog_confirm();
@@ -579,6 +629,11 @@ export component MainWindow inherits Window {
 
     changed current-page => {
         root.page-shown = false;
+        // 进挂载页时重新探测平台后端（用户可能刚装完 WinFsp）与可用盘符。
+        // 5 = 云盘挂载页，与导航项的 selected 判断同源。
+        if (root.current-page == 5) {
+            root.mount_page_opened();
+        }
         // 切页时收起 Tooltip：气泡由文件末尾的窗口级浮层渲染，而行内按钮（传输行、
         // 直链行里的图标按钮）随页面一起隐藏时**不会**产生 has-hover=false，
         // 气泡会原地常驻、指向一个已经不存在的控件。清零点放在这里与页面转场并列，
@@ -718,6 +773,19 @@ export component MainWindow inherits Window {
                     badge: root.links.length;
                     clicked => {
                         root.current-page = 3;
+                    }
+                }
+
+                // 云盘挂载：页面序号取 5（设置页仍是 4）——导航顺序与页面序号不必相同，
+                // 序号只由 current-page 这一处事实来源决定，改序号会同时改掉控制器与测试里的判断
+                FluentNavItem {
+                    icon: IconName.storage;
+                    label: root.mount-texts.title;
+                    compact: root.nav-compact;
+                    selected: root.current-page == 5;
+                    clicked => {
+                        root.current-page = 5;
+                        root.mount_page_opened();
                     }
                 }
 
@@ -1276,6 +1344,60 @@ export component MainWindow inherits Window {
                     }
                     logout => {
                         root.logout();
+                    }
+                }
+
+                MountPage {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    visible: root.current-page == 5;
+                    texts: root.mount-texts;
+                    mount-point-desc: root.mount-point-desc;
+                    mount-point-placeholder: root.mount-point-placeholder;
+                    backend-text: root.mount-backend-text;
+                    backend-detail: root.mount-backend-detail;
+                    state-text: root.mount-state-text;
+                    speed-text: root.mount-speed-text;
+                    traffic-text: root.mount-traffic-text;
+                    requests-text: root.mount-requests-text;
+                    errors-text: root.mount-errors-text;
+                    cached-dirs-text: root.mount-cached-dirs-text;
+                    unc-text: root.mount-unc-text;
+                    error-text: root.mount-error-text;
+                    mounting: root.mounting;
+                    unmounting: root.unmounting;
+                    active: root.mount-active;
+                    space-index <=> root.mount-space-index;
+                    // 双向：输入框里的内容就是控制器读到的挂载点（与搜索框同一写法）
+                    mount-point <=> root.mount-point;
+                    letter-rows: root.mount-letter-rows;
+                    drive-mode: root.mount-drive-mode;
+                    read-only: root.mount-read-only;
+                    zero-cache: root.mount-zero-cache;
+                    backend-ok: root.mount-backend-ok;
+
+                    space-changed(idx) => {
+                        root.mount_space_changed(idx);
+                    }
+                    mount-point-changed(point) => {
+                        root.mount_point_changed(point);
+                    }
+                    refresh-targets => {
+                        root.mount_targets_refresh();
+                    }
+                    mount-requested => {
+                        root.mount_request();
+                    }
+                    unmount-requested => {
+                        root.unmount_request();
+                    }
+                    open-mount-point => {
+                        root.open_mount_point();
+                    }
+                    clear-error => {
+                        root.mount_error_clear();
                     }
                 }
             }

@@ -3502,3 +3502,157 @@ fn check_settings_last_row_not_clipped() {
         failures.join("\n")
     );
 }
+
+// ==================== M. 云盘挂载页（第 5 页） ====================
+
+/// 造一份盘符栅格模型：控制器按固定列数（6）切行（controller/mount.rs 的 letter_rows），
+/// 这里用同样的形状手搓 —— 几何断言只关心"一行放几个、放不放得下"。
+fn mount_letter_rows(count: usize) -> ModelRc<crate::app::DriveRow> {
+    let letters: Vec<String> = (0..count)
+        .map(|i| format!("{}:", (b'D' + i as u8) as char))
+        .collect();
+    let rows: Vec<crate::app::DriveRow> = letters
+        .chunks(6)
+        .map(|chunk| crate::app::DriveRow {
+            cells: ModelRc::new(VecModel::from(
+                chunk
+                    .iter()
+                    .map(|s| SharedString::from(s.as_str()))
+                    .collect::<Vec<SharedString>>(),
+            )),
+        })
+        .collect();
+    ModelRc::new(VecModel::from(rows))
+}
+
+/// M. 云盘挂载页：横向不溢出、末行不被裁
+///
+/// 分两段量，因为两段的**视口**需求不一样：
+///  1. 窄档（900×620）与默认档（1180×760）只看页面第一张卡片（挂载位置）。900×620 的
+///     视口只盖得住首卡，再往下的控件被 ScrollView 裁掉后压根不在元素树里（实测：
+///     同一份断言在 1180×760 绿、在 900×620 红，红的原因是"查不到"而不是"越界"）。
+///     这一段守的是**盘符栅格列数**：一行 6 个 56px 按钮 + 间距在 844px 内容区里放得下，
+///     列数一旦改大就会顶出卡片。
+///  2. 高视口（1920×1080）量整页：操作按钮组必须完整落在「挂载状态」卡片里（末行不被
+///     裁 —— 与设置页 L2 同一个坑：ScrollView 的纵向余量一旦被摊给卡片，末行就被裁），
+///     错误面板必须真的渲染出来且不越界。
+#[test]
+fn check_mount_page_layout() {
+    let mut failures: Vec<String> = Vec::new();
+
+    // ---- 1) 窄 / 默认两档：首卡的横向溢出 ----
+    for (width, height) in SIZES {
+        let ui = boot((width, height));
+        ui.set_logged_in(true);
+        ui.set_current_page(5);
+        ui.set_mount_letter_rows(mount_letter_rows(12));
+        settle();
+
+        let tag = format!("{width:.0}x{height:.0}");
+        let card = by_id(&ui, "MountPage::target-card");
+        let card_right = right(&card);
+
+        // 盘符栅格：12 个按钮（两行各 6 个），都不越出栅格与卡片的右缘
+        let grid = match maybe_by_id(&ui, "MountPage::letter-grid") {
+            Some(grid) => grid,
+            None => {
+                failures.push(format!("{tag}: 找不到盘符栅格 MountPage::letter-grid"));
+                continue;
+            }
+        };
+        let grid_right = right(&grid);
+        let chips = grid
+            .query_descendants()
+            .match_inherits("FluentButton")
+            .find_all();
+        expect(&mut failures, chips.len() == 12, || {
+            format!("{tag}: 盘符按钮 {} 个（期望 12）", chips.len())
+        });
+        for (i, chip) in chips.iter().enumerate() {
+            let chip_right = right(chip);
+            expect(&mut failures, chip_right <= grid_right + 1.0, || {
+                format!("{tag}: 第 {i} 个盘符按钮右缘 {chip_right:.1} 越出栅格右缘 {grid_right:.1}")
+            });
+            expect(&mut failures, chip_right <= card_right + 1.0, || {
+                format!("{tag}: 第 {i} 个盘符按钮右缘 {chip_right:.1} 越出卡片右缘 {card_right:.1}")
+            });
+        }
+
+        // 空间分段控件也在卡片里
+        let segmented = card
+            .query_descendants()
+            .match_inherits("FluentSegmented")
+            .find_all();
+        expect(&mut failures, segmented.len() == 1, || {
+            format!("{tag}: 空间分段控件 {} 个（期望 1）", segmented.len())
+        });
+        for seg in &segmented {
+            expect(&mut failures, right(seg) <= card_right + 1.0, || {
+                format!(
+                    "{tag}: 分段控件右缘 {:.1} 越出卡片右缘 {card_right:.1}",
+                    right(seg)
+                )
+            });
+        }
+    }
+
+    // ---- 2) 高视口：整页可见，量末行裁剪与错误面板 ----
+    {
+        let ui = boot(DESKTOP);
+        ui.set_logged_in(true);
+        ui.set_current_page(5);
+        ui.set_mount_letter_rows(mount_letter_rows(12));
+        // 错误面板展开：这是页面最高的形态，末行裁剪最容易在这里暴露
+        ui.set_mount_error_text(SharedString::from("mount error fixture"));
+        settle();
+
+        let tag = format!("{:.0}x{:.0}", DESKTOP.0, DESKTOP.1);
+        let state_card = by_id(&ui, "MountPage::state-card");
+        let state_bottom = bottom(&state_card);
+        let state_right = right(&state_card);
+
+        // 操作按钮组（挂载 / 卸载 / 打开）必须完整落在卡片里
+        let buttons = state_card
+            .query_descendants()
+            .match_inherits("FluentButton")
+            .find_all();
+        expect(&mut failures, buttons.len() == 3, || {
+            format!(
+                "{tag}: 状态卡片里的按钮 {} 个（期望挂载/卸载/打开三个）",
+                buttons.len()
+            )
+        });
+        for button in &buttons {
+            let button_bottom = bottom(button);
+            expect(&mut failures, button_bottom <= state_bottom + 1.0, || {
+                format!(
+                    "{tag}: 按钮下缘 {button_bottom:.1} 越出卡片下缘 {state_bottom:.1}（末行被裁）"
+                )
+            });
+            expect(&mut failures, right(button) <= state_right + 1.0, || {
+                format!(
+                    "{tag}: 按钮右缘 {:.1} 越出卡片右缘 {state_right:.1}",
+                    right(button)
+                )
+            });
+        }
+
+        // 错误面板：设了文案就必须渲染出来，且与卡片同一个右界
+        match maybe_by_id(&ui, "MountPage::error-panel") {
+            Some(panel) => {
+                let panel_right = right(&panel);
+                expect(&mut failures, panel_right <= state_right + 1.0, || {
+                    format!("{tag}: 错误面板右缘 {panel_right:.1} 越出卡片右缘 {state_right:.1}")
+                });
+            }
+            None => failures.push(format!("{tag}: 设了错误文案却没有渲染错误面板")),
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "云盘挂载页几何失败 {} 项：\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

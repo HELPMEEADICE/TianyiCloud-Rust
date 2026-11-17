@@ -11,6 +11,9 @@ description = "天翼云盘 Slint 桌面客户端（GUI 实现 crate）"
 # arboard 都不会被编译，cargo tree 里也看不到它们。
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }
+# 云盘挂载（只读网络驱动器）。GUI 只通过 tianyi-mount 的公开 API 与挂载打交道：
+# 平台细节（WinFsp / FUSE）留在那个 crate 里，这里不碰任何 FFI。
+tianyi-mount = { path = "../tianyi-mount" }
 slint = { version = "1.17", features = ["unstable-winit-030", "accessibility"] }
 tokio.workspace = true
 reqwest.workspace = true
