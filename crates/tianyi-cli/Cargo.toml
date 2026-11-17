@@ -12,6 +12,10 @@ path = "src/lib.rs"
 
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }
+# 只读网络挂载：mount / unmount / mounts 必须调用**真的**挂载实现，
+# 否则"--read-only 零磁盘缓存"就只是一句文案。该 crate 往下只有 tokio / reqwest /
+# windows-sys / winreg（WinFsp 是运行时动态加载），不会把任何图形依赖带进 CLI。
+tianyi-mount = { path = "../tianyi-mount" }
 tokio.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -32,3 +36,12 @@ rustyline = { version = "19", default-features = false }
 rpassword = "7"
 # 终端二维码：纯文本渲染（半块字符），不依赖任何图形库
 qrcode = "0.14"
+
+# 跨进程卸载要判断「注册表里那个 PID 还活着吗」。Windows 没有 /proc，
+# 只能用 OpenProcess + GetExitCodeProcess；为了这一点点 API 拖进 windows-sys，
+# 而不是起一个 tasklist 子进程（一次卸载要探测几十次）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }

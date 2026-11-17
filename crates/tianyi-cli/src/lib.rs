@@ -8,7 +8,8 @@
 //! * stdout 与 stderr 的分工由 [output::Printer] 统一负责，命令实现不直接 println。
 //!
 //! 退出码见 [error::ErrorCode::exit_code]（2 参数 / 3 认证 / 4 网络 / 5 远端 /
-//! 6 本地 IO / 7 中断 / 8 不存在 / 9 忙碌）。
+//! 6 本地 IO / 7 中断 / 8 不存在 / 9 忙碌 / 10 挂载环境不可用 / 11 挂载或卸载失败 /
+//! 12 本来就没挂载）。
 
 mod args;
 mod cmd;
@@ -195,6 +196,22 @@ mod tests {
             vec!["-c", "download", "/a.zip", "./"],
             vec!["-c", "task", "resume", "3"],
             vec!["-c", "--json", "--non-interactive", "status"],
+            vec!["-c", "mount", "X:", "--read-only", "--no-disk-cache"],
+            vec!["-c", "mount", "~/TianyiCloud", "--read-only"],
+            vec![
+                "-c",
+                "--space",
+                "family",
+                "--account",
+                "NAME",
+                "mount",
+                "--unc-prefix",
+                "\\\\TianyiCloud\\Family",
+            ],
+            vec!["-c", "mount", "--parent-pid", "4242"],
+            vec!["-c", "unmount", "X:"],
+            vec!["-c", "mounts"],
+            vec!["-c", "--json", "mounts"],
         ] {
             let parsed = Cli::try_parse_from(std::iter::once("tianyi-app").chain(argv.clone()));
             assert!(parsed.is_ok(), "应能解析 {:?}：{:?}", argv, parsed.err());

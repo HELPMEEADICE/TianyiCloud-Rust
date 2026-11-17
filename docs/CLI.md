@@ -222,6 +222,101 @@ tianyi-app -c task cancel 12
 tianyi-app -c task remove 12
 ```
 
+### 4.5 挂载（只读网络驱动器）
+
+把云盘挂成操作系统的原生文件系统——**只读**，且**绝不把文件内容写到本地磁盘**
+（没有 .part、没有临时目录、没有内容缓存；读取是严格按需的 Range 请求）。
+
+```bash
+# Windows：挂成 Z: 盘（省略挂载点时自动挑一个空闲盘符）
+tianyi-app -c mount Z: --read-only --no-disk-cache
+
+# Linux：挂成目录
+tianyi-app -c mount ~/TianyiCloud --read-only --no-disk-cache
+
+# 家庭云 + 指定账号 + 自定义 UNC 前缀（\\Server\Share）
+tianyi-app -c mount --space family --account 13800138000 --unc-prefix '\TianyiCloud\Family'
+
+# 前台阻塞中：另开一个终端看状态 / 卸载
+tianyi-app -c mounts
+tianyi-app -c --json mounts
+tianyi-app -c unmount Z:
+```
+
+`mount` 是**前台阻塞**的：进程活着 = 挂载在；进程退出 = 挂载没了。`--read-only` 与
+`--no-disk-cache` 是「显式声明」而不是开关（当前实现恒为只读、恒不落盘），留着它们是为了
+让脚本能自证意图。
+
+挂载成功后 stderr 打印挂载点、UNC 路径、只读状态、零磁盘缓存状态、空间、账号，Windows 上
+还打印 `GetDriveTypeW` 的实测值：
+
+```
+已挂载：Z:
+  UNC 路径   ：\\TianyiCloud-13800138000\Personal
+  只读       ：是
+  零磁盘缓存 ：是
+  空间       ：personal
+  账号       ：13800138000
+  后端       ：winfsp
+  驱动器类型 ：4（DRIVE_REMOTE）
+  进程       ：12345（前台运行）
+卸载：tianyi-app -c unmount Z:（或 Ctrl+C）
+```
+
+实测值不是 `DRIVE_REMOTE(4)` 时会直接给出警告——它没被识别成网络驱动器这件事必须
+让用户当场知道，而不是等他去资源管理器里发现少一块盘。
+
+* 同一个 UNC 前缀（默认按账号生成）在同一台机器上只能被一个卷占用。**上次崩溃遗留的卷**
+  会让新的挂载失败在 `NTSTATUS 0x80070050`（ERROR_FILE_EXISTS）上——这时换一个盘符，或用
+  `--unc-prefix` 指定一个唯一前缀。CLI 会把这个 NTSTATUS 翻成一句可操作的提示。
+
+**跨进程卸载**：`mount` 是前台阻塞的，所以 `unmount` 不是「发个信号」，而是通过配置目录
+里的几个文件与挂载进程通信，并且**等目标进程真的退出**才算成功：
+
+| 文件 | 作用 |
+| --- | --- |
+| `<配置目录>/mounts.json` | 注册表：每条 `{mount_point, unc, space, account, pid, started_at_unix}` |
+| `<配置目录>/mounts/<key>.stop` | 控制文件：出现即表示「请卸载」，挂载进程每 300ms 看一次 |
+| `<配置目录>/mounts/<key>.status.json` | 状态快照：挂载进程约每 2 秒写一次读写统计 |
+
+* `unmount` 写控制文件后轮询目标 PID，超过等待上限（默认 15 秒，`--wait` 可调）就报
+  **卸载失败**，绝不「写完文件就说成功」；
+* 目标 PID 已经不在了 → 清理注册表项并报**「没有在挂载」**（独立退出码 12，与卸载失败分开）；
+* `mount --parent-pid <PID>`：父进程消失时自动卸载并退出（给「调用者没了就该收摊」的场景用）。
+
+`mounts --json` 的输出是稳定的：每个元素就是一份挂载状态，再加 `pid` 与 `alive`：
+
+```json
+{
+  "success": true,
+  "data": {
+    "mounts": [
+      {
+        "mounted": true, "mount_point": "Z:",
+        "unc_path": "\\\\TianyiCloud-xxx\\Personal", "label": "天翼云盘",
+        "space": "personal", "username": "xxx",
+        "read_only": true, "zero_disk_cache": true, "backend": "winfsp",
+        "started_at_unix": 1700000000,
+        "bytes_total": 1048576, "requests": 32, "errors": 0,
+        "bytes_per_sec": 524288.0, "cached_dirs": 4, "memory_budget": 16777216,
+        "last_error": null,
+        "pid": 12345, "alive": true
+      }
+    ],
+    "count": 1,
+    "stale_removed": [],
+    "registry_file": "C:\\Users\\me\\AppData\\Roaming\\tianyi-cloud-rust\\mounts.json",
+    "backend_available": true,
+    "backend_error": null
+  },
+  "error": null
+}
+```
+
+统计是**挂载进程内存里**的计数器，跨进程只能靠快照，所以读到的是「最多 2 秒前」的真实数字。
+进程消失后记录被标记为 `alive:false` 并在下一次 `mounts` 时清掉：宁可显式清理，也不长期
+显示一个已经死掉的挂载。
+
 ---
 
 ## 5. JSON 输出协议
@@ -275,6 +370,9 @@ tianyi-app -c task remove 12
 | `CANCELED` | 被 Ctrl+C 中断 / 用户取消 | 7 | 否 |
 | `TIMEOUT` | 超过 `--timeout` | 4 | 是 |
 | `UNSUPPORTED` | 当前空间或本构建不支持 | 2 | 否 |
+| `MOUNT_UNAVAILABLE` | 挂载环境不可用（Windows 缺 WinFsp / Linux 缺 /dev/fuse） | 10 | 否 |
+| `MOUNT_FAILED` | 挂载或卸载执行失败（盘符被占、建卷失败、卸载超时） | 11 | 否 |
+| `NOT_MOUNTED` | 目标本来就没有挂载（卸载时的「无事可做」） | 12 | 否 |
 | `INTERNAL` | 其它（含内部 bug） | 1 | 否 |
 
 `BUSY` 目前没有触发路径（并发写入靠跨进程锁与按任务合并解决），保留给将来的守护进程模式。
@@ -514,6 +612,10 @@ p.stdin.write('{"id":3,"command":"exit"}\n'); p.stdin.flush()
 4. **家庭云**只开放个人云支持的那部分接口，其余操作明确报 `UNSUPPORTED`。
 5. **JSON 模式下 NDJSON 不产出进度事件**：只保证「一行请求一行响应」。
 6. GUI 的实时进度推送依赖进程内的定时器；CLI 不依赖它，进度直接写 stderr。
+7. **挂载点形态受平台限制**：Windows 只能挂盘符（WinFsp 不支持挂到目录，A:/B:/C: 是保留
+   盘符），Linux 只能挂绝对路径目录；挂载是**只读**的，写操作一律被拒绝。
+8. **挂载的读写统计跨进程是快照**：`mounts` 读到的是最多 2 秒前的数字（见 4.5）；
+   挂载进程被强杀时注册表会留下一条记录，下一次 `mounts` / `unmount` 会按 PID 判死并自动回收。
 
 ---
 
