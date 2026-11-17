@@ -4,22 +4,30 @@
 
 pub mod api;
 pub mod client;
+pub mod cloudpath;
 pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod file;
+pub mod flock;
 mod fsutil;
+pub mod job;
 pub mod models;
 pub mod ratelimit;
 pub(crate) mod retry;
+pub mod service;
+pub mod store;
 pub mod task;
 pub mod theme;
 pub mod torrent;
 pub mod transfer;
 
 pub use client::TianyiClient;
+pub use cloudpath::CloudPath;
 pub use error::{Error, Result};
 pub use models::*;
+pub use service::{CloudService, SessionInfo, Space};
+pub use store::ConfigStore;
 
 /// 取锁；若锁已被 panic 毒化，记录 warn 并继续用内部数据（不连锁 panic）
 ///

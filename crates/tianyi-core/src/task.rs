@@ -3,6 +3,7 @@
 use crate::error::{Error, Result};
 use crate::fsutil::{corrupt_path, write_atomic};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -263,6 +264,12 @@ const SPEED_SAMPLE_WINDOW_MS: u64 = 200;
 /// 换成几十毫秒，好让去抖断言不必真的等一秒（墙钟长等待在多测试并行时是偶发红的源头）。
 const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_millis(1000);
 
+/// 任务表跨进程写锁的等待上限
+///
+/// 比配置文件短得多：进度落盘很频繁，抢不到就跳过，下一次回调会再试；在这里长时间
+/// 等待只会拖慢传输 worker，换不来更正确的数据。
+const LOCK_BUSY_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// 进度落盘的去抖状态
 #[derive(Debug, Default)]
 struct ProgressLatch {
@@ -274,6 +281,36 @@ struct ProgressLatch {
     /// 只由节流逻辑记账，**不参与关窗 flush 的门控**（理由见 `flush_progress`）。
     /// 将来若有"仅当有待写时才写"的调用方，读的就是它。
     pending: bool,
+}
+
+/// 本进程自上次成功落盘以来动过的任务 id
+///
+/// 为什么需要它：CLI 与 GUI 可能同时开着，各自在内存里持有一份任务表。整表覆盖写会
+/// 把对方刚写下的进度顶掉（对方那份更新，但我的快照更旧）。有了这份账，
+/// [write_table] 就能做「我动过的以我为准，我没动过的以磁盘为准」的合并，从而让两个
+/// 进程都能把各自的进展写进去。
+#[derive(Debug, Default)]
+struct DirtyTasks {
+    /// 本进程修改过的任务
+    touched: HashSet<u64>,
+    /// 本进程删除过的任务（否则会被磁盘上的旧版复活）
+    removed: HashSet<u64>,
+}
+
+impl DirtyTasks {
+    fn touch(&mut self, id: u64) {
+        self.touched.insert(id);
+    }
+
+    fn remove(&mut self, id: u64) {
+        self.touched.remove(&id);
+        self.removed.insert(id);
+    }
+
+    fn clear(&mut self) {
+        self.touched.clear();
+        self.removed.clear();
+    }
 }
 
 /// 任务管理器（线程安全，供后台 tokio 任务使用）
@@ -291,10 +328,19 @@ pub struct TaskManager {
     writer: Arc<Mutex<()>>,
     /// 真正写成功过多少次文件（供测试观测去抖效果，不是业务状态）
     writes: Arc<AtomicU64>,
+    /// 本进程改动过的任务 id（跨进程合并的依据，见 [DirtyTasks]）
+    dirty: Arc<Mutex<DirtyTasks>>,
+    /// 跨进程写锁路径（与任务表同目录的 tasks.json.lock）
+    lock_path: Option<PathBuf>,
 }
 
 impl TaskManager {
     pub fn new(persist_path: Option<PathBuf>) -> Self {
+        // 锁文件与任务表同目录：tasks.json → tasks.json.lock。
+        // 只在这一层派生，调用方（GUI / CLI）不需要知道锁的存在。
+        let lock_path = persist_path
+            .as_ref()
+            .map(|p| crate::fsutil::sibling_path(p, "lock"));
         let mut tm = TaskManager {
             tasks: Arc::new(Mutex::new(Vec::new())),
             next_id: AtomicU64::new(1),
@@ -303,6 +349,8 @@ impl TaskManager {
             progress: Arc::new(Mutex::new(ProgressLatch::default())),
             writer: Arc::new(Mutex::new(())),
             writes: Arc::new(AtomicU64::new(0)),
+            dirty: Arc::new(Mutex::new(DirtyTasks::default())),
+            lock_path,
         };
         tm.load();
         // 启动恢复：进程被杀/重启后所有 Running 任务的进度已经丢失，
@@ -335,8 +383,19 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.push(task);
         }
+        self.mark_touched(id);
         self.persist_blocking();
         id
+    }
+
+    /// 记「这个任务被我改过」，供跨进程合并时以我为准
+    fn mark_touched(&self, id: u64) {
+        crate::lock_or_recover(&self.dirty).touch(id);
+    }
+
+    /// 记「这个任务被我删了」，避免被磁盘上的旧版复活
+    fn mark_removed(&self, id: u64) {
+        crate::lock_or_recover(&self.dirty).remove(id);
     }
 
     pub fn next_id(&self) -> u64 {
@@ -367,6 +426,7 @@ impl TaskManager {
             }
             task.status = to;
         }
+        self.mark_touched(id);
         self.persist_blocking();
         true
     }
@@ -409,6 +469,7 @@ impl TaskManager {
             t.bytes_done = done;
             t.progress = crate::file::percent(done, total_size);
         }
+        self.mark_touched(id);
         self.note_progress();
     }
 
@@ -416,20 +477,23 @@ impl TaskManager {
     ///
     /// `TaskManager::new` 会在读取 `tasks.json` 之后自动调用一次。
     pub fn mark_interrupted_as_paused(&self) {
-        let changed = {
+        let changed: Vec<u64> = {
             let mut guard = self.lock();
-            let mut changed = false;
+            let mut changed = Vec::new();
             for t in guard.iter_mut() {
                 if t.status == TaskStatus::Running {
                     t.status = TaskStatus::Paused;
                     // 进程都重启了，旧速度一定是假的
                     t.speed = 0;
-                    changed = true;
+                    changed.push(t.id);
                 }
             }
             changed
         };
-        if changed {
+        if !changed.is_empty() {
+            for id in changed {
+                self.mark_touched(id);
+            }
             self.persist_blocking();
         }
     }
@@ -457,9 +521,18 @@ impl TaskManager {
 
     /// 清除所有终态任务（Completed / Canceled / Failed）
     pub fn clear_finished(&self) {
-        {
+        let dropped: Vec<u64> = {
             let mut guard = self.lock();
+            let dropped = guard
+                .iter()
+                .filter(|t| t.status.is_terminal())
+                .map(|t| t.id)
+                .collect();
             guard.retain(|t| !t.status.is_terminal());
+            dropped
+        };
+        for id in dropped {
+            self.mark_removed(id);
         }
         self.persist_blocking();
     }
@@ -472,6 +545,7 @@ impl TaskManager {
                 f(t);
             }
         }
+        self.mark_touched(id);
         self.persist_blocking();
     }
 
@@ -481,13 +555,23 @@ impl TaskManager {
             let mut guard = self.lock();
             guard.retain(|t| t.id != id);
         }
+        self.mark_removed(id);
         self.persist_blocking();
     }
 
     pub fn clear_completed(&self) {
-        {
+        let dropped: Vec<u64> = {
             let mut guard = self.lock();
+            let dropped = guard
+                .iter()
+                .filter(|t| t.status == TaskStatus::Completed || t.status == TaskStatus::Failed)
+                .map(|t| t.id)
+                .collect();
             guard.retain(|t| t.status != TaskStatus::Completed && t.status != TaskStatus::Failed);
+            dropped
+        };
+        for id in dropped {
+            self.mark_removed(id);
         }
         self.persist_blocking();
     }
@@ -504,10 +588,26 @@ impl TaskManager {
     ///
     /// 状态转换、增删、清理走这条：这些变化必须马上可见，否则崩溃后任务会「复活」成
     /// 用户已经取消/删掉的样子。
-    fn persist_blocking(&self) {
+    fn persist_blocking(&self) -> bool {
         self.begin_write();
-        if let Some(path) = &self.persist_path {
-            write_table(path, &self.tasks, &self.writer, &self.writes);
+        match &self.persist_path {
+            Some(path) => write_table(&self.table_store(path.clone())),
+            None => false,
+        }
+    }
+
+    /// 把整表落盘需要的共享句柄打成一包
+    ///
+    /// 落盘要跨线程（异步路径把写动作丢进阻塞线程池），因此这里全是 Arc 句柄；
+    /// 打包成结构体只是为了让 write_table 的签名不至于六个参数。
+    fn table_store(&self, path: PathBuf) -> TableStore {
+        TableStore {
+            path,
+            lock_path: self.lock_path.clone(),
+            tasks: Arc::clone(&self.tasks),
+            writer: Arc::clone(&self.writer),
+            writes: Arc::clone(&self.writes),
+            dirty: Arc::clone(&self.dirty),
         }
     }
 
@@ -523,8 +623,7 @@ impl TaskManager {
         if self.persist_path.is_none() {
             return false;
         }
-        self.persist_blocking();
-        true
+        self.persist_blocking()
     }
 
     /// 整表落盘（异步）
@@ -539,14 +638,24 @@ impl TaskManager {
         let tasks = Arc::clone(&self.tasks);
         let writer = Arc::clone(&self.writer);
         let writes = Arc::clone(&self.writes);
+        let dirty = Arc::clone(&self.dirty);
+        let lock_path = self.lock_path.clone();
+        let store = TableStore {
+            path,
+            lock_path,
+            tasks,
+            writer,
+            writes,
+            dirty,
+        };
         if tokio::runtime::Handle::try_current().is_ok() {
             // 句柄拿到就丢：这是「发射后不管」——写盘失败要么磁盘满要么权限，重试
             // 没有任何区别，而 await 会把调用方（传输 worker）重新拖回等待里
             drop(tokio::task::spawn_blocking(move || {
-                write_table(&path, &tasks, &writer, &writes);
+                write_table(&store);
             }));
         } else {
-            write_table(&path, &tasks, &writer, &writes);
+            write_table(&store);
         }
     }
 
@@ -618,17 +727,126 @@ impl TaskManager {
 /// 锁顺序固定为「先 writer，再任务表快照」：反过来会让两次写盘的落地顺序与快照顺序
 /// 相反，磁盘上最后留下的可能是更旧的一份。这里不与 `progress` 互锁，也就不存在
 /// 环——`begin_write` 都在取 writer 之前就放锁了。
-fn write_table(path: &Path, tasks: &Mutex<Vec<Task>>, writer: &Mutex<()>, writes: &AtomicU64) {
-    let _serial = crate::lock_or_recover(writer);
-    let snapshot = crate::lock_or_recover(tasks).clone();
-    let Ok(data) = serde_json::to_string(&snapshot) else {
-        return;
+fn write_table(store: &TableStore) -> bool {
+    let _serial = crate::lock_or_recover(&store.writer);
+    // 跨进程写锁：抢不到就跳过本次写入（脏标记留着，下一次进度回调/状态转换会重试）。
+    // 绝不绕过锁硬写——那正是「两个进程互相顶掉对方进展」的成因。
+    let _guard = match &store.lock_path {
+        Some(path) => match crate::flock::lock_exclusive(path, LOCK_BUSY_TIMEOUT) {
+            Some(g) => Some(g),
+            None => {
+                log::debug!("任务表正被另一个进程写入，本次跳过落盘");
+                return false;
+            }
+        },
+        None => None,
+    };
+    // 取快照与脏账时都不嵌套持锁（tasks → dirty 是全程一致的唯一顺序）
+    let ours = crate::lock_or_recover(&store.tasks).clone();
+    let (touched, removed) = {
+        let dirty = crate::lock_or_recover(&store.dirty);
+        (dirty.touched.clone(), dirty.removed.clone())
+    };
+    let merged = merge_tables(read_table(&store.path), ours, &touched, &removed);
+    let Ok(data) = serde_json::to_string(&merged) else {
+        return false;
     };
     // 直写会在进程被杀/掉电时留下半截 JSON，下次启动整份历史都会被当成
     // 损坏丢弃；先写临时文件再 rename，"要么全旧要么全新"，没有中间态。
-    if write_atomic(path, data.as_bytes()).is_ok() {
-        writes.fetch_add(1, Ordering::SeqCst);
+    if write_atomic(&store.path, data.as_bytes()).is_err() {
+        return false;
     }
+    store.writes.fetch_add(1, Ordering::SeqCst);
+    // 落盘成功：内存视图归一成「磁盘上的那份」，脏账清零
+    *crate::lock_or_recover(&store.tasks) = merged;
+    crate::lock_or_recover(&store.dirty).clear();
+    true
+}
+
+/// 整表落盘所需的共享句柄
+struct TableStore {
+    path: PathBuf,
+    lock_path: Option<PathBuf>,
+    tasks: Arc<Mutex<Vec<Task>>>,
+    writer: Arc<Mutex<()>>,
+    writes: Arc<AtomicU64>,
+    dirty: Arc<Mutex<DirtyTasks>>,
+}
+
+/// 读磁盘上的任务表
+///
+/// 解析失败时**先留档再返回 None**：随后的写入会把目标文件整份替换掉，不留档就等于
+/// 把用户的历史静默丢了。留档逻辑与启动时的 load 走同一条 fsutil::corrupt_path。
+fn read_table(path: &Path) -> Option<Vec<Task>> {
+    let data = std::fs::read_to_string(path).ok()?;
+    if data.trim().is_empty() {
+        return None;
+    }
+    match serde_json::from_str::<Vec<Task>>(&data) {
+        Ok(tasks) => Some(tasks),
+        Err(e) => {
+            let archived = crate::fsutil::corrupt_path(path);
+            log::warn!(
+                "磁盘任务表解析失败（{e}），已留档为 {}，本次落盘以内存为准",
+                archived.display()
+            );
+            let _ = std::fs::rename(path, &archived);
+            None
+        }
+    }
+}
+
+/// 合并「我内存里的任务表」与「磁盘上的任务表」
+///
+/// 规则（对应 [DirtyTasks] 的语义）：
+/// 1. 我动过的 id（touched）以**内存**为准——那是我刚写进去的进度/状态；
+/// 2. 我没动过的 id 以**磁盘**为准——那是别的进程刚写下的最新状态，我这份是旧的；
+/// 3. 磁盘上有、我内存里没有、我也没删过（removed）→ 保留，那是别的进程的任务；
+/// 4. 我删过的 id 一律不保留，避免被旧版复活。
+///
+/// 合并结果按 id 升序，保证同一份状态写出来的文件字节一致（便于比对与测试）。
+fn merge_tables(
+    disk: Option<Vec<Task>>,
+    ours: Vec<Task>,
+    touched: &HashSet<u64>,
+    removed: &HashSet<u64>,
+) -> Vec<Task> {
+    let Some(disk) = disk else {
+        // 磁盘上没有可读的表（首次运行 / 刚被留档）：以内存为准
+        let mut merged: Vec<Task> = ours
+            .into_iter()
+            .filter(|t| !removed.contains(&t.id))
+            .collect();
+        merged.sort_by_key(|t| t.id);
+        return merged;
+    };
+    let mut disk_map: std::collections::HashMap<u64, Task> =
+        disk.into_iter().map(|t| (t.id, t)).collect();
+    let mut merged: Vec<Task> = Vec::with_capacity(ours.len() + disk_map.len());
+    for task in ours {
+        if removed.contains(&task.id) {
+            continue;
+        }
+        if touched.contains(&task.id) {
+            disk_map.remove(&task.id);
+            merged.push(task);
+            continue;
+        }
+        // 我没动过：
+        // * 磁盘上有 → 用磁盘的那份（别的进程可能刚更新过它）；
+        // * 磁盘上没有 → 说明别的进程把它删了，我也不能把它带回来。
+        if let Some(from_disk) = disk_map.remove(&task.id) {
+            merged.push(from_disk);
+        }
+    }
+    for (id, task) in disk_map {
+        if removed.contains(&id) {
+            continue;
+        }
+        merged.push(task);
+    }
+    merged.sort_by_key(|t| t.id);
+    merged
 }
 
 /// 传输会话（供 UI 绑定进度）
@@ -727,6 +945,70 @@ mod tests {
     /// 只靠字面标签区分目录太脆：将来谁复制一条测试忘了改 `name`，两条测试就会互相
     /// `remove_dir_all`、互相写同一个 `tasks.json`，症状是随机红。序号把这条路堵死。
     static TMP_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    /// 两个进程（这里是同一进程里的两个 TaskManager）交叉写同一份任务表：
+    /// 谁的改动都不能丢，谁也不能把对方刚写的进度顶掉
+    #[test]
+    fn two_managers_merge_instead_of_clobbering() {
+        let path = tmp_json("merge-shared");
+        let a = TaskManager::new(Some(path.clone()));
+        a.add(sample_task(1, TaskStatus::Pending));
+        // b 在 a 写下任务 1 之后才打开，于是两边都持有任务 1
+        let b = TaskManager::new(Some(path.clone()));
+        a.transition(1, TaskStatus::Running);
+        b.add(sample_task(2, TaskStatus::Pending));
+
+        // 直接读文件断言：新开一个 TaskManager 会把遗留的 Running 降级成 Paused
+        // （启动恢复语义），那样就看不到 a 真正写下的状态了
+        let raw = std::fs::read_to_string(&path).expect("读任务表");
+        let on_disk: Vec<Task> = serde_json::from_str(&raw).expect("解析任务表");
+        let ids: Vec<u64> = on_disk.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![1, 2], "两边的任务都必须留在磁盘上");
+        assert_eq!(
+            on_disk.iter().find(|t| t.id == 1).unwrap().status,
+            TaskStatus::Running,
+            "a 写的状态不能被 b 的旧快照顶掉"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 删除也要跨进程生效：被删的任务不能被另一个进程的旧快照复活
+    #[test]
+    fn removed_task_is_not_resurrected_by_the_other_writer() {
+        let path = tmp_json("merge-remove");
+        let a = TaskManager::new(Some(path.clone()));
+        a.add(sample_task(1, TaskStatus::Pending));
+        a.add(sample_task(2, TaskStatus::Pending));
+        let b = TaskManager::new(Some(path.clone()));
+        b.remove(1);
+        // a 继续干活（它内存里仍然有已被 b 删掉的任务 1）：
+        // 这次写入必须按磁盘为准，不能把任务 1 带回来
+        a.update(2, |t| t.speed = 7);
+        let reload = TaskManager::new(Some(path.clone()));
+        assert!(reload.get(1).is_none(), "删掉的任务不能复活");
+        assert!(reload.get(2).is_some());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 另一进程持有写锁时跳过本次落盘，而不是硬写
+    #[test]
+    fn persist_skips_when_lock_is_held() {
+        let path = tmp_json("lock-skip");
+        let tm = TaskManager::new(Some(path.clone()));
+        let lock_path = crate::fsutil::sibling_path(&path, "lock");
+        let held = crate::flock::lock_exclusive(&lock_path, Duration::from_millis(10))
+            .expect("测试必须先拿到锁");
+        let before = tm.persist_writes();
+        tm.add(sample_task(1, TaskStatus::Pending));
+        assert_eq!(tm.persist_writes(), before, "抢不到锁时不应写盘");
+        drop(held);
+        tm.add(sample_task(2, TaskStatus::Pending));
+        assert!(
+            tm.persist_writes() > before,
+            "锁释放后必须把累积的改动写下去"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
 
     fn tmp_json(name: &str) -> PathBuf {
         let seq = TMP_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
