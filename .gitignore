@@ -26,4 +26,8 @@ desktop.ini
 
 # 临时文件
 *.tmp
+
+# 本地参考副本（历史遗留：仓库里曾经有个指向 819fdbd 的 160000 gitlink，但没有
+# .gitmodules，于是每个 CI 作业的 git 收尾都会报 "No url found for submodule path"）
+/OpenList
 .OpenList/
