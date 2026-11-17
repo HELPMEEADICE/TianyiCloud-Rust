@@ -48,9 +48,18 @@ const WINDOWS_SOURCES: &[(&str, &str)] = &[
 #[test]
 fn crate_sources_never_write_file_contents_to_disk() {
     let mut hits: Vec<String> = Vec::new();
-    let mut all: Vec<(&str, &str)> = SOURCES.to_vec();
+    // Windows 上多审计 src/win/*。这里刻意写成两段 cfg 而不是
+    // `let mut all` + 条件 extend：后者在 Linux 上会撞 unused_mut，
+    // 而 clippy 是按 -D warnings 跑的。
     #[cfg(windows)]
-    all.extend_from_slice(WINDOWS_SOURCES);
+    let all = {
+        let mut all: Vec<(&str, &str)> = SOURCES.to_vec();
+        all.extend_from_slice(WINDOWS_SOURCES);
+        all
+    };
+    #[cfg(not(windows))]
+    let all: Vec<(&str, &str)> = SOURCES.to_vec();
+
     for (name, text) in all {
         let code = production_code(text);
         for (needle, why) in FORBIDDEN {
