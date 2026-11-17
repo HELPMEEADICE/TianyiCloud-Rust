@@ -222,9 +222,8 @@ pub struct UploadArgs {
     /// 只登记任务不下传，等 task resume 再跑
     #[arg(long)]
     pub no_wait: bool,
-    /// 覆盖云端同名文件（默认覆盖）
-    #[arg(long, default_value_t = true)]
-    pub overwrite: bool,
+    // 覆盖策略：上传恒定覆盖同名文件（与服务端 multipart 提交语义一致），
+    // 因此不提供 --overwrite 开关——一个只能设 true 的开关比没有更容易误导。
 }
 
 impl UploadArgs {
