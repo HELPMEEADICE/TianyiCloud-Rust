@@ -59,6 +59,28 @@ DISPLAY / Wayland / 桌面会话的 Linux 服务器、SSH 终端与 Docker 容�
 - 快捷键：F2 重命名、Delete 删除、F5 刷新、Ctrl+A 全选、Ctrl+F 搜索、Alt+← 返回上级（均服从焦点，输入框内不触发）
 - **四语自适应**：简体中文 / 繁體中文 / English / 日本語；首次启动按系统语言自动选择（其它语言回退英文），设置页「外观 → 语言」可即时切换、无需重启，选择写入 `config.json`。两套词表的分工、切语链路与新增文案/语种的步骤见 [docs/I18N.md](docs/I18N.md)
 
+### 云盘网络挂载（零磁盘文件缓存）
+
+把天翼云盘挂成操作系统的原生文件系统，**读取云端文件内容时一个字节都不写本地磁盘**：
+
+* **Windows**：真正的网络驱动器。`X:\` 与 `\TianyiCloud-<账号>\Personal` 指向同一个
+  WinFsp 网络文件系统，`GetDriveTypeW` 返回 `DRIVE_REMOTE`，资源管理器把它归为网络驱动器，
+  卷标显示为「天翼云盘 (X:)」。需要先安装 [WinFsp 2.x](https://winfsp.dev/rel/)（只要运行时）。
+* **Linux**：只读 FUSE 挂载（fuser），例如 `~/TianyiCloud`。
+* 所有读取都是按需 HTTP Range，支持视频拖动、PDF 翻页、大压缩包索引；服务端忽略 Range
+  时直接判错，**绝不退化成整包下载**。
+
+```bash
+tianyi-app -c mount X: --read-only --no-disk-cache   # 前台挂载，Ctrl+C 或 unmount 卸载
+tianyi-app -c mounts --json                          # 当前挂载与读写统计
+tianyi-app -c unmount X:
+```
+
+GUI 里有独立的「云盘挂载」页（空间选择 / 盘符选择 / 只读与零缓存状态 / 实时速度与流量 /
+在资源管理器中打开 / WinFsp 缺失引导）。
+
+细节、零磁盘缓存契约的边界、故障排查与真机验收记录见 [docs/mount.md](docs/mount.md)。
+
 ### 命令行 / Headless
 
 - **同一个可执行文件，两种模式**：不带参数打开图形界面；`-c` 进入命令行，并且在**任何图形后端

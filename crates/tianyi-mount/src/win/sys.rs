@@ -314,11 +314,6 @@ type CreateFsFn = unsafe extern "system" fn(
 type SetMountPointFn = unsafe extern "system" fn(*mut FspFileSystem, PWSTR) -> NTSTATUS;
 type VoidFsFn = unsafe extern "system" fn(*mut FspFileSystem);
 type StartDispatcherFn = unsafe extern "system" fn(*mut FspFileSystem, ULONG) -> NTSTATUS;
-type AcquireDirBufferFn = unsafe extern "system" fn(*mut PVOID, BOOLEAN, ULONG, *mut NTSTATUS);
-type FillDirBufferFn =
-    unsafe extern "system" fn(*mut PVOID, *mut DirInfo, *mut NTSTATUS) -> BOOLEAN;
-type ReadDirBufferFn = unsafe extern "system" fn(*mut PVOID, PWSTR, PVOID, ULONG, *mut ULONG);
-type DirBufferFn = unsafe extern "system" fn(*mut PVOID);
 
 /// 已解析的函数表
 pub struct Api {
@@ -328,11 +323,6 @@ pub struct Api {
     pub start_dispatcher: StartDispatcherFn,
     pub stop_dispatcher: VoidFsFn,
     pub delete: VoidFsFn,
-    pub acquire_dir_buffer: AcquireDirBufferFn,
-    pub fill_dir_buffer: FillDirBufferFn,
-    pub read_dir_buffer: ReadDirBufferFn,
-    pub release_dir_buffer: DirBufferFn,
-    pub delete_dir_buffer: DirBufferFn,
     /// DLL 路径（诊断信息用）
     pub dll_path: String,
 }
@@ -424,11 +414,6 @@ fn load() -> Result<Api, String> {
             start_dispatcher: sym!("FspFileSystemStartDispatcher", StartDispatcherFn),
             stop_dispatcher: sym!("FspFileSystemStopDispatcher", VoidFsFn),
             delete: sym!("FspFileSystemDelete", VoidFsFn),
-            acquire_dir_buffer: sym!("FspFileSystemAcquireDirectoryBufferEx", AcquireDirBufferFn),
-            fill_dir_buffer: sym!("FspFileSystemFillDirectoryBuffer", FillDirBufferFn),
-            read_dir_buffer: sym!("FspFileSystemReadDirectoryBuffer", ReadDirBufferFn),
-            release_dir_buffer: sym!("FspFileSystemReleaseDirectoryBuffer", DirBufferFn),
-            delete_dir_buffer: sym!("FspFileSystemDeleteDirectoryBuffer", DirBufferFn),
             dll_path: path.clone(),
         });
     }
@@ -469,9 +454,13 @@ pub unsafe fn from_wide(ptr: PWSTR) -> String {
 /// 与 Size 字段的定义一致）。
 pub fn make_dir_info(info: &FileInfo, name: &str) -> Vec<u8> {
     let name_utf16: Vec<u16> = name.encode_utf16().collect();
-    let mut buf = vec![0u8; DIR_INFO_NAME_OFFSET + name_utf16.len() * 2 + 2];
+    // Size 只覆盖"定长头 + 名字"（不含结尾 0），这是内核解析名字长度的依据；
+    // 条目之间按 8 字节对齐填充零，与 WinFsp 的 FSP_FSCTL_DEFAULT_ALIGN_UP 一致。
+    let exact = DIR_INFO_NAME_OFFSET + name_utf16.len() * 2;
+    let padded = (exact + 7) & !7usize;
+    let mut buf = vec![0u8; padded];
     let head = DirInfo {
-        Size: (DIR_INFO_NAME_OFFSET + name_utf16.len() * 2) as u16,
+        Size: exact as u16,
         FileInfo: *info,
         NextOffset: 0,
         Padding: [0; 16],
@@ -488,6 +477,12 @@ pub fn make_dir_info(info: &FileInfo, name: &str) -> Vec<u8> {
     };
     buf[DIR_INFO_NAME_OFFSET..DIR_INFO_NAME_OFFSET + bytes.len()].copy_from_slice(bytes);
     buf
+}
+
+/// 一个目录条目在客户端缓冲里占用的字节数（含 8 字节对齐填充）
+pub fn dir_info_slot_len(name: &str) -> usize {
+    let exact = DIR_INFO_NAME_OFFSET + name.encode_utf16().count() * 2;
+    (exact + 7) & !7usize
 }
 
 #[cfg(test)]
@@ -527,7 +522,9 @@ mod tests {
         assert_eq!(String::from_utf16(&name).unwrap(), "测试.txt");
         assert_eq!(head.FileInfo.FileSize, 42);
         // 尾随的 0 不在 Size 里，但内存上确实留了位置
-        assert_eq!(&buf[DIR_INFO_NAME_OFFSET + name_bytes.len()..], &[0u8, 0u8]);
+        assert!(buf[DIR_INFO_NAME_OFFSET + name_bytes.len()..]
+            .iter()
+            .all(|b| *b == 0));
     }
 
     #[test]

@@ -34,6 +34,7 @@ fn main() -> ExitCode {
     let mut space = Space::Personal;
     let mut mount_point: Option<String> = None;
     let mut want_unc = false;
+    let mut hold_secs: u64 = 0;
     let mut unc_prefix: Option<String> = None;
     let mut argv = std::env::args().skip(1);
     while let Some(a) = argv.next() {
@@ -47,6 +48,9 @@ fn main() -> ExitCode {
             }
             "--mount" => mount_point = argv.next(),
             "--unc" => want_unc = true,
+            "--hold" => {
+                hold_secs = argv.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            }
             "--unc-prefix" => unc_prefix = argv.next(),
             other => {
                 eprintln!("未知参数：{other}");
@@ -98,6 +102,11 @@ fn main() -> ExitCode {
     };
 
     let mp = handle.mount_point();
+    if hold_secs > 0 {
+        println!("挂载已就绪，保持 {hold_secs} 秒供外部进程访问：{mp}");
+        std::thread::sleep(Duration::from_secs(hold_secs));
+        println!("保持期结束，继续自检");
+    }
     let root_path = if mp.ends_with(':') {
         format!("{mp}\\")
     } else {
@@ -166,6 +175,38 @@ fn main() -> ExitCode {
         Ok(Ok(None)) => println!("  [跳过] 文件读取：根目录下没有可直接读取的文件"),
         Ok(Err(e)) => report(&mut failures, "文件读取（走 Range）", false, format!("{e}")),
         Err(_) => report(&mut failures, "文件读取（走 Range）", false, "超时".into()),
+    }
+
+    // ---- 3b. 子目录递归（跨进程崩溃的可疑点：子目录会触发一次全新的云端 list_dir）
+    let sub = timed(CHECK_TIMEOUT, {
+        let p = root_path.clone();
+        move || -> std::io::Result<Vec<String>> {
+            let mut names = Vec::new();
+            for e in std::fs::read_dir(&p)? {
+                let e = e?;
+                if e.metadata().map(|m| m.is_dir()).unwrap_or(false) {
+                    let mut inner = 0usize;
+                    if let Ok(it) = std::fs::read_dir(e.path()) {
+                        inner = it.count();
+                    }
+                    names.push(format!("{}=>{inner}", e.file_name().to_string_lossy()));
+                    if names.len() >= 3 {
+                        break;
+                    }
+                }
+            }
+            Ok(names)
+        }
+    });
+    match sub {
+        Ok(Ok(names)) => report(
+            &mut failures,
+            "子目录递归列举",
+            !names.is_empty(),
+            format!("{names:?}"),
+        ),
+        Ok(Err(e)) => report(&mut failures, "子目录递归列举", false, format!("{e}")),
+        Err(()) => report(&mut failures, "子目录递归列举", false, "超时".into()),
     }
 
     // ---- 4. 只读校验

@@ -81,30 +81,6 @@ macro_rules! host {
 struct OpenContext {
     entry: Entry,
     segments: Vec<String>,
-    dir: Mutex<DirBuffer>,
-}
-
-/// 目录枚举缓冲（WinFsp 侧的缓冲区句柄 + 是否已填充）
-struct DirBuffer {
-    ptr: PVOID,
-    filled: bool,
-}
-
-impl DirBuffer {
-    fn new() -> Self {
-        Self {
-            ptr: std::ptr::null_mut(),
-            filled: false,
-        }
-    }
-}
-
-impl Drop for DirBuffer {
-    fn drop(&mut self) {
-        if let Ok(api) = sys::api() {
-            unsafe { (api.delete_dir_buffer)(&mut self.ptr) };
-        }
-    }
 }
 
 /// 把内部错误映射成 NTSTATUS
@@ -253,11 +229,7 @@ unsafe extern "system" fn cb_open(
         }
         unsafe {
             *file_info = file_info_of(&entry);
-            *file_context = Box::into_raw(Box::new(OpenContext {
-                entry,
-                segments,
-                dir: Mutex::new(DirBuffer::new()),
-            })) as PVOID;
+            *file_context = Box::into_raw(Box::new(OpenContext { entry, segments })) as PVOID;
         }
         STATUS_SUCCESS
     })
@@ -304,11 +276,7 @@ unsafe extern "system" fn cb_create(
         }
         unsafe {
             *file_info = file_info_of(&entry);
-            *file_context = Box::into_raw(Box::new(OpenContext {
-                entry,
-                segments,
-                dir: Mutex::new(DirBuffer::new()),
-            })) as PVOID;
+            *file_context = Box::into_raw(Box::new(OpenContext { entry, segments })) as PVOID;
         }
         STATUS_SUCCESS
     })
@@ -521,52 +489,44 @@ unsafe extern "system" fn cb_read_directory(
             return STATUS_INVALID_PARAMETER;
         }
         let host = host! { fs };
-        let api = match sys::api() {
-            Ok(a) => a,
-            Err(e) => {
-                log::error!("{e}");
-                return STATUS_NOT_IMPLEMENTED;
+        let listing = match block_on_timeout(CALLBACK_TIMEOUT, host.cloud.list_dir(&ctx.segments)) {
+            Ok(Ok(l)) => l,
+            Ok(Err(e)) => return ntstatus(&e),
+            Err(_) => return STATUS_IO_TIMEOUT,
+        };
+
+        // 直接往客户端缓冲区里写 FSP_FSCTL_DIR_INFO 条目（手工分页）。
+        //
+        // 为什么不用 FspFileSystem{Acquire,Fill,Read,Release}DirectoryBuffer：
+        // 那套辅助函数把状态（独占 SRW 锁 + 内部缓冲 + 排序索引）跨回调持有在本进程里，
+        // 实测在「另一个进程递归枚举子目录」时会把挂载进程打死（0xC0000374 堆损坏）。
+        // 手工分页没有任何跨调用状态：marker 是"上一次返回的最后一个名字"，
+        // 每次调用都从内存里的目录缓存重新开始，行为完全可预测。
+        let start_at = if marker.is_null() {
+            0
+        } else {
+            let m = unsafe { from_wide(marker) };
+            match listing.index_of(&m) {
+                Some(i) => i + 1,
+                // marker 找不到（目录在两次调用之间变了）：从头来，宁可重复也不丢
+                None => 0,
             }
         };
-        let mut state = ctx.dir.lock().unwrap_or_else(|e| e.into_inner());
 
-        // 目录缓冲区只能在【同一侧】配对：
-        //   Acquire(Reset=TRUE) → Fill* → Release
-        // 其中 Release 放掉的是**独占** SRW 锁；而 ReadDirectoryBuffer 自己会拿/放共享锁。
-        // 早先的写法在每次 Read 之后又调一次 Release，等于重复释放独占锁，
-        // SRW 锁状态被破坏 → 后续所有目录请求（以及 Create / unmount）全部死锁。
-        if !state.filled {
-            let listing =
-                match block_on_timeout(CALLBACK_TIMEOUT, host.cloud.list_dir(&ctx.segments)) {
-                    Ok(Ok(l)) => l,
-                    Ok(Err(e)) => return ntstatus(&e),
-                    Err(_) => return STATUS_IO_TIMEOUT,
-                };
-            let mut status: NTSTATUS = STATUS_SUCCESS;
-            unsafe { (api.acquire_dir_buffer)(&mut state.ptr, 1, 0, &mut status) };
-            if status != STATUS_SUCCESS {
-                return status;
+        let capacity = length as usize;
+        let out = unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, capacity) };
+        let mut written = 0usize;
+        for entry in listing.entries.iter().skip(start_at) {
+            let slot = dir_info_slot_len(&entry.name);
+            if written + slot > capacity {
+                break;
             }
-            for entry in &listing.entries {
-                let info = file_info_of(entry);
-                let raw = make_dir_info(&info, &entry.name);
-                let mut st: NTSTATUS = STATUS_SUCCESS;
-                let ok = unsafe {
-                    (api.fill_dir_buffer)(&mut state.ptr, raw.as_ptr() as *mut DirInfo, &mut st)
-                };
-                if ok == 0 {
-                    // 缓冲区满：WinFsp 会带着 marker 再来一次，这里是正常路径
-                    break;
-                }
-            }
-            // 排好序并放掉独占锁；之后的 Read 只拿共享锁
-            unsafe { (api.release_dir_buffer)(&mut state.ptr) };
-            state.filled = true;
+            let info = file_info_of(entry);
+            let raw = make_dir_info(&info, &entry.name);
+            out[written..written + raw.len()].copy_from_slice(&raw);
+            written += slot;
         }
-
-        unsafe {
-            (api.read_dir_buffer)(&mut state.ptr, marker, buffer, length, bytes_transferred);
-        }
+        unsafe { *bytes_transferred = written as ULONG };
         STATUS_SUCCESS
     })
 }
