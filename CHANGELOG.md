@@ -7,6 +7,30 @@
 
 ### Added
 
+- **Headless 命令行模式（`tianyi-app -c ...`）**：账号（密码 / 二维码登录、多账号切换）、
+  文件（ls / info / search / mkdir / rename / mv / cp / rm / link / quota / 空间切换）、
+  传输（upload / download / tasks / task pause|resume|cancel|remove）全部可用；无子命令且
+  stdin 是终端时进入交互式 Shell（带云端工作目录 `cd`/`pwd`、命令历史与补全）。
+- **纯 CLI 构建**：`cargo build -p tianyi-app --no-default-features --features cli`
+  的依赖树里没有 slint / winit / rfd / arboard，可在无 DISPLAY 的 Linux、SSH 终端与最小化
+  Docker 镜像里运行；纯 CLI 构建不带 `-c` 启动时明确提示「没有图形界面」并以 2 退出。
+- **机器可读协议**：`--json` 输出固定信封 `{success,data,error}`（stdout 只有结果，
+  日志与进度走 stderr），`--jsonl` 提供「一行请求一行响应、带关联 id」的常驻会话；
+  时间统一 ISO-8601、大小统一整数字节、进度统一千分比整数，永不出现 NaN。
+- **稳定错误码与退出码**：`USAGE/AUTH_REQUIRED/AUTH_EXPIRED/CAPTCHA_REQUIRED/NETWORK/
+  REMOTE_API/NOT_FOUND/LOCAL_IO/CANCELED/TIMEOUT/UNSUPPORTED/INTERNAL` 等，对应退出码
+  2/3/4/5/6/7/8/9；参数错误由 clap 统一拦下，业务错误一律走同一张映射表。
+- **验证码与二维码的无图形交互**：验证码 PNG 原样落盘并把路径放进 JSON 的 `details`；
+  二维码用半块字符直接画在终端（stderr），也可 `--qr-file` 写成 SVG。
+- **CLI 文档**：`docs/CLI.md`（模式切换、命令参考、JSON 协议、退出码、SSH / Docker /
+  ARM64 / Agent 示例、已知限制）。
+- **CLI 测试**：`tianyi-cli` 65 条单测 + `crates/tianyi-app/tests/cli_e2e.rs` 11 条端到端用例
+  （真实二进制 + 临时配置目录 + 清空 DISPLAY，覆盖退出码、stdout 纯净度、无 TTY 不挂住、
+  凭据不泄露）。
+- **CI 的 Headless 门禁**：`cli-headless`（不装任何 GUI 系统库，x86_64 与 aarch64 编译 +
+  `cargo tree` 断言无图形依赖 + 无 DISPLAY 冒烟）与 `cli-e2e`（同一环境跑端到端测试）；
+  Release 额外产出 Linux CLI-only 产物。
+
 - **请求级重试与指数退避**：核心库的 API 请求支持按状态码/错误类型重试，退避区间指数增长，避免瞬时故障直接失败。
 - **配置版本号与迁移链**：`config.json` 带上 `version` 字段与显式迁移链，缺 `version` 的历史配置逐级升级到当前版本，不需要用户手动删配置；读到比当前更高的版本号只记 warn 并按现有结构尽力解析，不崩。（`accounts.json` 本轮未加版本字段。）
 - **UI 层测试后端与几何断言**：引入 Slint 测试后端，在无窗口环境下对布局宽度/间距做几何断言，防止改样式时静默错位。
@@ -28,11 +52,11 @@
 - **文件行暴露 `list-item` 语义**：`FileRow` 补上「名称 + 大小 · 修改时间 · 类型」描述与默认动作，读屏不再把文件列表读成空列表。
 - **模态焦点闭包**：新增 `ModalsApi.blocking` 与 `ActivateScope.enabled`，对话框/浮层打开时背景控件退出 Tab 序列，对话框内 Tab 循环不再把焦点漏给背景导航项。
 - **右键菜单键盘导航**：↑↓ 移动高亮、Enter 触发，初始 `ctx-highlight: -1`，打开瞬间不产生视觉变化。
-- **七条独立 UI 断言**：`crates/tianyi-app/src/ui_tests.rs` 新增 7 个独立 `#[test]`（`check_batch_bar_a11y` / `check_login_input_survives_mode_switch` / `check_toast_clears_status_bar` / `check_dialog_focus_closure` / `check_selection_index_brings_row_into_view` / `check_tooltip_clears_on_page_switch` / `check_arrow_key_moves_selection`），失败时测试名本身就是结论，不必从汇总输出里倒推红的是哪一条。
+- **七条独立 UI 断言**：`crates/tianyi-gui/src/ui_tests.rs` 新增 7 个独立 `#[test]`（`check_batch_bar_a11y` / `check_login_input_survives_mode_switch` / `check_toast_clears_status_bar` / `check_dialog_focus_closure` / `check_selection_index_brings_row_into_view` / `check_tooltip_clears_on_page_switch` / `check_arrow_key_moves_selection`），失败时测试名本身就是结论，不必从汇总输出里倒推红的是哪一条。
 - **三个视觉场景与 25 张基线**：新增 `23-cloud-narrow-actions`（960×760）、`24-cloud-inline-error`（1180×760）、`25-login-invalid`（900×760），`screenshots/after/` 由 22 张增至 25 张。
 - **本轮优化报告**：`docs/ROUND3_REPORT.md`，含缺陷清单、五类验证方式、已知偏差与残余限制。
-- **四语国际化（简中 / 繁中 / 英 / 日）**：界面文案与运行时文案各一套词表——`.slint` 的 `@tr` 走编译期打包的 `lang/<lang>/LC_MESSAGES/tianyi-app.po`（msgid = 简中原文，简中即翻译表索引 0，故无 `zh-Hans` 目录），控制器 `format!` 拼出来的状态栏/提示条/任务状态走 `i18n/rs/<lang>.json`（键 → 简中原文，缺词按「当前语种 → 简中 → 键名」回退）。设置页「外观 → 语言」即时切换、无需重启，选择写入 `config.json` 的 `language` 字段；「自动」模式按系统 locale 解析（繁体优先，其它语言回退英文）。详见 `docs/I18N.md`。
-- **i18n 目录完整性回归测试**：新增 `crates/tianyi-app/tests/i18n_catalog.rs`，扫描 `ui/**/*.slint` 的 `@tr` 与三份 `.po`、四份运行时词表做互校（全覆盖 / 双向无多余 / 键集与占位符一致 / `lang/` 目录卫生）。漏翻此前只会静默回退成中文，现在直接红灯。
+- **四语国际化（简中 / 繁中 / 英 / 日）**：界面文案与运行时文案各一套词表——`.slint` 的 `@tr` 走编译期打包的 `lang/<lang>/LC_MESSAGES/tianyi-gui.po`（msgid = 简中原文，简中即翻译表索引 0，故无 `zh-Hans` 目录），控制器 `format!` 拼出来的状态栏/提示条/任务状态走 `i18n/rs/<lang>.json`（键 → 简中原文，缺词按「当前语种 → 简中 → 键名」回退）。设置页「外观 → 语言」即时切换、无需重启，选择写入 `config.json` 的 `language` 字段；「自动」模式按系统 locale 解析（繁体优先，其它语言回退英文）。详见 `docs/I18N.md`。
+- **i18n 目录完整性回归测试**：新增 `crates/tianyi-gui/tests/i18n_catalog.rs`，扫描 `ui/**/*.slint` 的 `@tr` 与三份 `.po`、四份运行时词表做互校（全覆盖 / 双向无多余 / 键集与占位符一致 / `lang/` 目录卫生）。漏翻此前只会静默回退成中文，现在直接红灯。
 - **文案抽取脚本**：`tools/i18n-extract.ps1` 从 `.slint` 抽 msgid（跳过 `ui/dev/`、正确解 `\"`），`-Count` 输出总数/去重数，`-Skeleton <lang>` 生成 `.po` 骨架。
 - **全局速度限制**：设置页「传输 → 速度限制」五档（不限速 / 1 / 5 / 10 / 20 MB/s），写入 `config.json` 的 `speed_limit`（字节/秒，0 = 不限）。上传与下载共用**一个**令牌桶（两路并发时总量仍受限于该值），只对**新启动**的任务生效——在跑的任务持有启动时那个桶。手改成非预设值（如 3 MB/s）时五段一个都不亮、行内小字写出真实速率，不会显示与实际不符的选中项。
 - **命令栏排序入口**：新增「排序」下拉（`ui/components/sort-menu.slint`），名称 / 大小 / 修改时间三项，右侧显示当前列的方向箭头。此前 `sort-changed` 只有三个列头调用点，而「修改时间」列头在 `detail-level >= 2` 里——默认 1180px 窗口（内容区 932px）根本没有按修改时间排序的入口。
@@ -40,6 +64,16 @@
 - **视觉回归工具**：`tools/visual-diff.ps1` 逐通道比对两组基线（输出每张图的差异像素数、差异包围盒与 identical/noise/changed 判定，`-BeforeRev <ref>` 直接与历史版本里的基线比，存在 changed 时退出码 1）；`tools/ui-preview.ps1` 一条命令重采 29 张基线并在结束时给出比对命令。两者零第三方依赖，只用 `System.Drawing` + `LockBits`，不再依赖「本机恰好装了 numpy / Pillow」。
 
 ### Changed
+
+- **crate 拆分**：原 `tianyi-app` 拆成 `tianyi-gui`（Slint 界面与控制器）、
+  `tianyi-cli`（命令行）与只剩启动逻辑的 `tianyi-app`。启动器在**任何图形后端初始化
+  之前**判定模式，GUI 构建与历史行为完全一致；`.po` 随包名改名为 `tianyi-gui.po`。
+- **共享服务层**：配置降级链、云端路径解析、文件名消毒、目录大小统计、一次上传/下载作业
+  的执行体集中到 `tianyi-core`，GUI 与 CLI 共用同一份实现。
+- **配置与账号写入改为读-改-写**：`update_config` / `update_accounts` 持锁重读后再改
+  单个字段，两个进程（GUI + CLI）不再互相顶掉对方的改动。
+- **任务表落盘改为合并式**：写前抢 `tasks.json.lock` 排他锁，并与磁盘上的任务表合并
+  （我动过的以我为准、我没动过的以磁盘为准），删除不会被另一个进程的旧快照复活。
 
 - **预览采图口径**：`examples/ui_preview.rs` 不再"固定 sleep 260ms 后推进一次"，改为"先真绘一帧 → 循环（等一帧 + 推进定时器 + 绘制）直到没有活跃动画"，`animation-tick()` 驱动的 spinner/进度条场景用 1s 墙钟上限兜底。旧写法会把"下一帧才触发"的入场动效卡在起始帧，采出半透明/空白图。
 

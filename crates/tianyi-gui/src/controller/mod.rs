@@ -19,7 +19,7 @@ use self::dnd::MovedFile;
 #[cfg(test)]
 pub(crate) use self::files::apply_entries;
 use self::files::PendingConfirm;
-use self::session::ConfigStore;
+use self::session::{degrade_message, ConfigStore};
 use self::transfers::TransferSnapshot;
 use crate::app::{DirectLink, DragOutApi, FileEntry, MainWindow, Theme};
 use crate::backend::Backend;
@@ -31,13 +31,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tianyi_core::client::TianyiClient;
-use tianyi_core::config::{AppConfig, AppStore, LanguageMode, ThemeMode};
+use tianyi_core::config::{AppConfig, LanguageMode, ThemeMode};
 use tianyi_core::models::FileObject;
 use tianyi_core::ratelimit::RateLimiter;
 use tianyi_core::task::{TaskManager, TransferControl};
 
-/// 根目录 id
-const ROOT_FOLDER_ID: &str = "-11";
+/// 根目录 id：与 CLI 共用同一份定义（tianyi_core::cloudpath）
+use tianyi_core::cloudpath::ROOT_FOLDER_ID;
 /// 面板刷新节流间隔（毫秒）
 const TICK_MS: u64 = 200;
 /// 单次刷新时最多展示的任务数
@@ -59,8 +59,6 @@ const PROGRESS_PUBLISH_PERMILLE: u64 = 10;
 /// 并发分片数允许区间（设置页 `−/+` 与写回配置共用同一处定义）
 const MIN_THREADS: i32 = 1;
 const MAX_THREADS: i32 = 8;
-/// 主配置目录不可用时的降级目录（位于系统临时目录下）
-const FALLBACK_CONFIG_DIR: &str = "tianyi-cloud-fallback";
 /// 内存态（配置目录不可写）时设置页「配置目录」一栏的显示文案
 ///
 /// 不能留成 `const`：这段文字要跟着界面语种走，而查表只有运行时才做得了。
@@ -280,8 +278,8 @@ impl Controller {
         c.refresh_saved_accounts();
         c.initial_sync();
         // 降级必须让用户看见（放在 initial_sync 之后，避免被"空提示"覆盖）
-        if let Some(msg) = degraded {
-            c.notice("warning", msg);
+        if let Some(d) = degraded {
+            c.notice("warning", degrade_message(&d));
         }
         c
     }
@@ -985,20 +983,15 @@ impl Controller {
 
     /// 把语言偏好写回 config.json
     ///
-    /// 与 `set_theme_index` / `set_thread_counts` 的目标一致，只是位置不同：那两个在
-    /// `session.rs` 里，能直接调 `ConfigStore::save_config`；本文件是它的父模块，够不到
-    /// 那个私有方法。所以这里复用**同一个** `ConfigStore` 的根目录（`is_persistent()` 决定
-    /// 到底有没有磁盘可写）再落盘——目录解析仍然只有 `ConfigStore::open()` 这一份，
-    /// 不存在"另起一套降级链"。
-    ///
-    /// 内存态（配置目录不可写）直接返回 `Ok`：那儿本来就写不进去，启动期的提示条已经
-    /// 告诉用户"设置不会保存"，再报一次保存失败只会变成噪声。
+    /// 只改 `language` 一个字段，并且走 **读-改-写**（`ConfigStore::update_config`）：
+    /// 另一个进程（例如同时在跑的 `tianyi-app -c`）刚写进去的 `last_account` 或
+    /// 主题偏好不能被这份旧快照顶掉。内存态下 update_config 只改进程内副本，
+    /// 启动期的提示条已经告诉用户「设置不会保存」，这里不必再报一次。
     fn save_language(&self, cfg: &AppConfig) -> Result<(), String> {
-        if !self.store.is_persistent() {
-            return Ok(());
-        }
-        let store = AppStore::new(Some(self.store.root().clone())).map_err(|e| e.to_string())?;
-        store.save_config(cfg).map_err(|e| e.to_string())
+        self.store
+            .update_config(|c| c.language = cfg.language.clone())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
     /// 设置页「语言」：0=自动 1=简中 2=繁中 3=英文 4=日文
@@ -1193,10 +1186,10 @@ mod tests {
     use self::files::{
         files_to_entries, range_selection, rename_cancelled_state, sanitize_file_name, sort_files,
     };
-    use self::session::{account_initial, clamp_threads, pick_store_root, qr_state_of, StoreRoot};
+    use self::session::{account_initial, clamp_threads, qr_state_of};
     use self::transfers::{
         close_safe_status, close_status_for, close_transitions, dedupe_key, dir_size,
-        needs_publish, progress_marker, to_transfer_entry, transfer_snapshot, Outcome,
+        needs_publish, progress_marker, to_transfer_entry, transfer_snapshot,
     };
     use super::*;
     use std::collections::HashSet;
@@ -1468,24 +1461,8 @@ mod tests {
         assert!(Controller::rows_for_display(&dir, Some(&empty)).is_empty());
     }
 
-    // ---------------- 传输失败原因归一化 ----------------
-
-    #[test]
-    fn interrupted_errors_are_not_failures() {
-        use tianyi_core::error::Error;
-        assert!(matches!(
-            Outcome::from_error(&Error::Paused),
-            Outcome::Paused
-        ));
-        assert!(matches!(
-            Outcome::from_error(&Error::Canceled),
-            Outcome::Canceled
-        ));
-        match Outcome::from_error(&Error::Transfer("boom".into())) {
-            Outcome::Failed(msg) => assert!(msg.contains("boom")),
-            _ => panic!("普通错误必须归类为失败"),
-        }
-    }
+    // 「暂停/取消不算失败」的归一化已随执行体一起下沉到 tianyi-core::job，
+    // 对应测试在 core 的 job::tests::interrupted_errors_map_to_paused_or_canceled。
 
     // ---------------- 文件名净化 ----------------
 
@@ -1766,57 +1743,8 @@ mod tests {
         std::env::temp_dir().join(format!("tianyi-{name}-{}", std::process::id()))
     }
 
-    /// 构造"必然不能当目录打开"的路径：该位置先放一个普通文件
-    fn blocked_dir(name: &str) -> (PathBuf, PathBuf) {
-        let base = unique_tmp(name);
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(&base).expect("创建测试根目录");
-        let blocked = base.join("occupied");
-        fs::write(&blocked, b"x").expect("写入占位文件");
-        (base, blocked)
-    }
-
-    #[test]
-    fn pick_store_root_uses_primary_when_usable() {
-        let primary = unique_tmp("store-primary");
-        let _ = fs::remove_dir_all(&primary);
-        let fallback = unique_tmp("store-primary-fb");
-        let _ = fs::remove_dir_all(&fallback);
-
-        match pick_store_root(Some(&primary), &fallback) {
-            StoreRoot::Primary(root) => assert_eq!(root, primary),
-            other => panic!("主目录可用时必须用主目录，实际 {other:?}"),
-        }
-        assert!(primary.is_dir(), "主目录应被创建出来");
-        // 没有降级就不该顺手创建回退目录
-        assert!(!fallback.exists(), "主目录可用时不应触碰回退目录");
-
-        let _ = fs::remove_dir_all(&primary);
-    }
-
-    #[test]
-    fn pick_store_root_falls_back_then_degrades_to_memory() {
-        let (base, blocked) = blocked_dir("store-fallback");
-        let fallback = unique_tmp("store-fallback-dir");
-        let _ = fs::remove_dir_all(&fallback);
-
-        // 主目录被普通文件占住（create_dir_all 必然失败）→ 退到回退目录
-        match pick_store_root(Some(&blocked), &fallback) {
-            StoreRoot::Fallback(root) => assert_eq!(root, fallback),
-            other => panic!("主目录不可用时必须退到回退目录，实际 {other:?}"),
-        }
-        assert!(fallback.is_dir(), "回退目录应被创建出来");
-
-        // 回退目录也不可用 → 内存态（全程不 panic）
-        assert_eq!(
-            pick_store_root(Some(&blocked), &blocked),
-            StoreRoot::Memory,
-            "两处都不可用时必须落到内存态而不是 panic"
-        );
-
-        let _ = fs::remove_dir_all(&base);
-        let _ = fs::remove_dir_all(&fallback);
-    }
+    // 配置目录降级链的测试已随实现一起下沉到 tianyi-core（见 store 模块的
+    // pick_store_root_* 两个用例）：那段逻辑现在只有一份实现，也就只有一处测试。
 
     // ---------------- 并发分片数钳制 ----------------
 

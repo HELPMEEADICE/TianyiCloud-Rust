@@ -185,6 +185,80 @@ jobs:
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --locked
 
+  # ------------------------------------------------------------ 纯 CLI 构建
+  # 这两条作业刻意**不安装**任何 GUI 系统库（不装 libgl / xkbcommon / wayland 等）：
+  # 如果纯 CLI 构建误引入 slint / winit，它们会直接因为找不到系统库而编译失败——
+  # 这就是「真正的 Headless 构建」最直接的回归防线。
+  cli-headless:
+    name: Headless CLI 构建 (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64, os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-cli-${{ matrix.target }}
+
+      - name: 编译纯 CLI 产物（无 GUI 系统库）
+        run: |
+          cargo build --release --locked -p tianyi-app \
+            --no-default-features --features cli \
+            --target ${{ matrix.target }}
+
+      - name: 断言依赖树里没有图形库
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p tianyi-app --no-default-features --features cli --target ${{ matrix.target }})
+          if echo "$tree" | grep -Eq 'slint|winit|arboard|rfd'; then
+            echo "纯 CLI 构建里出现了图形依赖：" >&2
+            echo "$tree" | grep -E 'slint|winit|arboard|rfd' | head -20 >&2
+            exit 1
+          fi
+          echo "纯 CLI 依赖树干净（无 slint / winit / arboard / rfd）"
+
+      - name: 冒烟运行（无 DISPLAY，无 TTY）
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/tianyi-app"
+          env -u DISPLAY -u WAYLAND_DISPLAY "$bin" -c --json status < /dev/null | tee /tmp/status.json
+          python3 - <<'PY'
+          import json, sys
+          payload = json.load(open("/tmp/status.json"))
+          assert payload["success"] is True, payload
+          assert payload["data"]["authenticated"] is False, payload
+          print("JSON 协议与退出码检查通过")
+          PY
+
+  # ------------------------------------------------------------ CLI 端到端测试
+  cli-e2e:
+    name: CLI 集成测试 (headless)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-cli-e2e
+
+      - name: 运行 CLI 端到端测试（不装 GUI 系统库）
+        run: |
+          cargo test --locked -p tianyi-app --no-default-features --features cli
+        env:
+          DISPLAY: ""
+          WAYLAND_DISPLAY: ""
+
   # ---------------------------------------------------------------- 依赖审计（非阻塞）
   # 只出报告：continue-on-error 让它红也不影响本工作流结论，
   # 且刻意**不**进入下面 `ci` 汇总作业的 needs（否则 needs.*.result 会把失败算进门禁）。
@@ -235,12 +309,12 @@ jobs:
   ci:
     name: CI 汇总
     if: always()
-    needs: [fmt, clippy, check, test, test-windows, msrv]
+    needs: [fmt, clippy, check, test, test-windows, msrv, cli-headless, cli-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: 检查各任务结果
         run: |
-          echo "fmt=${{ needs.fmt.result }} clippy=${{ needs.clippy.result }} check=${{ needs.check.result }} test=${{ needs.test.result }} test-windows=${{ needs.test-windows.result }} msrv=${{ needs.msrv.result }}"
+          echo "fmt=${{ needs.fmt.result }} clippy=${{ needs.clippy.result }} check=${{ needs.check.result }} test=${{ needs.test.result }} test-windows=${{ needs.test-windows.result }} msrv=${{ needs.msrv.result }} cli-headless=${{ needs.cli-headless.result }} cli-e2e=${{ needs.cli-e2e.result }}"
           echo "非阻塞作业（不计入本门禁）：audit / coverage —— 结果请到 Actions 页面查看各自作业"
           if [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "true" ]; then
             echo "存在失败的任务" >&2

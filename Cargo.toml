@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/tianyi-core",
     "crates/tianyi-app",
+    "crates/tianyi-gui",
+    "crates/tianyi-cli",
 ]
 
 [workspace.package]

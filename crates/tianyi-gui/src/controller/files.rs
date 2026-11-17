@@ -1347,22 +1347,9 @@ fn same_row_ids(model: &slint::ModelRc<FileEntry>, entries: &[FileEntry]) -> boo
             .all(|(idx, entry)| model.row_data(idx).is_some_and(|row| row.id == entry.id))
 }
 
-/// 去掉文件名中不安全的字符
-pub(super) fn sanitize_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            c if (c as u32) < 0x20 => '_',
-            c => c,
-        })
-        .collect();
-    if cleaned.trim().is_empty() {
-        "unnamed".to_string()
-    } else {
-        cleaned
-    }
-}
+// 文件名消毒已下沉到 tianyi-core：GUI 的下载落盘与 CLI 的下载落盘必须用同一套规则，
+// 否则同一个云端文件名在两个前端会落成两个不同的本地名字。
+pub(super) use tianyi_core::cloudpath::sanitize_file_name;
 
 /// 取消重命名后要写回 UI 的 (renaming-id, 状态栏文案)
 ///

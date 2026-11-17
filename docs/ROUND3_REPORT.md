@@ -99,7 +99,7 @@
 
 ### 4.2 七条新断言
 
-`crates/tianyi-app/src/ui_tests.rs` 现共 **8 个 `#[test]`**：1 个聚合的 `ui_geometry_regression` + 7 条本轮新增的独立断言。
+`crates/tianyi-gui/src/ui_tests.rs` 现共 **8 个 `#[test]`**：1 个聚合的 `ui_geometry_regression` + 7 条本轮新增的独立断言。
 
 | 断言 | 守什么 |
 | --- | --- |
@@ -211,6 +211,6 @@
 | W2 可访问性 | 5 | `44f5a7d` `3128128` `666fcbb` `38110eb` `6b6d30e` |
 | W5 验证与文档 | 3 + 本提交 | `612dec0` `439ab8a` `e955f52` |
 
-文件分布：`crates/tianyi-app/ui/**` **20** 个、`crates/tianyi-core/**` **5** 个、其余源码与配置 **8** 个、`screenshots/after/**` **7** 张（3 新增 + 4 变更），合计 40。
+文件分布：`crates/tianyi-gui/ui/**` **20** 个、`crates/tianyi-core/**` **5** 个、其余源码与配置 **8** 个、`screenshots/after/**` **7** 张（3 新增 + 4 变更），合计 40。
 
 未 push、未 amend 历史，工作分支沿用 `main`。已知偏差两处（`18e0f0f` 跨轨混合提交、`b181cd7` 提交信息里的假绿结论）见 §5.1 与 §5.2，均因并行代理在场时改写历史的收益低于风险而选择保留并登记。

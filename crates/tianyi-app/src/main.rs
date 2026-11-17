@@ -1,281 +1,155 @@
-//! 天翼云盘 Slint 桌面客户端
+//! 天翼云盘启动器
+//!
+//! 唯一职责：**在加载任何图形后端之前**决定这次是 GUI 还是 CLI，然后转交。
+//! 这条规则有三条硬约束，改动时必须同时满足：
+//!
+//! 1. 默认（不带参数）行为与历史版本完全一致——直接打开 Slint 主窗口；
+//! 2. 一旦判定为 CLI，绝不能构造 MainWindow、不能初始化 winit、不能碰图形后端，
+//!    因为那些代码在纯 CLI 构建里**根本不存在**（feature 未启用），
+//!    在混合构建里也不该被无谓地拉起来；
+//! 3. 纯 CLI 构建（--no-default-features --features cli）在无参数启动时要给出明确的
+//!    「本构建没有图形界面」提示并以非零码退出，而不是崩溃或静默成功。
 
-mod app;
-mod backend;
-mod controller;
-#[cfg(windows)]
-mod dragout;
-mod i18n;
-mod logging;
+use std::ffi::OsString;
+use std::process::ExitCode;
+
+/// 明确的 CLI 子命令名：让 tianyi-app ls / 这种省略 -c 的写法也能进 CLI
+const CLI_SUBCOMMANDS: &[&str] = &[
+    "login", "logout", "account", "status", "ls", "info", "search", "mkdir", "rename", "mv", "cp",
+    "rm", "link", "quota", "space", "upload", "download", "tasks", "task", "help",
+];
+
+/// 只在 CLI 里存在的全局选项（出现即意味着用户要的是命令行）
+const CLI_GLOBAL_FLAGS: &[&str] = &[
+    "--json",
+    "--jsonl",
+    "--ndjson",
+    "--non-interactive",
+    "--yes",
+    "-y",
+    "--timeout",
+    "--config-dir",
+    "--account",
+    "--space",
+    "--quiet",
+    "-q",
+];
+
+fn main() -> ExitCode {
+    let argv: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if wants_cli(&argv) {
+        return run_cli(argv);
+    }
+    run_gui()
+}
+
+/// 判断这次是否要走 CLI
+///
+/// 判定依据只有「明确的 CLI 信号」，不认识参数一律维持 GUI（历史行为）：
+/// macOS 从 Finder 启动时可能带 -psn_... 之类的系统参数，把它们当成 CLI 会让用户
+/// 双击图标却看到终端报错。
+fn wants_cli(argv: &[OsString]) -> bool {
+    for arg in argv {
+        let Some(text) = arg.to_str() else {
+            // 非 UTF-8 参数：维持历史行为（GUI）
+            return false;
+        };
+        if text == "--" {
+            break;
+        }
+        if !text.starts_with('-') {
+            return CLI_SUBCOMMANDS.contains(&text);
+        }
+        if matches!(text, "-c" | "--cli" | "-h" | "--help" | "-V" | "--version") {
+            return true;
+        }
+        // --timeout=30 这种带值写法按 '=' 前半段比对
+        let name = text.split('=').next().unwrap_or(text);
+        if CLI_GLOBAL_FLAGS.contains(&name) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "cli")]
+fn run_cli(argv: Vec<OsString>) -> ExitCode {
+    tianyi_cli::run(argv)
+}
+
+#[cfg(not(feature = "cli"))]
+fn run_cli(_argv: Vec<OsString>) -> ExitCode {
+    eprintln!("本构建没有编译命令行支持（缺少 cli feature）。");
+    eprintln!("请使用默认构建，或用 --features cli 重新构建。");
+    ExitCode::from(2)
+}
+
+#[cfg(feature = "gui")]
+fn run_gui() -> ExitCode {
+    match tianyi_gui::run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("启动失败：{e:#}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+#[cfg(not(feature = "gui"))]
+fn run_gui() -> ExitCode {
+    eprintln!("本构建没有编译图形界面（缺少 gui feature）。");
+    eprintln!("这个可执行文件只提供命令行，请加 -c 使用，例如：");
+    eprintln!("  tianyi-app -c status");
+    eprintln!("  tianyi-app -c ls /");
+    eprintln!("用法帮助：tianyi-app -c --help");
+    ExitCode::from(2)
+}
+
+#[cfg(not(any(feature = "gui", feature = "cli")))]
+compile_error!("至少要启用一个 feature：gui 或 cli");
 
 #[cfg(test)]
-mod ui_tests;
+mod tests {
+    use super::*;
 
-use app::MainWindow;
-use backend::Backend;
-use slint::{ComponentHandle, Timer, TimerMode};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tianyi_core::lock_or_recover;
-
-/// 传输面板刷新间隔（毫秒）
-const TICK_MS: u64 = 200;
-// 跟随系统主题时的轮询间隔（秒）
-//
-// macOS 上的 `tianyi_core::theme::system_prefers_dark()` 每次调用都会起一个线程
-// 并 spawn 一个 `defaults read -g AppleInterfaceStyle` 子进程；3 秒一次等于每 3 秒
-// 就新起一个进程，笔记本上耗电明显。主题切换本身是低频操作，放宽到 30 秒后最坏
-// 情况只是"改了系统主题，客户端晚半分钟跟上"，用户几乎感知不到。
-// Windows 读注册表、其它平台是轻量查询，保持 3 秒以获得即时跟随。
-#[cfg(target_os = "macos")]
-const THEME_POLL_SECS: u64 = 30;
-#[cfg(not(target_os = "macos"))]
-const THEME_POLL_SECS: u64 = 3;
-
-/// 拖拽进入状态（跨线程由 winit 事件回调与控制器共享）
-struct DragDropState {
-    /// 是否正在拖拽（HoveredFile 已进入，尚未 Dropped/Cancelled）
-    hovering: AtomicBool,
-    /// 已累积的待上传路径（DroppedFile 逐个追加，落盘后清空）
-    pending: Mutex<Vec<PathBuf>>,
-    /// 当前悬停目标文件夹名（用于遮罩显示）
-    hover_target: Mutex<String>,
-    /// 批次序号：只有最后一次调度的定时器负责消费本批路径，避免重复入队
-    batch: Mutex<u64>,
-}
-
-impl DragDropState {
-    fn new() -> Self {
-        DragDropState {
-            hovering: AtomicBool::new(false),
-            pending: Mutex::new(Vec::new()),
-            hover_target: Mutex::new(String::new()),
-            batch: Mutex::new(0),
-        }
-    }
-}
-
-/// 将主窗口在屏幕上居中显示（窗口创建后由事件循环单次触发执行）
-fn center_window(ui: &slint::Weak<MainWindow>) {
-    use slint::winit_030::{winit, WinitWindowAccessor};
-
-    let ui = ui.clone();
-    Timer::single_shot(Duration::from_millis(100), move || {
-        let Some(app) = ui.upgrade() else { return };
-        app.window().with_winit_window(|win| {
-            let Some(monitor) = win.current_monitor().or_else(|| win.primary_monitor()) else {
-                return;
-            };
-            let mon_pos = monitor.position();
-            let mon_size = monitor.size();
-            let win_size = win.outer_size();
-            let x = mon_pos.x + ((mon_size.width as i32 - win_size.width as i32) / 2).max(0);
-            let y = mon_pos.y + ((mon_size.height as i32 - win_size.height as i32) / 2).max(0);
-            win.set_outer_position(winit::dpi::Position::Physical(
-                winit::dpi::PhysicalPosition::new(x, y),
-            ));
-        });
-    });
-}
-
-/// 窗口失去焦点时收掉所有浮层。
-///
-/// 为什么必须在这里收：浮层的熄灭信号全部来自"指针离开控件"（`has-hover = false`）
-/// 或"用户按 Esc"，而 `Focused(false)` 之后这两件事都不会再发生——指针可能仍停在
-/// 原处、键盘事件已经去了别的窗口。于是 Tooltip / 账号菜单 / 右键菜单 / 排序浮层会
-/// 原样挂在屏幕上，切回来时看到的是"上一次会话"的浮层，且它们算在
-/// `modals-blocking` 里，背景控件还会一起退出 Tab 序列。
-///
-/// 抽成独立函数的理由是可单测：`on_winit_window_event` 只有真窗口才会被调用，
-/// 无窗口的 `ui_tests` 够不着；这个函数的全部行为只是一串 `set_*`，可以直接断言。
-fn close_overlays_on_focus_loss(ui: &MainWindow) {
-    ui.global::<crate::app::TooltipState>().set_visible(false);
-    ui.set_account_menu_open(false);
-    ui.set_context_open(false);
-    ui.set_sort_menu_open(false);
-}
-
-/// 注册 winit 窗口事件钩子：系统拖拽文件进入（上传）、键盘/鼠标模式、失焦收浮层
-fn install_window_events(ui: &slint::Weak<MainWindow>, state: &'static DragDropState) {
-    use slint::winit_030::{winit, EventResult, WinitWindowAccessor};
-
-    let Some(app) = ui.upgrade() else { return };
-    let window = app.window();
-    let ui: slint::Weak<MainWindow> = ui.clone();
-    window.on_winit_window_event(move |_slint_window, event| {
-        match event {
-            winit::event::WindowEvent::ModifiersChanged(mods) => {
-                // Shift/Alt 拖文件行 = 拖出下载；普通拖动保留为网盘内移动。
-                // 同一份修饰键状态也供列表行判定 Ctrl/Shift 多选（Slint 的点击事件不带修饰键）。
-                use winit::keyboard::ModifiersState;
-                let s = mods.state();
-                let armed = s.contains(ModifiersState::SHIFT) || s.contains(ModifiersState::ALT);
-                if let Some(app) = ui.upgrade() {
-                    app.global::<crate::app::DragOutApi>()
-                        .set_mod_pressed(armed);
-                    let keys = app.global::<crate::app::ModifiersApi>();
-                    keys.set_ctrl(s.contains(ModifiersState::CONTROL));
-                    keys.set_shift(s.contains(ModifiersState::SHIFT));
-                    keys.set_alt(s.contains(ModifiersState::ALT));
-                }
-            }
-            // 键盘 / 鼠标模式：焦点环只在键盘操作时出现（对齐 WinUI 的 :focus-visible）。
-            // 控件里的 focus-reason 近似在两处会失真——点击空白处（无可聚焦元素，不会
-            // 产生 focus 变化）与点击已聚焦的同一控件（reason 不变）。窗口层的原始输入
-            // 事件能把它们彻底覆盖，因此这里是主要驱动源，focus-reason 作为兜底。
-            winit::event::WindowEvent::KeyboardInput { .. } => {
-                if let Some(app) = ui.upgrade() {
-                    app.global::<crate::app::InputMode>().set_keyboard(true);
-                }
-            }
-            winit::event::WindowEvent::MouseInput {
-                state: winit::event::ElementState::Pressed,
-                ..
-            } => {
-                if let Some(app) = ui.upgrade() {
-                    app.global::<crate::app::InputMode>().set_keyboard(false);
-                }
-            }
-            // 窗口失焦（Alt+Tab 切走、点到别的程序）：浮层的熄灭信号全都失效了
-            // ——指针没有离开控件、键盘事件也不再进这个窗口，必须主动收一遍。
-            winit::event::WindowEvent::Focused(false) => {
-                if let Some(app) = ui.upgrade() {
-                    close_overlays_on_focus_loss(&app);
-                }
-            }
-            winit::event::WindowEvent::HoveredFile(_) => {
-                state.hovering.store(true, Ordering::SeqCst);
-                let ui = ui.clone();
-                let target = lock_or_recover(&state.hover_target).clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = ui.upgrade() {
-                        app.set_drop_active(true);
-                        app.set_drop_target_name(slint::SharedString::from(target));
-                    }
-                });
-            }
-            winit::event::WindowEvent::HoveredFileCancelled => {
-                state.hovering.store(false, Ordering::SeqCst);
-                let ui = ui.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(app) = ui.upgrade() {
-                        app.set_drop_active(false);
-                    }
-                });
-            }
-            winit::event::WindowEvent::DroppedFile(path) => {
-                state.hovering.store(false, Ordering::SeqCst);
-                lock_or_recover(&state.pending).push(path.clone());
-                // 同一批文件会在几十毫秒内陆续到达：每次调度都带批次号，
-                // 只有批次号仍然匹配的定时器才消费路径，避免重复上传。
-                let batch_id = {
-                    let mut b = lock_or_recover(&state.batch);
-                    *b += 1;
-                    *b
-                };
-                let ui = ui.clone();
-                slint::Timer::single_shot(Duration::from_millis(80), move || {
-                    let current = *lock_or_recover(&state.batch);
-                    if current != batch_id {
-                        return; // 已有更新的批次，交给它统一处理
-                    }
-                    let paths: Vec<PathBuf> = lock_or_recover(&state.pending).drain(..).collect();
-                    if paths.is_empty() {
-                        return;
-                    }
-                    if let Some(app) = ui.upgrade() {
-                        app.set_drop_active(false);
-                        let joined = paths
-                            .iter()
-                            .map(|p| p.to_string_lossy().to_string())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        app.invoke_files_dropped(slint::SharedString::from(joined));
-                    }
-                });
-            }
-            _ => {}
-        }
-        EventResult::Propagate
-    });
-}
-
-fn main() -> anyhow::Result<()> {
-    // 日志：stderr（沿用 RUST_LOG，默认 info）+ 配置目录下按天滚动的日志文件。
-    // 落盘失败时自动退化为“仅 stderr”，不会影响启动（见 logging.rs）。
-    //
-    // 目录必须与设置页展示的配置目录同源：先按控制器的降级链解析出配置根目录，再拿它
-    // 初始化日志（`Controller::new` 随后走同一条路径，两次结果必然一致）。日志初始化
-    // 仍然早于 `MainWindow::new`，启动期那几行不会丢。
-    let log_dir = logging::init(&controller::config_root());
-    log::info!(
-        "tianyi-cloud-rust starting（日志目录：{}）",
-        log_dir.display()
-    );
-
-    let ui = MainWindow::new()?;
-    // 界面语种由配置里的 language 字段决定，读取路径与控制器完全同源——都走
-    // `ConfigStore::open()` 加 `load_config()`，主目录不可写时一起退到临时目录，
-    // 不会出现"日志说配置在 A、界面按 B 里的语言切"这种错位。
-    //
-    // 位置不能动，三条理由：
-    // ① `i18n::apply` 内部要调 `slint::select_bundled_translation`，翻译包是随**首个
-    //    组件**一起注册进运行时的，早于 `MainWindow::new()` 调用只会拿到
-    //    `NoTranslationsBundled`，切了个寂寞。
-    // ② 必须早于 `Controller::new`：控制器构造时会 `initial_sync()`，版本号、配置目录、
-    //    字体名、传输列表这些 Rust 侧文案都是当场按当前语种查表拼出来的；语种晚一步定，
-    //    首屏就是半中半英。
-    // ③ 窗口在 `ui.run()` 之前不绘制，所以这里切语不会"先画一帧简中再跳变"。
-    let language = controller::startup_language();
-    i18n::apply(i18n::resolve(language));
-    let ui_handle = ui.as_weak();
-
-    let backend = Arc::new(Backend::new(ui_handle.clone()));
-    let controller = controller::Controller::new(ui_handle.clone(), backend);
-
-    // 注册窗口事件钩子：系统拖拽文件进入（上传）、键盘/鼠标模式、失焦收浮层
-    let drag_state: &'static DragDropState = Box::leak(Box::new(DragDropState::new()));
-    install_window_events(&ui_handle, drag_state);
-    controller.set_drag_state(drag_state);
-
-    // 后台任务（会话保活）
-    controller.spawn_background();
-
-    // 传输进度节流刷新：后台只置脏标记，这里统一以 200ms 节奏推送到 UI
-    let ticker = Timer::default();
-    {
-        let c = Arc::clone(&controller);
-        ticker.start(
-            TimerMode::Repeated,
-            Duration::from_millis(TICK_MS),
-            move || {
-                c.tick();
-            },
-        );
+    fn args(items: &[&str]) -> Vec<OsString> {
+        items.iter().map(OsString::from).collect()
     }
 
-    // 跟随系统主题时定期检查系统深色偏好的变化
-    let theme_timer = Timer::default();
-    {
-        let c = Arc::clone(&controller);
-        theme_timer.start(
-            TimerMode::Repeated,
-            Duration::from_secs(THEME_POLL_SECS),
-            move || c.poll_system_theme(),
-        );
+    #[test]
+    fn no_arguments_keeps_the_gui_behaviour() {
+        assert!(!wants_cli(&[]), "不带参数必须走 GUI");
     }
 
-    // 尝试用上次使用的账号恢复登录态
-    controller.auto_login();
+    #[test]
+    fn dash_c_and_its_companions_select_cli() {
+        assert!(wants_cli(&args(&["-c"])));
+        assert!(wants_cli(&args(&["--cli"])));
+        assert!(wants_cli(&args(&["-c", "status"])));
+        assert!(wants_cli(&args(&["-c", "--json", "ls", "/"])));
+        assert!(wants_cli(&args(&["--json", "status"])));
+        assert!(wants_cli(&args(&["--non-interactive", "ls", "/"])));
+        assert!(wants_cli(&args(&["--timeout=30", "ls", "/"])));
+        assert!(wants_cli(&args(&["-c", "--help"])));
+        assert!(wants_cli(&args(&["--version"])));
+    }
 
-    // 将窗口居中显示
-    center_window(&ui_handle);
+    #[test]
+    fn bare_subcommand_without_dash_c_also_goes_to_cli() {
+        assert!(wants_cli(&args(&["status"])));
+        assert!(wants_cli(&args(&["ls", "/"])));
+        assert!(wants_cli(&args(&["task", "info", "3"])));
+    }
 
-    ui.run()?;
-    // 定时器需要在 UI 事件循环存活期间保持存在
-    drop(ticker);
-    drop(theme_timer);
-    Ok(())
+    #[test]
+    fn unknown_platform_arguments_keep_the_gui_behaviour() {
+        // macOS Finder 启动残留参数、以及任何未知开关：不能被当成 CLI
+        assert!(!wants_cli(&args(&["-psn_0_12345"])));
+        assert!(!wants_cli(&args(&["--some-random-flag"])));
+    }
+
+    #[test]
+    fn double_dash_stops_cli_detection() {
+        assert!(!wants_cli(&args(&["--", "status"])));
+    }
 }

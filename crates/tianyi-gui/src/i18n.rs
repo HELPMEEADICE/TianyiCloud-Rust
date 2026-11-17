@@ -327,10 +327,12 @@ mod tests {
 
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lang");
         for lang in [Lang::ZhHant, Lang::En, Lang::Ja] {
+            // 文件名必须与**本 crate 的包名**一致：slint-build 按 CARGO_PKG_NAME 找
+            // lang/<lang>/LC_MESSAGES/<crate>.po，GUI 拆成 tianyi-gui 之后就是 tianyi-gui.po。
             let po = root
                 .join(lang.code())
                 .join("LC_MESSAGES")
-                .join("tianyi-app.po");
+                .join("tianyi-gui.po");
             assert!(po.is_file(), "缺少语言包：{}", po.display());
         }
         // 简中走索引 0，不允许有目录（有了反而会盖掉回退语言）

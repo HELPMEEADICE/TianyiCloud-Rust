@@ -220,6 +220,29 @@ jobs:
           retention-days: 30
           compression-level: 0
 
+      # ---------------- 纯 CLI 产物（Headless）：同一份代码的轻量可执行文件 ----------------
+      # 与桌面版分开打包：不带任何图形运行时，可直接放进最小化 Linux 镜像 / 服务器。
+      - name: 构建纯 CLI 产物（Headless）
+        if: matrix.package == 'linux'
+        run: |
+          set -euo pipefail
+          cargo build --release --locked -p tianyi-app \
+            --no-default-features --features cli --target ${{ matrix.target }}
+          mkdir -p dist
+          tar -C "target/${{ matrix.target }}/release" \
+            -czf "dist/tianyi-cli-${{ needs.meta.outputs.version }}-${{ matrix.name }}.tar.gz" tianyi-app
+          echo "[cli] dist/tianyi-cli-${{ needs.meta.outputs.version }}-${{ matrix.name }}.tar.gz"
+
+      - name: 上传 CLI 产物
+        if: matrix.package == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: TianyiCloud-${{ needs.meta.outputs.version }}-${{ matrix.name }}-cli
+          path: dist/tianyi-cli-*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
       # ---------------- 独立 artifact：每个文件单独一条，均可单独下载 ----------------
       - name: 上传 ZIP
         if: matrix.package == 'windows'

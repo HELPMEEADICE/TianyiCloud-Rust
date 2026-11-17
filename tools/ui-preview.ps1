@@ -5,7 +5,7 @@
 .DESCRIPTION
     等价于
 
-        cargo run -p tianyi-app --example ui_preview --locked -- <outdir>
+        cargo run -p tianyi-gui --example ui_preview --locked -- <outdir>
 
     只多三件事：把默认输出目录钉到 `screenshots/after`（相对路径按仓库根解析，
     不受当前工作目录影响）、跑完统计张数与耗时、结束时把「下一步怎么比对」的
@@ -57,7 +57,7 @@ if (-not $OutDir) { $OutDir = Join-Path $repoRoot 'screenshots/after' }
 elseif (-not [System.IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $repoRoot $OutDir }
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
-$cargoArgs = @('run', '-p', 'tianyi-app', '--example', 'ui_preview', '--locked')
+$cargoArgs = @('run', '-p', 'tianyi-gui', '--example', 'ui_preview', '--locked')
 if ($Release) { $cargoArgs += '--release' }
 $cargoArgs += @('--', $OutDir)
 

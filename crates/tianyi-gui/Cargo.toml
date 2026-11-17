@@ -1,0 +1,66 @@
+[package]
+name = "tianyi-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "天翼云盘 Slint 桌面客户端（GUI 实现 crate）"
+
+# GUI 实现被单独拆成一个 crate：这样 tianyi-app 的纯 CLI 构建
+# （--no-default-features --features cli）连 slint / slint-build / winit / rfd /
+# arboard 都不会被编译，cargo tree 里也看不到它们。
+[dependencies]
+tianyi-core = { path = "../tianyi-core" }
+slint = { version = "1.17", features = ["unstable-winit-030", "accessibility"] }
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+log.workspace = true
+env_logger.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
+qrcode = "0.14"
+base64.workspace = true
+dirs.workspace = true
+uuid.workspace = true
+rfd = "0.15"
+arboard.workspace = true
+# 读取系统界面语言（"auto" 语言模式用）。只是 slint 的传递依赖的直连化，
+# 版本跟 slint 自己解析到的那一份保持一致，避免引入第二份 icu 依赖。
+sys-locale = "0.3"
+
+# Windows 专有依赖：拖出下载（COM DoDragDrop）与系统 API
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_System_Ole",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+windows-core = "0.58"
+
+# 测试专用：Slint 官方的无窗口测试后端，只为 ui_tests.rs 的几何断言服务。
+# 必须与 slint 严格同版本（=1.17.1），且刻意不启用 renderer-skia：
+# 那条 feature 会拖入整个 skia，编译成本远超本测试的价值。
+[dev-dependencies]
+i-slint-backend-testing = "=1.17.1"
+
+[build-dependencies]
+slint-build = "1.17"
+
+[features]
+# 图标总览组件（ui/dev/icon-sheet.slint，近 6000 行）只为 examples/icon_sheet.rs
+# 的视觉自检服务，主界面 ui/main.slint 不引用它：常规构建不编译。
+icon-sheet = []
+
+[[example]]
+name = "icon_sheet"
+required-features = ["icon-sheet"]

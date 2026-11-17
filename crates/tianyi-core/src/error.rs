@@ -85,6 +85,26 @@ pub enum Error {
     #[error("config error: {0}")]
     Config(String),
 
+    /// 未登录（本地没有可用会话）
+    ///
+    /// 与 [Error::Session] 的分工：Session 表示「有过会话但服务端判它失效了」（可以
+    /// 刷新），这里表示「压根没有会话」（只能重新登录）。命令行据此区分 AUTH_EXPIRED
+    /// 与 AUTH_REQUIRED 两个错误码。
+    #[error("not authenticated: {0}")]
+    NotAuthenticated(String),
+
+    /// 目标不存在（云端路径解析失败、账号不存在等）
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    /// 参数缺失或不合法（缺名字、删目录没带 --recursive 等）
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
+
+    /// 当前空间或能力不支持该操作（例如家庭云不支持新建文件夹）
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+
     /// 其他错误
     #[error("{0}")]
     Other(String),
@@ -172,6 +192,10 @@ impl Error {
             | Error::Crypto(m)
             | Error::Transfer(m)
             | Error::Config(m)
+            | Error::NotAuthenticated(m)
+            | Error::NotFound(m)
+            | Error::InvalidRequest(m)
+            | Error::Unsupported(m)
             | Error::Other(m) => Some(m),
             _ => None,
         }

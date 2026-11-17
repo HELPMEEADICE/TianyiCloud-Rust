@@ -8,8 +8,8 @@
     变体的图标在清单里标注 fallback（Filled 复用 Regular 文件）。
 
     生成物：
-      - crates/tianyi-app/ui/assets/icons/*.svg
-      - crates/tianyi-app/ui/assets/icons/SOURCES.md（来源/版本/映射表）
+      - crates/tianyi-gui/ui/assets/icons/*.svg
+      - crates/tianyi-gui/ui/assets/icons/SOURCES.md（来源/版本/映射表）
       - 控制台输出可直接贴进 icons.slint 的 @image-url 行
 
 .EXAMPLE
@@ -20,7 +20,7 @@ param(
     # 上游分支或 tag。默认 main；要固定版本可传 tag（如 v1.1.300）
     [string]$Ref = 'main',
     # 目标目录
-    [string]$Dest = 'crates/tianyi-app/ui/assets/icons',
+    [string]$Dest = 'crates/tianyi-gui/ui/assets/icons',
     # 只按磁盘上已有资源重算注册表，不联网（用于不改变资源版本的前提下改映射）
     [switch]$Offline
 )
@@ -211,7 +211,7 @@ if (-not $Offline) { Set-Content -Path (Join-Path $dest 'SOURCES.md') -Value $sb
 # ------------------------------------------------------------------ 回填 icons.slint
 # icons.slint 里有两个 generated 区块（图标名 enum / 资源注册表 / 映射函数），
 # 由本脚本按"磁盘上真实存在的 SVG"生成并回填，保证三者永不脱节。
-$slintPath = Join-Path $root 'crates/tianyi-app/ui/theme/icons.slint'
+$slintPath = Join-Path $root 'crates/tianyi-gui/ui/theme/icons.slint'
 $slint = Get-Content -Raw -Path $slintPath
 
 $enumLines = [System.Text.StringBuilder]::new()
@@ -261,7 +261,7 @@ Write-Host "已回填 $slintPath"
 # 全部铺开，配合 examples/icon_sheet.rs 渲染成 PNG，用来逐个肉眼验证资源没坏。
 #
 # 注意：GridLayout 的单元格必须显式给 row / col，否则 Slint 会把所有子项排成同一行。
-$sheetPath = Join-Path $root 'crates/tianyi-app/ui/dev/icon-sheet.slint'
+$sheetPath = Join-Path $root 'crates/tianyi-gui/ui/dev/icon-sheet.slint'
 New-Item -ItemType Directory -Force -Path (Split-Path $sheetPath) | Out-Null
 
 $sheetLines = [System.Collections.Generic.List[string]]::new()
@@ -293,7 +293,7 @@ Add-Lines @(
     '// 图标总览（由 tools/fetch-fluent-icons.ps1 生成，人工修改会在下次生成时被覆盖）',
     '//',
     '// 用途：一次性渲染注册表里的全部图标、全部风格与常用尺寸，',
-    '// 配合 `cargo run -p tianyi-app --example icon_sheet` 产出 PNG 做自检。',
+    '// 配合 `cargo run -p tianyi-gui --example icon_sheet` 产出 PNG 做自检。',
     '// 不参与主界面的构建与打包。',
     '',
     'import { Theme } from "../theme/tokens.slint";',

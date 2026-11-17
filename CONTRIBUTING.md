@@ -38,7 +38,7 @@ cargo test --workspace --locked
 cargo check --workspace --all-targets --locked
 
 # 5 UI 截图（几何断言之外的人工复核，产物写进 screenshots/after）
-cargo run -p tianyi-app --example ui_preview -- screenshots/after
+cargo run -p tianyi-gui --example ui_preview -- screenshots/after
 ```
 
 ## 4. 本机 MSYS2 环境下 clippy 的替代命令
@@ -82,9 +82,9 @@ cargo build --features icon-sheet --example icon_sheet
 cargo run -p tianyi-app --features icon-sheet --example icon_sheet -- screenshots/icon-sheet
 ```
 
-- 只有带 `--features icon-sheet` 时才会编译 `crates/tianyi-app/ui/dev/icon-sheet.slint`；
+- 只有带 `--features icon-sheet` 时才会编译 `crates/tianyi-gui/ui/dev/icon-sheet.slint`；
   常规 `cargo build` / CI 的 clippy、test、check 都不包含它。
-- 新增或替换图标时：把 Fluent SVG 放进 `crates/tianyi-app/ui/assets/icons/`，在
+- 新增或替换图标时：把 Fluent SVG 放进 `crates/tianyi-gui/ui/assets/icons/`，在
   `ui/theme/icons.slint` 的 `IconName` 注册，并同步同目录 `SOURCES.md` 的来源记录。
 
 ## 7. 发布与打包产物

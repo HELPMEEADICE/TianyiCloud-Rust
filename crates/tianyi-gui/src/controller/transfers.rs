@@ -8,9 +8,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tianyi_core::config::AppConfig;
 use tianyi_core::file;
-use tianyi_core::models::FileObject;
+use tianyi_core::job;
 use tianyi_core::task::{Task, TaskDirection, TaskStatus, TransferControl};
-use tianyi_core::transfer::{self, DownloadOptions, DownloadOutcome, UploadOptions, UploadOutcome};
+use tianyi_core::transfer;
 impl Controller {
     pub(super) fn toggle_transfer_panel(self: &Arc<Self>) {
         let ui = self.ui.clone();
@@ -249,83 +249,22 @@ impl Controller {
         // 同一个限速值在整个进程里只对应一个桶（见 `controller/ratelimit.rs`）。
         let rate = self.rate_limiter(cfg.speed_limit);
 
-        let outcome: Outcome = match task.direction {
-            TaskDirection::Download => {
-                let file = FileObject {
-                    id: task.remote_folder_id.clone(),
-                    name: task.file_name.clone(),
-                    size: task.file_size as i64,
-                    ..Default::default()
-                };
-                let opts = DownloadOptions {
-                    thread_count: cfg.download_thread.max(1),
-                    resume: true,
-                    chunk_size: 4 * 1024 * 1024,
-                    rate: rate.clone(),
-                };
-                match transfer::download(
-                    &client,
-                    &file,
-                    &task.local_path,
-                    &opts,
-                    progress,
-                    &control,
-                )
-                .await
-                {
-                    Ok(DownloadOutcome::Completed) => Outcome::Done,
-                    Ok(DownloadOutcome::Paused) => Outcome::Paused,
-                    Ok(DownloadOutcome::Canceled) => Outcome::Canceled,
-                    Err(e) if e.is_interrupted() => Outcome::from_error(&e),
-                    Err(e) => Outcome::Failed(e.to_string()),
-                }
-            }
-            TaskDirection::Upload => {
-                let opts = UploadOptions {
-                    rapid_upload: cfg.rapid_upload,
-                    thread_count: cfg.upload_thread.max(1),
-                    generate_torrent: cfg.generate_torrent,
-                    // 与下载分支共用同一个桶（上传/下载不会同时发生，但"同一个任务表里的
-                    // 两个任务"会——那才是这条共享缓存的真正理由）
-                    rate,
-                    ..Default::default()
-                };
-                if task.local_path.is_dir() {
-                    match transfer::upload_folder_recursive(
-                        &client,
-                        &task.remote_folder_id,
-                        &task.local_path,
-                        &opts,
-                        progress,
-                        &control,
-                    )
-                    .await
-                    {
-                        Ok(_) => Outcome::Done,
-                        Err(e) if e.is_interrupted() => Outcome::from_error(&e),
-                        Err(e) => Outcome::Failed(e.to_string()),
-                    }
-                } else {
-                    match transfer::upload(
-                        &client,
-                        &task.remote_folder_id,
-                        &task.local_path,
-                        &opts,
-                        progress,
-                        &control,
-                    )
-                    .await
-                    {
-                        Ok(UploadOutcome::Completed(_)) => Outcome::Done,
-                        Ok(UploadOutcome::Paused) => Outcome::Paused,
-                        Ok(UploadOutcome::Canceled) => Outcome::Canceled,
-                        Err(e) if e.is_interrupted() => Outcome::from_error(&e),
-                        Err(e) => Outcome::Failed(e.to_string()),
-                    }
-                }
-            }
+        // 一次作业的执行体在 tianyi-core::job 里：GUI 与 CLI 共用同一份
+        // 「按方向选参数 + 处理暂停/取消/失败」的逻辑，谁也不会悄悄跑偏。
+        let req = job::JobRequest {
+            direction: task.direction,
+            remote_id: task.remote_folder_id.clone(),
+            remote_name: task.file_name.clone(),
+            remote_size: task.file_size,
+            local_path: task.local_path.clone(),
         };
-
+        let job_opts = job::options_for(&cfg, rate);
+        let outcome: Outcome = match job::run(&client, &req, &job_opts, progress, &control).await {
+            job::JobOutcome::Completed => Outcome::Done,
+            job::JobOutcome::Paused => Outcome::Paused,
+            job::JobOutcome::Canceled => Outcome::Canceled,
+            job::JobOutcome::Failed(msg) => Outcome::Failed(msg),
+        };
         let shutting_down = self.shutting_down.load(Ordering::SeqCst);
         match outcome {
             Outcome::Done => {
@@ -731,16 +670,6 @@ pub(super) enum Outcome {
     Failed(String),
 }
 
-impl Outcome {
-    pub(super) fn from_error(e: &tianyi_core::error::Error) -> Self {
-        match e {
-            tianyi_core::error::Error::Paused => Outcome::Paused,
-            tianyi_core::error::Error::Canceled => Outcome::Canceled,
-            other => Outcome::Failed(other.to_string()),
-        }
-    }
-}
-
 pub(super) fn to_transfer_entry(t: &Task) -> TransferEntry {
     let direction = if t.direction == TaskDirection::Upload {
         "upload"
@@ -789,21 +718,8 @@ fn transfers_model(entries: Vec<TransferEntry>) -> slint::ModelRc<TransferEntry>
     slint::ModelRc::new(slint::VecModel::from(entries))
 }
 
-/// 递归统计本地目录大小
-pub(super) fn dir_size(root: &std::path::Path) -> u64 {
-    let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            match std::fs::metadata(&p) {
-                Ok(m) if m.is_dir() => total += dir_size(&p),
-                Ok(m) => total += m.len(),
-                Err(_) => {}
-            }
-        }
-    }
-    total
-}
+// 目录大小统计已下沉到 tianyi-core：GUI 拖入目录与 CLI 上传目录必须报同一个数字。
+pub(super) use tianyi_core::cloudpath::dir_size;
 
 /// 路径去重键：完全不做文件系统访问的规整字符串
 ///
