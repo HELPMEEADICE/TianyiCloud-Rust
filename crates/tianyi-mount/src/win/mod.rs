@@ -20,6 +20,7 @@
 //! 2. 通过 [crate::runtime::block_on_timeout] 把异步请求跑完，**带硬超时**；
 //! 3. 绝不长时间阻塞——超时如期返回 `STATUS_IO_TIMEOUT`，资源管理器不会假死。
 
+pub mod netuse;
 pub mod sys;
 
 use crate::error::{Error, Result};
@@ -630,10 +631,15 @@ pub fn start(
     let params = build_volume_params(cloud.label(), &unc);
     let interface = build_interface();
 
+    // 上一次被强杀留下的同名卷会让 FspFileSystemCreate 直接返回 ERROR_FILE_EXISTS，
+    // 所以挂载前先把「这个盘符 + 这个 UNC 前缀」的残留清扫掉。
+    netuse::cleanup_before_mount(&mount_point, &unc);
+
     let stop = Arc::new((Mutex::new(false), Condvar::new()));
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
     let stop_thread = stop.clone();
     let mp = mount_point.clone();
+    let unc_for_teardown = unc.clone();
 
     let thread = std::thread::Builder::new()
         .name("tianyi-mount-winfsp".into())
@@ -706,6 +712,10 @@ pub fn start(
                 (api.stop_dispatcher)(fs);
                 unregister_host(fs);
                 (api.delete)(fs);
+
+                // 退出清理：把盘符映射、网络连接、Explorer 的网络位置缓存一起抹掉，
+                // 否则「此电脑 → 网络位置」里会留下一排红叉的僵尸图标。
+                netuse::cleanup(&mp, &unc_for_teardown);
                 log::info!("WinFsp 挂载已卸载：{mp}");
             }
         })

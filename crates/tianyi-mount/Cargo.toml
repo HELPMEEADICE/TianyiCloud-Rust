@@ -39,6 +39,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_LibraryLoader",
     "Win32_System_SystemInformation",
+    # 卸载时取消网络连接（WNetCancelConnection2W）：退出后资源管理器里不再残留红叉
+    "Win32_NetworkManagement_WNet",
 ] }
 # 只读注册表里 WinFsp 的安装目录（InstallDir），用于定位 winfsp-x64.dll
 winreg = "0.52"
