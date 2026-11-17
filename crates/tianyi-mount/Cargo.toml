@@ -1,0 +1,70 @@
+[package]
+name = "tianyi-mount"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "天翼云盘只读网络挂载：严格零磁盘文件缓存的随机 Range 读取 + WinFsp/FUSE 适配层"
+
+# 本 crate 的定位：
+#
+# * **平台无关的那一半**（paths / meta / reader / fs / mount / stats）在 Windows 与
+#   Linux 上完全共用：路径规范化、目录缓存、严格 Range 读取、文件句柄语义、状态统计；
+# * **平台相关的那一半**只负责「把同一次语义翻译成操作系统的回调」：
+#   Windows 走 WinFsp（src/win/），Linux 走 FUSE（src/fuse_linux.rs）。
+#
+# 之所以不直接依赖 winfsp crate：它要求 MSVC + bindgen(libclang) + WinFsp SDK 头文件，
+# 而本项目的 Windows 构建目标在 CI 上是 MSVC、开发机上可以是 GNU，且 WinFsp 往往只装
+# 了运行时（没有 inc/lib）。因此这里手写最小 FFI 并用 LoadLibraryW 动态加载
+# winfsp-x64.dll —— 不需要 SDK、不需要 import lib、不需要 clang，两种工具链都能编。
+
+[dependencies]
+tianyi-core = { path = "../tianyi-core" }
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+futures.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# 只用 Win32 API（LoadLibraryW / GetProcAddress / GetLogicalDrives / GetDriveTypeW），
+# 不引入 COM 相关 feature，也不触发任何 build script。
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    # 卸载时取消网络连接（WNetCancelConnection2W）：退出后资源管理器里不再残留红叉
+    "Win32_NetworkManagement_WNet",
+] }
+# 只读注册表里 WinFsp 的安装目录（InstallDir），用于定位 winfsp-x64.dll
+winreg = "0.52"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux 只读挂载。fuser 是唯一成熟的无守护进程 FUSE 绑定；
+# 只在 Linux 目标上解析，Windows 构建的依赖树里看不到它。
+#
+# default-features = false：关掉 fuser 默认的 libfuse 链接（开着的话 build script 会跑
+# pkg-config 去找 libfuse3/fuse2，找不到就直接编译失败）。关掉之后走 fuser 自带的纯 Rust
+# 挂载实现（mount(2) + fusermount3），构建期不需要任何 C 依赖或 SDK，运行期需要 fuse3
+# 包提供的 fusermount3（或者以 root 运行）。这与 Windows 侧「不依赖 WinFsp SDK、只依赖
+# 运行时」的取舍一致。
+fuser = { version = "0.15", optional = true, default-features = false }
+
+[features]
+default = []
+# 显式开启 Linux FUSE 后端（交叉检查用；正常由 cfg(target_os = "linux") 决定）
+fuse = ["dep:fuser"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+env_logger.workspace = true
+
+[[example]]
+# 真机验收工具：挂载 → 校验 DRIVE_REMOTE / 目录列举 / 读取 / 只读 → 卸载（--unc 额外验 UNC）
+name = "netdrive_probe"

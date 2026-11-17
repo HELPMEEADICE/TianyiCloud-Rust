@@ -117,6 +117,12 @@ pub enum Command {
     /// 单个传输任务
     #[command(subcommand)]
     Task(TaskCmd),
+    /// 挂载为只读网络驱动器（前台阻塞，Ctrl+C 或 unmount 卸载）
+    Mount(MountArgs),
+    /// 卸载一处挂载（跨进程：写控制文件后等挂载进程退出）
+    Unmount(UnmountArgs),
+    /// 列出当前挂载（PID、状态、读写统计）
+    Mounts,
 }
 
 /// 单个路径参数
@@ -301,6 +307,35 @@ pub enum TaskCmd {
     Cancel { id: u64 },
     /// 从任务表移除
     Remove { id: u64 },
+}
+
+/// mount
+#[derive(Args, Debug)]
+pub struct MountArgs {
+    /// 挂载点：Windows 盘符（X:），Linux 目录（~/TianyiCloud）；省略时自动挑一个
+    pub mount_point: Option<String>,
+    /// 覆盖 UNC 前缀（\\Server\Share），多账号同时挂载时用它区分
+    #[arg(long, value_name = "UNC")]
+    pub unc_prefix: Option<String>,
+    /// 显式声明只读挂载（当前实现恒为只读，这个开关只是让脚本能自证意图）
+    #[arg(long)]
+    pub read_only: bool,
+    /// 显式声明不落磁盘文件缓存（当前实现恒成立，同上）
+    #[arg(long = "no-disk-cache")]
+    pub no_disk_cache: bool,
+    /// 父进程号：该进程消失时自动卸载并退出
+    #[arg(long, value_name = "PID")]
+    pub parent_pid: Option<u32>,
+}
+
+/// unmount
+#[derive(Args, Debug)]
+pub struct UnmountArgs {
+    /// 要卸载的挂载点（Z: 或 /home/u/TianyiCloud）
+    pub mount_point: String,
+    /// 等待挂载进程退出的上限（秒）
+    #[arg(long, value_name = "SECS", default_value_t = 15)]
+    pub wait: u64,
 }
 
 /// account 子命令
@@ -528,6 +563,80 @@ mod tests {
             cli.command,
             Some(Command::Task(TaskCmd::Info { id: 7 }))
         ));
+    }
+
+    #[test]
+    fn mount_parses_drive_and_declaration_flags() {
+        let cli = parse(&["-c", "mount", "X:", "--read-only", "--no-disk-cache"]).expect("解析");
+        let Some(Command::Mount(m)) = cli.command else {
+            panic!("应是 mount");
+        };
+        assert_eq!(m.mount_point.as_deref(), Some("X:"));
+        assert!(m.read_only, "--read-only 必须被记住");
+        assert!(m.no_disk_cache, "--no-disk-cache 必须被记住");
+        assert!(m.unc_prefix.is_none());
+        assert!(m.parent_pid.is_none());
+    }
+
+    #[test]
+    fn mount_takes_space_account_and_unc_from_flags_only() {
+        let cli = parse(&[
+            "-c",
+            "--space",
+            "family",
+            "--account",
+            "13800138000",
+            "mount",
+            "--unc-prefix",
+            r"\TianyiCloud\Family",
+        ])
+        .expect("解析");
+        assert_eq!(cli.space.as_deref(), Some("family"));
+        assert_eq!(cli.account.as_deref(), Some("13800138000"));
+        let Some(Command::Mount(m)) = cli.command else {
+            panic!("应是 mount");
+        };
+        assert!(m.mount_point.is_none(), "不给挂载点时应由实现自动挑选");
+        assert_eq!(m.unc_prefix.as_deref(), Some(r"\TianyiCloud\Family"));
+    }
+
+    #[test]
+    fn mount_parent_pid_must_be_a_number() {
+        assert!(parse(&["-c", "mount", "X:", "--parent-pid", "abc"]).is_err());
+        let cli = parse(&["-c", "mount", "X:", "--parent-pid", "42"]).expect("解析");
+        let Some(Command::Mount(m)) = cli.command else {
+            panic!("应是 mount");
+        };
+        assert_eq!(m.parent_pid, Some(42));
+    }
+
+    #[test]
+    fn unmount_requires_a_target_and_defaults_to_15s() {
+        assert!(parse(&["-c", "unmount"]).is_err(), "unmount 必须给出挂载点");
+        let cli = parse(&["-c", "unmount", "X:"]).expect("解析");
+        let Some(Command::Unmount(u)) = cli.command else {
+            panic!("应是 unmount");
+        };
+        assert_eq!(u.mount_point, "X:");
+        assert_eq!(u.wait, 15, "默认等待 15 秒");
+        let cli = parse(&["-c", "unmount", "X:", "--wait", "3"]).expect("解析");
+        let Some(Command::Unmount(u)) = cli.command else {
+            panic!("应是 unmount");
+        };
+        assert_eq!(u.wait, 3);
+    }
+
+    #[test]
+    fn mounts_accepts_no_positional_arguments() {
+        let cli = parse(&["-c", "mounts"]).expect("解析");
+        assert!(matches!(cli.command, Some(Command::Mounts)));
+        let cli = parse(&["-c", "--json", "mounts"]).expect("解析");
+        assert!(cli.json);
+        assert!(matches!(cli.command, Some(Command::Mounts)));
+        assert!(
+            parse(&["-c", "mounts", "X:"]).is_err(),
+            "mounts 不接受位置参数"
+        );
     }
 
     #[test]

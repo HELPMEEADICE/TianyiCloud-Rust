@@ -6,6 +6,7 @@
 
 pub mod account;
 pub mod files;
+pub mod mount;
 pub mod transfer;
 
 use crate::args::Command;
@@ -43,14 +44,16 @@ impl Runner {
             .unwrap_or_else(|| PathBuf::from("(内存态，不落盘)"))
     }
 
-    /// 该命令是否可能执行真正的传输
+    /// 该命令是否是「长任务」：传输，或前台阻塞的挂载
     ///
-    /// 传输类命令不能被 Ctrl+C 硬中断（那会丢掉收尾机会），因此入口层对它们不加
-    /// select 超时，而是靠 TransferControl 的协作式暂停/取消。
+    /// 这类命令不能被 Ctrl+C 硬中断（那会丢掉收尾机会），因此入口层对它们不加
+    /// select 抢断：传输靠 TransferControl 的协作式暂停/取消，挂载靠自己的监视线程
+    /// 卸载（见 [mount::mount]）。反过来，把它们丢进 select 通道会让 future 在半途
+    /// 被 drop——传输会留下永远 Running 的幽灵任务，挂载会留下孤儿卷。
     pub fn is_transfer_like(cmd: &Command) -> bool {
         matches!(
             cmd,
-            Command::Upload(_) | Command::Download(_) | Command::Task(_)
+            Command::Upload(_) | Command::Download(_) | Command::Task(_) | Command::Mount(_)
         )
     }
 
@@ -76,6 +79,9 @@ impl Runner {
             Command::Download(a) => transfer::download(self, a).await,
             Command::Tasks(a) => transfer::tasks(self, a),
             Command::Task(c) => transfer::task(self, c).await,
+            Command::Mount(a) => mount::mount(self, a).await,
+            Command::Unmount(a) => mount::unmount(self, a).await,
+            Command::Mounts => mount::mounts(self),
         }
     }
 }

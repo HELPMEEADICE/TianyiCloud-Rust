@@ -1,0 +1,554 @@
+// 云盘挂载页：云空间 + 挂载点 → 挂载/卸载 → 运行信息
+//
+// 版式与设置页同源：页面标题 → 单列分组卡片（宽度上限 Theme.settings-max-width 居中）
+// → 统一设置行。分组卡片与行直接复用 components/settings-section.slint，间距、行高、
+// 分隔线只在那一处定义，本文件不再手写第二套。
+//
+// 文案来源（这是本页与其它页唯一的结构性差异）：
+// 本文件不含任何界面文字。所有标签由控制器按当前语种填进 MountTexts，状态、速度、
+// 流量、错误这些运行时数据各走 *-text 属性 —— 页面只负责排版与回调。这里刻意不用
+// @tr：挂载页的文字要么是词表里的整句（Rust 侧还可能带占位符），要么是数据（盘符、
+// 路径、速率、后端名），没有第三种；两套来源混用就会出现"一半跟着切语言、一半不跟"。
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme/tokens.slint";
+import { Icon, IconName } from "../theme/icons.slint";
+import { FluentButton } from "../components/button.slint";
+import { FluentSegmented } from "../components/segmented.slint";
+import { FluentSwitch } from "../components/switch.slint";
+import { FluentTextField } from "../components/text-field.slint";
+import { SettingsDivider, SettingsRow, SettingsSection } from "../components/settings-section.slint";
+
+/// 盘符栅格的一行：每行最多 6 个盘符（列数由控制器的 letter_rows 决定）。
+///
+/// 为什么是「行 → 单元格」两层模型，而不是一个扁平数组加取模下标：
+/// 扁平数组要在 .slint 里写下标算式 letters[row * 6 + col]，最后一行的空位既不能被
+/// 渲染出来，下标又必须始终在范围内 —— 这两个要求叠在一起只能靠 if 兜住越界读。
+/// 分层模型由控制器按固定列数切分（见 controller/mount.rs 的 letter_rows），页面这边
+/// 只做「一行里的每一格都渲染」，既没有越界可能，也没有空格占位。
+export struct DriveRow {
+    cells: [string],
+}
+
+/// 页面静态文案：全部来自 i18n 词表，由控制器按当前语种填充。
+///
+/// 用结构体而不是几十个独立属性：文案是**一批**同时到达的（初始化、切语言），
+/// 一个属性就是一次跨线程写入；而且漏填一条编译器不会报错 —— 结构体字段漏填会直接
+/// 编译失败，这正是我们要的约束。
+export struct MountTexts {
+    title: string,
+    section_target: string,
+    space: string,
+    space_personal: string,
+    space_family: string,
+    mount_point: string,
+    free_letters: string,
+    refresh_targets: string,
+    no_free_letters: string,
+    section_state: string,
+    status: string,
+    read_only: string,
+    read_only_desc: string,
+    zero_cache: string,
+    zero_cache_desc: string,
+    backend: string,
+    mount: string,
+    unmount: string,
+    open_explorer: string,
+    section_stats: string,
+    speed: string,
+    traffic: string,
+    requests: string,
+    errors: string,
+    cached_dirs: string,
+    unc: string,
+    clear_error: string,
+    winfsp_hint: string,
+}
+
+// 只读信息行：左侧名称/说明，右侧一行数值。
+//
+// 继承 SettingsRow 而不是另画一条：@children 会转发到基类的占位处，于是
+// "左侧标签 + 右侧控件"的对齐规则、行高与分隔线节奏仍然只有一处实现。
+// 数值用等宽字体：速度/流量每秒都在变，比例字体下宽度跳动很明显。
+component ValueRow inherits SettingsRow {
+    in property <string> value: "";
+
+    Text {
+        text: root.value;
+        font-family: Theme.mono-font-family;
+        font-size: Theme.font-small;
+        color: Theme.text-secondary;
+        vertical-alignment: center;
+        horizontal-alignment: right;
+        // 限宽 + 省略：UNC 路径可以很长，但绝不能把这一行撑出卡片
+        max-width: 340px;
+        overflow: elide;
+    }
+}
+
+export component MountPage inherits Rectangle {
+    // ==================== 文案（控制器按语种填充） ====================
+    in property <MountTexts> texts;
+    /// 挂载点的说明与占位：两平台文案不同（盘符 / 绝对目录），由控制器挑好推来
+    in property <string> mount-point-desc: "";
+    in property <string> mount-point-placeholder: "";
+    in property <string> backend-text: "";
+    /// 后端不可用时的原始诊断（来自 tianyi_mount::mount::backend_available）
+    in property <string> backend-detail: "";
+    in property <string> state-text: "";
+    in property <string> speed-text: "";
+    in property <string> traffic-text: "";
+    in property <string> requests-text: "";
+    in property <string> errors-text: "";
+    in property <string> cached-dirs-text: "";
+    in property <string> unc-text: "";
+    /// 本次会话内要显示的错误（挂载/卸载失败、后端缺失、挂载期 last_error）
+    in property <string> error-text: "";
+
+    // ==================== 状态 ====================
+    /// 后台线程正在挂载 / 卸载（按钮的 busy 态与禁用都看这两个）
+    in property <bool> mounting: false;
+    in property <bool> unmounting: false;
+    /// 已经挂上（卸载按钮与「在资源管理器中打开」的可用条件）
+    in property <bool> active: false;
+    /// 0 = 个人云，1 = 家庭云（in-out：分段控件自己要写，控制器也会回填）
+    in-out property <int> space-index: 0;
+    /// 挂载点：Windows 上是盘符。双向绑定 —— 用户输入要能被控制器读到
+    in-out property <string> mount-point: "";
+    /// 可用盘符栅格（每行一组，控制器按固定列数切好）
+    in property <[DriveRow]> letter-rows: [];
+    /// 当前平台是否用盘符挂载（Windows）
+    in property <bool> drive-mode: true;
+    /// 只读 / 零磁盘文件缓存：**读真实状态**（MountOptions 恒为 true + MountStatus 字段），
+    /// 不是写死的文案
+    in property <bool> read-only: true;
+    in property <bool> zero-cache: true;
+    /// 平台挂载后端（WinFsp / FUSE）是否可用；不可用时挂载按钮禁用并显示安装指引
+    in property <bool> backend-ok: true;
+
+    callback space-changed(int);
+    callback mount-point-changed(string);
+    callback refresh-targets();
+    callback mount-requested();
+    callback unmount-requested();
+    callback open-mount-point();
+    callback clear-error();
+
+    // 任意一个在途都算忙：禁用所有会改挂载参数的控件
+    property <bool> busy: root.mounting || root.unmounting;
+
+    background: Theme.window-bg;
+
+    VerticalLayout {
+        padding-left: Theme.space-4;
+        padding-right: Theme.space-4;
+        padding-top: Theme.space-3;
+        padding-bottom: Theme.space-2;
+        spacing: Theme.space-2;
+
+        // ---------------- 页面标题 ----------------
+        HorizontalLayout {
+            height: Theme.header-height;
+            cross-axis-alignment: center;
+
+            Text {
+                text: root.texts.title;
+                font-family: Theme.font-family;
+                font-size: Theme.font-subtitle;
+                font-weight: Theme.weight-semibold;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            HorizontalLayout {
+                alignment: center;
+                // 内容列只拿自己的首选高度，纵向余量还给 ScrollView（与设置页同一处理，
+                // 见 pages/settings.slint 里那段关于拉伸分配的注释）
+                cross-axis-alignment: start;
+
+                VerticalLayout {
+                    // 用页面根宽度而不是 parent.width：ScrollView 的视口宽度由内容宽度驱动，
+                    // 反向引用 parent.width 会形成 (width → viewport-width → width) 绑定环
+                    width: Math.min(root.width - Theme.space-8, Theme.settings-max-width);
+                    spacing: Theme.space-3;
+                    padding-bottom: Theme.space-4;
+
+                    // ---- 挂载位置 ----
+                    target-card := SettingsSection {
+                        title: root.texts.section_target;
+
+                        SettingsRow {
+                            label: root.texts.space;
+
+                            FluentSegmented {
+                                width: 220px;
+                                items: [root.texts.space_personal, root.texts.space_family];
+                                current: root.space-index;
+                                // 已挂载时不允许改空间：UNC 前缀与文件系统实例都按挂载时的
+                                // space 固定，界面上改了只会让人以为换了一个盘
+                                enabled: !root.busy && !root.active;
+                                changed(idx) => {
+                                    root.space-index = idx;
+                                    root.space-changed(idx);
+                                }
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        SettingsRow {
+                            label: root.texts.mount_point;
+                            description: root.mount-point-desc;
+
+                            FluentTextField {
+                                width: 220px;
+                                text <=> root.mount-point;
+                                placeholder: root.mount-point-placeholder;
+                                enabled: !root.busy && !root.active;
+                                edited => {
+                                    root.mount-point-changed(self.text);
+                                }
+                            }
+                        }
+
+                        // ---- 可用盘符（仅 Windows） ----
+                        //
+                        // 单独一段而不是一条 SettingsRow：盘符是"一组可点的选择"，不是
+                        // "一个右侧控件"。点格子只是把盘符填进上面的输入框（用户仍可手改），
+                        // 真正的合法性与占用校验在挂载那一刻由 tianyi-mount 做（盘符被占用
+                        // 时它返回明确的中文原因，我们原样显示）。
+                        if root.drive-mode : VerticalLayout {
+                            padding-top: Theme.space-1;
+                            spacing: Theme.space-1;
+
+                            HorizontalLayout {
+                                spacing: Theme.space-2;
+                                cross-axis-alignment: center;
+
+                                Text {
+                                    text: root.texts.free_letters;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-small;
+                                    color: Theme.text-tertiary;
+                                    vertical-alignment: center;
+                                }
+
+                                if root.letter-rows.length == 0 : Text {
+                                    text: root.texts.no_free_letters;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-small;
+                                    color: Theme.warning;
+                                    vertical-alignment: center;
+                                }
+
+                                // 撑开：把「重新扫描」推到右缘
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                }
+
+                                FluentButton {
+                                    text: root.texts.refresh_targets;
+                                    icon: IconName.refresh;
+                                    subtle: true;
+                                    enabled: !root.busy;
+                                    clicked => {
+                                        root.refresh-targets();
+                                    }
+                                }
+                            }
+
+                            letter-grid := VerticalLayout {
+                                spacing: Theme.space-1;
+
+                                for row in root.letter-rows : HorizontalLayout {
+                                    spacing: Theme.space-1;
+
+                                    for cell in row.cells : FluentButton {
+                                        text: cell;
+                                        min-w: 56px;
+                                        accent: root.mount-point == cell;
+                                        subtle: root.mount-point != cell;
+                                        enabled: !root.busy && !root.active;
+                                        clicked => {
+                                            root.mount-point = cell;
+                                            root.mount-point-changed(cell);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- 后端缺失：挡住挂载并给出安装指引 ----
+                    //
+                    // 位置刻意在「挂载状态」之上：用户按下挂载之前就该看到"为什么现在挂不了"，
+                    // 而不是点完再在下面读一条错误。
+                    if !root.backend-ok : warning-panel := Rectangle {
+                        border-radius: Theme.radius-card;
+                        background: Theme.warning-soft;
+                        border-width: 1px;
+                        border-color: Theme.warning;
+
+                        HorizontalLayout {
+                            padding: Theme.space-3;
+                            spacing: Theme.space-2;
+                            cross-axis-alignment: start;
+
+                            Icon {
+                                name: IconName.warning;
+                                size: Theme.icon-md;
+                                icon-color: Theme.warning;
+                            }
+
+                            VerticalLayout {
+                                horizontal-stretch: 1;
+                                spacing: Theme.space-1;
+
+                                Text {
+                                    text: root.texts.winfsp_hint;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-body;
+                                    color: Theme.text-primary;
+                                    wrap: word-wrap;
+                                }
+
+                                // 原始诊断由 tianyi-mount 给（中文，含"缺哪个文件/装哪个包"）：
+                                // 不翻译、不改写，原样贴出来比我们重写一遍更准确。
+                                if root.backend-detail != "" : Text {
+                                    text: root.backend-detail;
+                                    font-family: Theme.mono-font-family;
+                                    font-size: Theme.font-caption;
+                                    color: Theme.text-secondary;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- 挂载状态 ----
+                    state-card := SettingsSection {
+                        title: root.texts.section_state;
+
+                        SettingsRow {
+                            label: root.texts.status;
+
+                            HorizontalLayout {
+                                spacing: Theme.space-1;
+                                cross-axis-alignment: center;
+
+                                // 状态灯：绿 = 已挂载、强调色 = 在途、灰 = 未挂载
+                                Rectangle {
+                                    width: 8px;
+                                    height: 8px;
+                                    border-radius: 4px;
+                                    background: root.active ? Theme.success
+                                        : root.busy ? Theme.accent
+                                        : Theme.text-tertiary;
+                                }
+
+                                Text {
+                                    text: root.state-text;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-small;
+                                    color: Theme.text-secondary;
+                                    vertical-alignment: center;
+                                    max-width: 320px;
+                                    overflow: elide;
+                                }
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        // 只读与零缓存都是**关不掉的**状态：用禁用的开关显示真实值，
+                        // 比写一行"只读：是"更难说谎 —— 开关的 checked 绑的是真正的布尔量。
+                        SettingsRow {
+                            label: root.texts.read_only;
+                            description: root.texts.read_only_desc;
+
+                            FluentSwitch {
+                                checked: root.read-only;
+                                enabled: false;
+                                accessible-label: root.texts.read_only;
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        SettingsRow {
+                            label: root.texts.zero_cache;
+                            description: root.texts.zero_cache_desc;
+
+                            FluentSwitch {
+                                checked: root.zero-cache;
+                                enabled: false;
+                                accessible-label: root.texts.zero_cache;
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        SettingsRow {
+                            label: root.texts.backend;
+
+                            Text {
+                                text: root.backend-text;
+                                font-family: Theme.font-family;
+                                font-size: Theme.font-small;
+                                color: root.backend-ok ? Theme.text-secondary : Theme.danger;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        mount-actions := HorizontalLayout {
+                            padding-top: Theme.space-1;
+                            spacing: Theme.space-2;
+                            alignment: start;
+                            cross-axis-alignment: center;
+
+                            FluentButton {
+                                text: root.texts.mount;
+                                icon: IconName.cloud;
+                                accent: true;
+                                min-w: 96px;
+                                busy: root.mounting;
+                                // 后端缺失时挂载按钮禁用（旁边就是安装指引）
+                                enabled: !root.busy && !root.active && root.backend-ok && root.mount-point != "";
+                                clicked => {
+                                    root.mount-requested();
+                                }
+                            }
+
+                            FluentButton {
+                                text: root.texts.unmount;
+                                icon: IconName.cloud-off;
+                                danger: true;
+                                busy: root.unmounting;
+                                enabled: root.active && !root.busy;
+                                clicked => {
+                                    root.unmount-requested();
+                                }
+                            }
+
+                            FluentButton {
+                                text: root.texts.open_explorer;
+                                icon: IconName.folder-open;
+                                // 只有挂载成功之后才可用：未挂载时点它只会打开一个不存在的盘
+                                enabled: root.active && !root.busy;
+                                clicked => {
+                                    root.open-mount-point();
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- 错误：挂载/卸载失败、挂载期 last_error ----
+                    if root.error-text != "" : error-panel := Rectangle {
+                        border-radius: Theme.radius-card;
+                        background: Theme.danger-soft;
+                        border-width: 1px;
+                        border-color: Theme.danger;
+
+                        VerticalLayout {
+                            padding: Theme.space-3;
+                            spacing: Theme.space-1;
+
+                            HorizontalLayout {
+                                spacing: Theme.space-2;
+                                cross-axis-alignment: center;
+
+                                Icon {
+                                    name: IconName.error;
+                                    size: Theme.icon-md;
+                                    icon-color: Theme.danger;
+                                }
+
+                                Text {
+                                    text: root.error-text;
+                                    horizontal-stretch: 1;
+                                    font-family: Theme.font-family;
+                                    font-size: Theme.font-body;
+                                    color: Theme.text-primary;
+                                    wrap: word-wrap;
+                                    vertical-alignment: center;
+                                }
+
+                                // 错误是"本次会话的显示态"，随手能清：清掉不会改变挂载状态
+                                FluentButton {
+                                    text: root.texts.clear_error;
+                                    subtle: true;
+                                    clicked => {
+                                        root.clear-error();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // ---- 运行信息 ----
+                    SettingsSection {
+                        title: root.texts.section_stats;
+
+                        ValueRow {
+                            label: root.texts.speed;
+                            value: root.speed-text;
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        ValueRow {
+                            label: root.texts.traffic;
+                            value: root.traffic-text;
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        ValueRow {
+                            label: root.texts.requests;
+                            value: root.requests-text;
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        ValueRow {
+                            label: root.texts.errors;
+                            value: root.errors-text;
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        ValueRow {
+                            label: root.texts.cached_dirs;
+                            value: root.cached-dirs-text;
+                        }
+
+                        SettingsDivider {
+                        }
+
+                        ValueRow {
+                            label: root.texts.unc;
+                            value: root.unc-text;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

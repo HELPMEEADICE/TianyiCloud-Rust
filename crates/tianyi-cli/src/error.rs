@@ -49,6 +49,12 @@ pub enum ErrorCode {
     Timeout,
     /// 当前空间或构建不支持该操作
     Unsupported,
+    /// 挂载环境不可用（Windows 缺 WinFsp / Linux 缺 /dev/fuse / 本平台没有挂载实现）
+    MountUnavailable,
+    /// 挂载或卸载的**执行**失败（挂载点被占用、建卷失败、卸载超时等）
+    MountFailed,
+    /// 目标本来就没有挂载：卸载时的「无事可做」，与「卸载失败」必须区分
+    NotMounted,
     /// 其他未分类错误
     Internal,
 }
@@ -73,6 +79,9 @@ impl ErrorCode {
             ErrorCode::Canceled => "CANCELED",
             ErrorCode::Timeout => "TIMEOUT",
             ErrorCode::Unsupported => "UNSUPPORTED",
+            ErrorCode::MountUnavailable => "MOUNT_UNAVAILABLE",
+            ErrorCode::MountFailed => "MOUNT_FAILED",
+            ErrorCode::NotMounted => "NOT_MOUNTED",
             ErrorCode::Internal => "INTERNAL",
         }
     }
@@ -80,7 +89,11 @@ impl ErrorCode {
     /// 进程退出码
     ///
     /// 0 成功；1 未分类；2 参数；3 认证；4 网络；5 远端；6 本地 IO；7 中断；
-    /// 8 不存在；9 忙碌。刻意不复用 126/127/128+n（shell 保留语义）。
+    /// 8 不存在；9 忙碌；10 挂载环境不可用；11 挂载/卸载执行失败；12 本来就没挂载。
+    /// 刻意不复用 126/127/128+n（shell 保留语义）。
+    ///
+    /// 挂载相关的三个码是**独立**的：脚本要能分开「这台机器缺 WinFsp」、
+    /// 「这次挂载/卸载真的失败了」和「本来就没挂、不用管」这三种情况。
     pub fn exit_code(self) -> u8 {
         match self {
             ErrorCode::Usage | ErrorCode::Unsupported => 2,
@@ -94,6 +107,9 @@ impl ErrorCode {
             ErrorCode::Canceled => 7,
             ErrorCode::NotFound => 8,
             ErrorCode::Busy => 9,
+            ErrorCode::MountUnavailable => 10,
+            ErrorCode::MountFailed => 11,
+            ErrorCode::NotMounted => 12,
             ErrorCode::Internal => 1,
         }
     }
@@ -242,6 +258,9 @@ mod tests {
         assert_eq!(ErrorCode::Canceled.exit_code(), 7);
         assert_eq!(ErrorCode::NotFound.exit_code(), 8);
         assert_eq!(ErrorCode::Busy.exit_code(), 9);
+        assert_eq!(ErrorCode::MountUnavailable.exit_code(), 10);
+        assert_eq!(ErrorCode::MountFailed.exit_code(), 11);
+        assert_eq!(ErrorCode::NotMounted.exit_code(), 12);
         assert_eq!(ErrorCode::Internal.exit_code(), 1);
         // 成功态不在这里，但所有码都必须非零
         for code in [
@@ -261,10 +280,36 @@ mod tests {
             ErrorCode::Canceled,
             ErrorCode::Timeout,
             ErrorCode::Unsupported,
+            ErrorCode::MountUnavailable,
+            ErrorCode::MountFailed,
+            ErrorCode::NotMounted,
             ErrorCode::Internal,
         ] {
             assert_ne!(code.exit_code(), 0, "{code} 不能是 0");
             assert!(!code.as_str().is_empty());
+        }
+    }
+
+    #[test]
+    fn mount_codes_are_distinct_and_not_retryable() {
+        // 缺环境 / 执行失败 / 本来没挂：三件事三种退出码，脚本才能正确分支
+        let codes = [
+            ErrorCode::MountUnavailable,
+            ErrorCode::MountFailed,
+            ErrorCode::NotMounted,
+        ];
+        let exits: Vec<u8> = codes.iter().map(|c| c.exit_code()).collect();
+        assert_eq!(exits, vec![10, 11, 12]);
+        let names: Vec<&str> = codes.iter().map(|c| c.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["MOUNT_UNAVAILABLE", "MOUNT_FAILED", "NOT_MOUNTED"]
+        );
+        for code in codes {
+            assert!(
+                !code.retryable(),
+                "{code} 不该标记为可重试：重试是同一个结果"
+            );
         }
     }
 

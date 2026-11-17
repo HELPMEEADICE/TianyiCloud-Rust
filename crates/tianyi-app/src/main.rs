@@ -16,7 +16,8 @@ use std::process::ExitCode;
 /// 明确的 CLI 子命令名：让 tianyi-app ls / 这种省略 -c 的写法也能进 CLI
 const CLI_SUBCOMMANDS: &[&str] = &[
     "login", "logout", "account", "status", "ls", "info", "search", "mkdir", "rename", "mv", "cp",
-    "rm", "link", "quota", "space", "upload", "download", "tasks", "task", "help",
+    "rm", "link", "quota", "space", "upload", "download", "tasks", "task", "mount", "unmount",
+    "mounts", "help",
 ];
 
 /// 只在 CLI 里存在的全局选项（出现即意味着用户要的是命令行）
@@ -139,6 +140,29 @@ mod tests {
         assert!(wants_cli(&args(&["status"])));
         assert!(wants_cli(&args(&["ls", "/"])));
         assert!(wants_cli(&args(&["task", "info", "3"])));
+    }
+
+    #[test]
+    fn mount_family_is_recognised_as_cli() {
+        // 挂载是长时间前台命令：省略 -c 时也必须进 CLI，不能被当成未知参数丢回 GUI
+        assert!(wants_cli(&args(&["mount"])));
+        assert!(wants_cli(&args(&["mount", "X:"])));
+        assert!(wants_cli(&args(&["mount", "--space", "family"])));
+        assert!(wants_cli(&args(&["unmount", "X:"])));
+        assert!(wants_cli(&args(&["mounts"])));
+        assert!(wants_cli(&args(&["--json", "mounts"])));
+        assert!(wants_cli(&args(&["-c", "mount", "X:", "--read-only"])));
+    }
+
+    #[test]
+    fn cli_subcommand_table_covers_every_documented_command() {
+        // 这张表是「省略 -c 也能用」的白名单，漏一个就等于该命令在双击场景下静默走 GUI
+        for name in ["mount", "unmount", "mounts"] {
+            assert!(
+                CLI_SUBCOMMANDS.contains(&name),
+                "CLI_SUBCOMMANDS 缺少 {name}"
+            );
+        }
     }
 
     #[test]
