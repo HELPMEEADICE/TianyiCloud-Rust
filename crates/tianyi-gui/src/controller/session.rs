@@ -4,12 +4,12 @@ use super::*;
 use crate::app::{MainWindow, Theme};
 use crate::backend::invoke_ui;
 use slint::{ComponentHandle, SharedString, Weak};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tianyi_core::api::{self, LoginNotifier};
 use tianyi_core::client::TianyiClient;
-use tianyi_core::config::{Accounts, AppConfig, AppStore, ThemeMode};
+use tianyi_core::config::{AppConfig, ThemeMode};
 use tianyi_core::file;
 use tianyi_core::models::{AccountConfig, TokenInfo};
 /// 登录通知器（向 UI 推送验证码 / 二维码状态）
@@ -168,21 +168,19 @@ impl Controller {
             2 => ThemeMode::Dark,
             _ => ThemeMode::System,
         };
-        if let Ok(mut cfg) = self.store.load_config() {
-            cfg.theme = mode.as_str().to_string();
-            if let Err(e) = self.store.save_config(&cfg) {
-                log::warn!("save theme: {e}");
-            }
+        // 读-改-写：只动 theme，另一个进程刚写的字段不受影响
+        if let Err(e) = self
+            .store
+            .update_config(|cfg| cfg.theme = mode.as_str().to_string())
+        {
+            log::warn!("save theme: {e}");
         }
         self.apply_theme();
     }
 
     pub(super) fn set_reduce_motion(self: &Arc<Self>, on: bool) {
-        if let Ok(mut cfg) = self.store.load_config() {
-            cfg.reduce_motion = on;
-            if let Err(e) = self.store.save_config(&cfg) {
-                log::warn!("save reduce_motion: {e}");
-            }
+        if let Err(e) = self.store.update_config(|cfg| cfg.reduce_motion = on) {
+            log::warn!("save reduce_motion: {e}");
         }
         self.apply_theme();
     }
@@ -195,14 +193,11 @@ impl Controller {
     pub(super) fn set_thread_counts(self: &Arc<Self>, download: i32, upload: i32) {
         let download_thread = clamp_threads(download);
         let upload_thread = clamp_threads(upload);
-        let mut cfg = self
-            .store
-            .load_config()
-            .unwrap_or_else(|_| AppConfig::default_config());
-        cfg.download_thread = download_thread;
-        cfg.upload_thread = upload_thread;
-        let saved = match self.store.save_config(&cfg) {
-            Ok(()) => true,
+        let saved = match self.store.update_config(|cfg| {
+            cfg.download_thread = download_thread;
+            cfg.upload_thread = upload_thread;
+        }) {
+            Ok(_) => true,
             Err(e) => {
                 self.notice("error", tf("error.save_threads_failed", &[("e", &e)]));
                 false
@@ -241,12 +236,7 @@ impl Controller {
     pub(super) fn set_speed_limit(self: &Arc<Self>, idx: i32) {
         // 钳制在 `limit_of_index` 里：越界索引落到 0 / 最后一档，绝不越界读数组
         let limit = limit_of_index(idx);
-        let mut cfg = self
-            .store
-            .load_config()
-            .unwrap_or_else(|_| AppConfig::default_config());
-        cfg.speed_limit = limit;
-        if let Err(e) = self.store.save_config(&cfg) {
+        if let Err(e) = self.store.update_config(|cfg| cfg.speed_limit = limit) {
             // 落盘失败不回滚内存里的选择：本进程内新任务照样按新值限速，
             // 只是重启后会退回旧值（内存态启动时本来就写不进去）
             log::warn!("save speed_limit: {e}");
@@ -298,12 +288,12 @@ impl Controller {
         else {
             return;
         };
-        if let Ok(mut cfg) = self.store.load_config() {
-            cfg.download_dir = dir.clone();
-            if let Err(e) = self.store.save_config(&cfg) {
-                self.notice("error", tf("error.save_config_failed", &[("e", &e)]));
-                return;
-            }
+        if let Err(e) = self
+            .store
+            .update_config(|cfg| cfg.download_dir = dir.clone())
+        {
+            self.notice("error", tf("error.save_config_failed", &[("e", &e)]));
+            return;
         }
         let text = dir.display().to_string();
         self.set_ui_state(move |ui| ui.set_download_dir(SharedString::from(text)));
@@ -566,28 +556,36 @@ impl Controller {
 
     /// 登录成功后的统一收尾
     fn on_login_success(self: &Arc<Self>, username: String, token: TokenInfo, persist: bool) {
-        let mut accounts = self.store.load_accounts().unwrap_or_default();
-        let mut acc = accounts
-            .find(&username)
-            .cloned()
+        // 从已保存账号出发（快速登录直接复用它，密码登录则在其上覆盖 token）
+        let seed = self
+            .store
+            .load_accounts()
+            .ok()
+            .and_then(|accounts| accounts.find(&username).cloned())
             .unwrap_or_else(|| AccountConfig {
                 username: username.clone(),
                 ..Default::default()
             });
-        if !token.access_token.is_empty() || !token.session_key.is_empty() {
-            acc.token = token;
-            acc.login_type = "password".to_string();
-        }
-        if persist {
-            accounts.upsert(acc.clone());
-            if let Err(e) = self.store.save_accounts(&accounts) {
+        let acc = if persist {
+            let mut fresh = seed.clone();
+            if !token.access_token.is_empty() || !token.session_key.is_empty() {
+                fresh.token = token;
+                fresh.login_type = "password".to_string();
+            }
+            // 账号表与 last_account 都走读-改-写：命令行进程可能正在同一个目录里
+            // 刷新另一个账号的 token，整份覆盖会把它的成果抹掉。
+            if let Err(e) = self.store.update_accounts(|accounts| {
+                accounts.upsert(fresh.clone());
+            }) {
                 log::warn!("save accounts: {e}");
             }
-            if let Ok(mut cfg) = self.store.load_config() {
-                cfg.last_account = username.clone();
-                let _ = self.store.save_config(&cfg);
-            }
-        }
+            let _ = self
+                .store
+                .update_config(|cfg| cfg.last_account = username.clone());
+            fresh
+        } else {
+            seed
+        };
 
         *lock_or_recover(&self.current_user) = username.clone();
         *lock_or_recover(&self.space) = "personal".to_string();
@@ -642,10 +640,7 @@ impl Controller {
         lock_or_recover(&self.path_stack).clear();
         lock_or_recover(&self.dir_rows).clear();
         lock_or_recover(&self.visible_rows).clear();
-        if let Ok(mut cfg) = self.store.load_config() {
-            cfg.last_account = String::new();
-            let _ = self.store.save_config(&cfg);
-        }
+        let _ = self.store.update_config(|cfg| cfg.last_account.clear());
         self.refresh_saved_accounts();
         self.set_ui_state(|ui| {
             ui.set_logged_in(false);
@@ -698,147 +693,25 @@ pub(super) fn clamp_threads(v: i32) -> u32 {
     v.clamp(MIN_THREADS, MAX_THREADS) as u32
 }
 
-/// 配置根目录的选择结果
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum StoreRoot {
-    /// 主目录可用
-    Primary(PathBuf),
-    /// 主目录不可用，已退到回退目录
-    Fallback(PathBuf),
-    /// 两处都不可用：本次运行使用内存态配置，不落盘
-    Memory,
-}
+// ======================================================================
+// 配置存储与账号辅助：实现已下沉到 tianyi-core
+// ======================================================================
+//
+// GUI 与 CLI 必须读写同一份 config.json / accounts.json / tasks.json，因此
+// 「主目录 → 临时目录 → 内存态」的降级链、原子写、以及跨进程读-改-写锁都只有一份
+// 实现：tianyi_core::store。这里只做 re-export，Controller 的调用形状保持不变。
+//
+// 需要注意的两条行为差异（都是为了让两个进程不互相覆盖）：
+// * 改配置请用 update_config（持锁重读后再改），不要 load 出整份再 save；
+// * 改账号表请用 update_accounts，例如刷新 token 后回写。
+pub(super) use tianyi_core::store::{account_initial, ConfigStore, StoreDegrade};
 
-/// 决定本次运行用哪个配置根目录
+/// 降级提示条文案
 ///
-/// `primary = None` 表示"由 `AppStore` 自己解析系统默认配置目录"（生产路径），只有单测
-/// 才需要显式指定一个必然失败的路径。任何一步失败都不 panic：最差落到 `Memory`。
-pub(super) fn pick_store_root(primary: Option<&Path>, fallback: &Path) -> StoreRoot {
-    match AppStore::new(primary.map(Path::to_path_buf)) {
-        Ok(store) => return StoreRoot::Primary(store.root().clone()),
-        Err(e) => log::warn!(
-            "配置目录不可用（{}）：{e}",
-            primary
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|| "系统默认".to_string())
-        ),
+/// 文案留在 GUI 侧：它要跟随界面语种，而 core 不该知道界面语言。
+pub(super) fn degrade_message(d: &StoreDegrade) -> String {
+    match d {
+        StoreDegrade::Fallback(dir) => tf("state.config_fallback", &[("dir", &dir.display())]),
+        StoreDegrade::Memory => t("state.config_memory").to_string(),
     }
-    match AppStore::new(Some(fallback.to_path_buf())) {
-        Ok(store) => StoreRoot::Fallback(store.root().clone()),
-        Err(e) => {
-            log::warn!("回退配置目录 {} 也不可用：{e}", fallback.display());
-            StoreRoot::Memory
-        }
-    }
-}
-
-/// 配置存储：优先磁盘，目录不可用时退化为内存态
-///
-/// 为什么要再包一层：`AppStore` 每个接口都直接摸文件系统，目录不可写时连
-/// `load_config` 都会失败。这里把"内存态"显式建模出来，让控制器沿用同一套调用形状，
-/// 同时保证内存态下 `save_config` 真的能改变本进程内的配置（否则设置页改了也白改）。
-pub(super) struct ConfigStore {
-    /// `None` = 内存态（本次运行不落盘）
-    disk: Option<AppStore>,
-    /// 内存态下配置的唯一副本；磁盘态时同步跟随，供回读兜底
-    mem: Mutex<AppConfig>,
-    /// 展示用配置目录
-    root: PathBuf,
-}
-
-impl ConfigStore {
-    /// 按"主目录 → 临时目录 → 内存态"的顺序打开，返回 (存储, 降级提示)
-    pub(super) fn open() -> (Self, Option<String>) {
-        let fallback = std::env::temp_dir().join(FALLBACK_CONFIG_DIR);
-        match pick_store_root(None, &fallback) {
-            StoreRoot::Primary(root) => (Self::open_disk(root), None),
-            StoreRoot::Fallback(root) => {
-                let msg = tf("state.config_fallback", &[("dir", &root.display())]);
-                (Self::open_disk(root), Some(msg))
-            }
-            StoreRoot::Memory => (
-                Self::memory(fallback),
-                Some(t("state.config_memory").to_string()),
-            ),
-        }
-    }
-
-    /// 打开磁盘态；万一二次打开失败，退化为内存态而不是 panic
-    fn open_disk(root: PathBuf) -> Self {
-        match AppStore::new(Some(root.clone())) {
-            Ok(store) => {
-                let cfg = store.load_config().unwrap_or_else(|e| {
-                    log::warn!("读取配置失败，使用默认值：{e}");
-                    AppConfig::default_config()
-                });
-                Self {
-                    disk: Some(store),
-                    mem: Mutex::new(cfg),
-                    root,
-                }
-            }
-            Err(e) => {
-                log::warn!(
-                    "配置目录 {} 二次打开失败，退化为内存态：{e}",
-                    root.display()
-                );
-                Self::memory(root)
-            }
-        }
-    }
-
-    fn memory(root: PathBuf) -> Self {
-        Self {
-            disk: None,
-            mem: Mutex::new(AppConfig::default_config()),
-            root,
-        }
-    }
-
-    /// 是否真的会落盘（决定任务表要不要配持久化路径、提示条怎么说）
-    pub(super) fn is_persistent(&self) -> bool {
-        self.disk.is_some()
-    }
-
-    pub(super) fn root(&self) -> &PathBuf {
-        &self.root
-    }
-
-    pub(super) fn load_config(&self) -> anyhow::Result<AppConfig> {
-        match &self.disk {
-            Some(store) => Ok(store.load_config()?),
-            None => Ok(lock_or_recover(&self.mem).clone()),
-        }
-    }
-
-    fn save_config(&self, cfg: &AppConfig) -> anyhow::Result<()> {
-        *lock_or_recover(&self.mem) = cfg.clone();
-        match &self.disk {
-            Some(store) => Ok(store.save_config(cfg)?),
-            // 内存态：只更新进程内副本，启动时的提示条已经说明"不会保存"
-            None => Ok(()),
-        }
-    }
-
-    fn load_accounts(&self) -> anyhow::Result<Accounts> {
-        match &self.disk {
-            Some(store) => Ok(store.load_accounts()?),
-            None => Ok(Accounts::default()),
-        }
-    }
-
-    fn save_accounts(&self, accounts: &Accounts) -> anyhow::Result<()> {
-        match &self.disk {
-            Some(store) => Ok(store.save_accounts(accounts)?),
-            None => Ok(()),
-        }
-    }
-}
-
-/// 账号首字符（头像用）
-pub(super) fn account_initial(name: &str) -> String {
-    name.chars()
-        .next()
-        .map(|c| c.to_string())
-        .unwrap_or_default()
 }

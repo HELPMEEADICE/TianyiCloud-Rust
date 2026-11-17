@@ -3,7 +3,7 @@
     从 Slint 源码提取 @tr(...) 的 msgid，或据此生成 .po 语言包骨架。
 
 .DESCRIPTION
-    扫描 crates/tianyi-app/ui 下所有 .slint（跳过 ui/dev/：那是 examples/icon_sheet.rs
+    扫描 crates/tianyi-gui/ui 下所有 .slint（跳过 ui/dev/：那是 examples/icon_sheet.rs
     的自检素材，不进产品界面），把 @tr("…") 里的 msgid 抽出来。
 
     build.rs 用 with_default_translation_context(None) 编译，全库共用一张 msgid 表、
@@ -17,7 +17,7 @@
     只输出一行「msgid 总数 / 去重数」，便于在 CI 里比对。
 
 .PARAMETER Skeleton
-    生成 crates/tianyi-app/lang/<lang>/LC_MESSAGES/tianyi-app.po 骨架：
+    生成 crates/tianyi-gui/lang/<lang>/LC_MESSAGES/tianyi-gui.po 骨架：
     头部 + 每条 msgid + 空 msgstr（未翻译的条目 gettext 会回退到 msgid 原文）。
 
 .EXAMPLE
@@ -38,7 +38,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$appDir = Join-Path $repoRoot 'crates/tianyi-app'
+$appDir = Join-Path $repoRoot 'crates/tianyi-gui'
 $uiDir = Join-Path $appDir 'ui'
 
 # Slint 字符串字面量里只有 \" 与 \\ 两种转义，这里手工解回来：
@@ -97,7 +97,7 @@ if ($Skeleton) {
     }
     $poDir = Join-Path $appDir (Join-Path 'lang' (Join-Path $lang 'LC_MESSAGES'))
     New-Item -ItemType Directory -Force -Path $poDir | Out-Null
-    $poPath = Join-Path $poDir 'tianyi-app.po'
+    $poPath = Join-Path $poDir 'tianyi-gui.po'
 
     # 数量形式跟着语言走：英文有单复数，中日没有
     $plural = if ($lang -eq 'en') { 'nplurals=2; plural=(n != 1);' } else { 'nplurals=1; plural=0;' }

@@ -1,0 +1,39 @@
+[package]
+name = "tianyi-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "天翼云盘客户端：默认启动图形界面，-c 进入 Headless 命令行"
+
+# 这是一层**启动器**：只做一件事——在任何图形/网络初始化之前决定运行模式，
+# 然后把控制权交给 tianyi-gui 或 tianyi-cli。
+#
+# 拆成三个 crate 的理由（这也是「真正的 Headless 构建」得以成立的前提）：
+# * tianyi-gui  带 slint / slint-build / winit / rfd / arboard，只有 gui feature 才编译；
+# * tianyi-cli  只依赖 tianyi-core + clap/rustyline，不碰任何图形库；
+# * tianyi-app  没有任何 GUI 依赖，只用 feature 决定链接谁。
+#
+# 因此 cargo build -p tianyi-app --no-default-features --features cli 的依赖树里
+# 既没有 slint 也没有 winit —— 这不是靠 cfg 关掉模块，而是根本没有依赖边。
+
+[features]
+default = ["gui", "cli"]
+# 图形界面（Slint）
+gui = ["dep:tianyi-gui"]
+# 命令行（Headless）
+cli = ["dep:tianyi-cli"]
+
+[dependencies]
+tianyi-gui = { path = "../tianyi-gui", optional = true }
+tianyi-cli = { path = "../tianyi-cli", optional = true }
+
+[dev-dependencies]
+# 端到端测试用：临时配置目录 + 真实子进程
+serde_json.workspace = true
+
+# CLI 端到端测试直接驱动真实二进制（CARGO_BIN_EXE_tianyi-app），
+# 因此只在 cli feature 打开时编译，避免纯 GUI 构建里白跑一遍。
+[[test]]
+name = "cli_e2e"
+required-features = ["cli"]

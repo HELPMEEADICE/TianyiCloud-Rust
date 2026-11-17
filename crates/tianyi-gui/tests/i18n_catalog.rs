@@ -4,11 +4,11 @@
 //!
 //! 界面文案有两套产地、两套目录，任何一处漏项都**不会**在运行时报错，只会静默降级：
 //!
-//! - `crates/tianyi-app/lang/<lang>/LC_MESSAGES/tianyi-app.po`：给 `.slint` 里的
+//! - `crates/tianyi-gui/lang/<lang>/LC_MESSAGES/tianyi-gui.po`：给 `.slint` 里的
 //!   `@tr("…")` 用，由 `build.rs` 的 `with_bundled_translations("lang")` 在编译期打包。
 //!   msgid 就是简体中文原文，查不到时 gettext 回退到翻译表**索引 0**（= msgid 本身），
 //!   于是「漏翻」的表现是**英文界面上冒出中文**，而不是编译错误或 panic。
-//! - `crates/tianyi-app/i18n/rs/<lang>.json`：给 Rust 侧 `format!` 拼出来的运行时文案用
+//! - `crates/tianyi-gui/i18n/rs/<lang>.json`：给 Rust 侧 `format!` 拼出来的运行时文案用
 //!   （状态栏、提示条、任务状态、ETA……这些不经过 Slint 表达式，`@tr` 管不到）。
 //!   查词顺序是「当前语种 → 简中 → 键名」，漏项同样静默回退到中文。
 //!
@@ -22,12 +22,12 @@
 //! - C 组 `i18n_catalog_runtime_tables_agree`：四份运行时词表键集相同、无空值、
 //!   具名占位符集合四语一致；简中键数 ≥ 100；英文值里不含 CJK 字符。
 //! - D 组 `i18n_catalog_lang_layout_is_clean`：`lang/zh-Hans` 不存在（简中必须走索引 0），
-//!   且每个语言目录都有 `LC_MESSAGES/tianyi-app.po`。
+//!   且每个语言目录都有 `LC_MESSAGES/tianyi-gui.po`。
 //!
 //! # 边界
 //!
-//! `tianyi-app` 是 binary-only crate（没有 lib 目标），集成测试无法 `use tianyi_app::…`，
-//! 所以这里只做**文件系统检查**：自己扫 `.slint`、自己解 `.po`。JSON 用 `serde_json`
+//! 这里只做**文件系统检查**：自己扫 `.slint`、自己解 `.po`，不依赖被测 crate 的公开 API。
+//! 好处是断言指向的都是「仓库里的真实文件」，而不是某个内部函数的实现细节。JSON 用 `serde_json`
 //! （已是本 crate 的普通依赖），不引入新依赖、不改 `Cargo.toml`。
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,7 +55,7 @@ fn po_path(lang: &str) -> PathBuf {
         .join("lang")
         .join(lang)
         .join("LC_MESSAGES")
-        .join("tianyi-app.po")
+        .join("tianyi-gui.po")
 }
 
 fn json_path(lang: &str) -> PathBuf {
@@ -568,11 +568,11 @@ fn i18n_catalog_runtime_tables_agree() {
 // D 组：目录卫生
 // ---------------------------------------------------------------------------
 
-/// D. `lang/zh-Hans` 不存在 + 每个语言目录都有 `LC_MESSAGES/tianyi-app.po`
+/// D. `lang/zh-Hans` 不存在 + 每个语言目录都有 `LC_MESSAGES/tianyi-gui.po`
 ///
 /// 防的回归：有人「顺手」给简中建一个 `lang/zh-Hans/` 目录。简中就是 msgid 原文、
 /// 就是翻译表的索引 0，多出这个目录会让回退语言被一份空 `.po` 顶掉（界面直接掉成
-/// 空串或原文混杂）；而少一个 `LC_MESSAGES/tianyi-app.po` 会让运行时切语报
+/// 空串或原文混杂）；而少一个 `LC_MESSAGES/tianyi-gui.po` 会让运行时切语报
 /// `LanguageNotFound`，且只有切到那门语言时才会发现。
 #[test]
 fn i18n_catalog_lang_layout_is_clean() {
@@ -603,10 +603,10 @@ fn i18n_catalog_lang_layout_is_clean() {
     );
 
     for dir in &lang_dirs {
-        let po = dir.join("LC_MESSAGES").join("tianyi-app.po");
+        let po = dir.join("LC_MESSAGES").join("tianyi-gui.po");
         assert!(
             po.is_file(),
-            "语言目录 {} 缺少 LC_MESSAGES/tianyi-app.po：\
+            "语言目录 {} 缺少 LC_MESSAGES/tianyi-gui.po：\
              build.rs 的 with_bundled_translations(\"lang\") 只认这个固定路径，\
              运行时切到该语言会报 LanguageNotFound",
             dir.display()

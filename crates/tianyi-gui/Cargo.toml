@@ -1,10 +1,14 @@
 [package]
-name = "tianyi-app"
+name = "tianyi-gui"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+description = "天翼云盘 Slint 桌面客户端（GUI 实现 crate）"
 
+# GUI 实现被单独拆成一个 crate：这样 tianyi-app 的纯 CLI 构建
+# （--no-default-features --features cli）连 slint / slint-build / winit / rfd /
+# arboard 都不会被编译，cargo tree 里也看不到它们。
 [dependencies]
 tianyi-core = { path = "../tianyi-core" }
 slint = { version = "1.17", features = ["unstable-winit-030", "accessibility"] }
