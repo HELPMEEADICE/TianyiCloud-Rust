@@ -7,9 +7,14 @@
 //!   cargo run -p tianyi-mount --example netdrive_purge -- --all # 同时清空 Shell 的网络位置缓存
 //!
 //! 每清一个都会打印结果；单项失败不影响其它条目。
+//!
+//! 只在 Windows 上编译：WNet / MountPoints2 都是 Windows 专有概念，其余平台只剩一个
+//! stub main（空 crate 会缺 main，`cargo check --all-targets` 就在那里失败）。
 
+#[cfg(windows)]
 use tianyi_mount::win::netuse;
 
+#[cfg(windows)]
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let purge_shell = std::env::args().any(|a| a == "--all");
@@ -54,4 +59,10 @@ fn main() {
     }
 
     println!("完成：清理 {cleaned} 项");
+}
+
+/// 非 Windows 平台：本示例没有可执行的内容
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("netdrive_purge 只在 Windows 上可用：它清理的是 Windows 的网络驱动器痕迹");
 }

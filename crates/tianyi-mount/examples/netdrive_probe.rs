@@ -14,6 +14,13 @@
 //!
 //! 用法：cargo run -p tianyi-mount --example mount_probe -- --mount Z: --space personal
 //! 退出码：0 = 全部通过；1 = 有断言失败；2 = 环境/登录问题（不算功能失败）。
+//!
+//! 只在 Windows 上编译：DRIVE_REMOTE、UNC 前缀都是 Windows 的概念。其余平台只剩一个
+//! stub main，因此"为 Windows 验收准备"的导入与辅助函数在这里是未使用/死代码——
+//! 用下面这条 crate 级 allow 把它们从 `clippy --all-targets -D warnings` 里摘出去，
+//! 而不是给每个 item 挂一遍 cfg。
+
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 use std::process::ExitCode;
 use std::sync::mpsc::RecvTimeoutError;
@@ -27,6 +34,7 @@ use tianyi_mount::session::CloudSession;
 /// 单项检查的超时
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[cfg(windows)]
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -357,4 +365,11 @@ fn read_head(path: &str, limit: usize) -> std::io::Result<Vec<u8>> {
     let n = f.read(&mut buf)?;
     buf.truncate(n);
     Ok(buf)
+}
+
+/// 非 Windows 平台：本示例没有可执行的内容（退出码 2 = 环境不适用）
+#[cfg(not(windows))]
+fn main() -> ExitCode {
+    eprintln!("netdrive_probe 是 Windows 真机验收工具，本平台无事可做");
+    ExitCode::from(2)
 }

@@ -111,9 +111,11 @@ pub const UNMOUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 pub fn backend_available() -> std::result::Result<(), String> {
     #[cfg(windows)]
     {
+        // 前端直接把这段文字展示给用户，所以必须走 [Error::WinFspMissing] 的 Display：
+        // sys::api() 的原始错误只说明"哪个候选 DLL 没加载成功"，不含安装指引。
         match crate::win::sys::api() {
             Ok(_) => Ok(()),
-            Err(e) => Err(e),
+            Err(e) => Err(Error::WinFspMissing(e).to_string()),
         }
     }
     #[cfg(unix)]
@@ -493,18 +495,30 @@ pub fn mount(fs: Arc<CloudFs>, options: MountOptions) -> Result<MountHandle> {
         }
     }
 
+    let (platform, backend) = start_backend(&fs, &options, &target)?;
+    Ok(MountHandle::new(fs, platform, options, backend))
+}
+
+/// 按平台启动挂载后端
+///
+/// 与 [mount] 分开是必要的：**不支持挂载的平台**（macOS、未编 fuse feature 的
+/// Linux）在这里返回明确的中文原因，而 [MountHandle::new] 因此成为所有平台上的
+/// 活代码——否则 cfg 剥离之后它会变成 dead_code，在 clippy -D warnings 下直接失败。
+fn start_backend(
+    fs: &Arc<CloudFs>,
+    options: &MountOptions,
+    target: &MountTarget,
+) -> Result<(Arc<PlatformMount>, &'static str)> {
     #[cfg(windows)]
     {
-        let (platform, backend) = crate::win::start(fs.clone(), &options, &target)?;
-        Ok(MountHandle::new(fs, platform, options, backend))
+        crate::win::start(fs.clone(), options, target)
     }
 
     #[cfg(target_os = "linux")]
     {
         #[cfg(feature = "fuse")]
         {
-            let (platform, backend) = crate::fuse_linux::start(fs.clone(), &options, &target)?;
-            Ok(MountHandle::new(fs, platform, options, backend))
+            crate::fuse_linux::start(fs.clone(), options, target)
         }
         #[cfg(not(feature = "fuse"))]
         {

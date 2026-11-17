@@ -1,9 +1,15 @@
 //! WinFsp ABI 诊断：逐个组合尝试 FspFileSystemCreate，打印 NTSTATUS 与 GetLastError
 //!
 //! 只在排查"为什么建卷失败"时使用：cargo run -p tianyi-mount --example win_abi_probe
+//!
+//! 只在 Windows 上编译：WinFsp 是 Windows 专有的运行时，别的平台上本文件的每一项都
+//! 无从谈起，所以整体挂在 `cfg(windows)` 后面。其余平台只剩一个 stub main——
+//! `cargo check` / `cargo clippy` 的 `--all-targets` 要在三平台都能过，空 crate 缺 main。
 
+#[cfg(windows)]
 use tianyi_mount::win::sys as s;
 
+#[cfg(windows)]
 fn main() {
     let api = match s::api() {
         Ok(a) => a,
@@ -47,6 +53,7 @@ fn main() {
     }
 }
 
+#[cfg(windows)]
 fn make_params(prefix: Option<&str>) -> s::VolumeParams {
     let mut p = s::VolumeParams {
         Version: 0,
@@ -84,6 +91,7 @@ fn make_params(prefix: Option<&str>) -> s::VolumeParams {
     p
 }
 
+#[cfg(windows)]
 fn make_iface() -> s::FileSystemInterface {
     s::FileSystemInterface {
         GetVolumeInfo: None,
@@ -121,4 +129,10 @@ fn make_iface() -> s::FileSystemInterface {
         DispatcherStopped: None,
         Reserved: [None; 31],
     }
+}
+
+/// 非 Windows 平台：本示例没有可执行的内容
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("win_abi_probe 只在 Windows 上可用：它诊断的是 WinFsp 的 ABI");
 }

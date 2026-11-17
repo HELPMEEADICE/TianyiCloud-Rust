@@ -75,4 +75,14 @@ ignore = [
     # 它是 slint（i-slint-core）与本项目 core 的共同依赖，0.4 线没有替代版本可升，
     # 只能等上游换掉；命令行侧的时区/时间处理已只依赖 chrono 的稳定子集。
     "RUSTSEC-2026-0543",
+    # fuser 是 tianyi-mount 的 Linux 挂载后端依赖，而且是**可选**依赖：默认 features
+    # 不含它，CI 从不开 fuse feature，Windows / macOS 的依赖树里根本没有它。
+    # RUSTSEC-2021-0154 的缺陷位置是 fuser::Session::new —— 它把 NULL 操作表传给
+    # libfuse 的 fuse_session_new。只有链接 libfuse（fuser 的 libfuse feature）时才会
+    # 走那条路径；本项目在 crates/tianyi-mount/Cargo.toml 里对 fuser 用了
+    # default-features = false，走的是它自带的纯 Rust 挂载实现，libfuse 不参与链接。
+    # 正解是升到 fuser >= 0.16.0（该 advisory 的 patched 版本）：那要同时刷新
+    # Cargo.lock 并把 src/fuse_linux.rs 迁到 0.16 接口，属于独立改动，不混进本次
+    # CI 修复。升级完成后这里会报 advisory-not-detected，删掉这一行即可。
+    "RUSTSEC-2021-0154",
 ]
